@@ -13,13 +13,13 @@
 
 ### 1.1 The recommendation in one paragraph
 
-Build **Balancify** as a **user-mode Rust service fronted by a Wintun virtual adapter**, speaking an **encrypted UDP multipath tunnel to a relay the product team operates**, with a **WinUI 3 (.NET 10) desktop client** over authenticated named-pipe IPC, and a **static documentation/distribution site** fed by the release pipeline. Ship **per-flow load balancing with per-uplink tunnels first** (method 5 in §3), add **packet-level striping** (method 4) only for flow classes where lab measurement shows a gain, and treat **custom kernel drivers (WFP callout / NDIS filter / NDIS miniport) as gated options**, not starting points: gate **G3** (§11) decides whether any kernel code is ever written, on the basis of measured packet-path latency and CPU cost of the Wintun route.
+Build **Balancify** as a **fully self-contained product** (§4.8 dependency policy rev 2): a **user-mode Rust service fronted by a first-party NDIS virtual miniport that we sign ourselves**, speaking a **first-party encrypted dual-lane tunnel** (datagram lane primary; optional vendored MPTCP lane for standard interop) to a **cooperating endpoint embedded in the same binary as a server mode** — deployed in our cloud, on the user's own VPS/NAS, or on the LAN — with a **WinUI 3 (.NET 10) desktop client** over authenticated named-pipe IPC, and a **static documentation/distribution site** fed by the release pipeline. Ship **per-flow load balancing first**, add **packet-level striping** for flow classes where lab measurement shows a gain. Because the product carries every feature internally, the **in-house driver and its WHCP/HVCI signing calendar are on the critical path from Phase 2**; gate **G3** (§11 rev 2) validates the driver's performance, memory-integrity readiness and signing dry-run instead of deciding whether a driver is needed.
 
 ### 1.2 Why this shape
 
 1. **Load balancing is easy; bonding is not.** Distributing independent flows across uplinks needs no server and no driver. Making *one* TCP flow exceed the capacity of its best single uplink requires either a cooperating remote endpoint (relay) that re-sequences packets, or an end-to-end multipath transport. Windows ships neither: it has no Multipath TCP implementation [S21, unconfirmed secondary], and multipath QUIC was still an Internet-Draft in the RFC Editor queue as of 2026-10-16 [S11]. Therefore single-flow bandwidth aggregation ⇒ relay. This is the single most consequential architectural fact in the project.
 2. **WFP and NDIS are interception points, not bonding engines.** A WFP callout driver inspects, modifies and reinjects traffic at TCP/IP layers [S1]; an NDIS lightweight filter (LWF) driver sits between a miniport and the protocol drivers [S2]. Neither schedules packets across uplinks, reorders them, or tunnels them. Choosing a driver first buys signing burden and crash risk before buying capability.
-3. **Kernel code is the expensive part.** It brings Microsoft driver signing (attestation or HLK/WHCP), Memory Integrity / HVCI readiness testing, SBOM+VEX paperwork from March 2027 for new Windows builds [S13], and whole-machine crash liability. Wintun gives a signed, production-used layer-3 adapter (it ships WireGuard) with **zero driver code of our own** for the MVP [S4].
+3. **Kernel code is the expensive part — and by directive (rev 2) it is ours.** It brings Microsoft driver signing (attestation or HLK/WHCP), Memory Integrity / HVCI readiness testing, SBOM+VEX paperwork from March 2027 for new Windows builds [S13], and whole-machine crash liability. Rev 1 deferred this behind gate G3 using Wintun [S4]; rev 2's self-contained policy (§4.8) excludes third-party kernel binaries, so the miniport, its signing and its HVCI validation join the critical path from Phase 2 — bought with earlier risk retirement and full control of the update path.
 4. **Least-privileged viable design.** The GUI runs unprivileged; one Windows service holds the packet path; the only local entry point is an ACL-protected named pipe; the only Internet-reachable component is the relay.
 
 ### 1.3 Major trade-offs accepted
@@ -27,24 +27,25 @@ Build **Balancify** as a **user-mode Rust service fronted by a Wintun virtual ad
 | Trade-off | Accepted cost | Rejected alternative and why |
 |---|---|---|
 | Relay-operated bonding | Egress bandwidth cost, relay placement/latency, availability and abuse-prevention ops | "Bonding with no server" is physically unachievable for single-flow throughput on Windows today (§3) |
-| User-mode packet path (Wintun → service copies) | Per-packet kernel↔user transitions; measurable CPU and latency overhead | Custom NDIS miniport on day one: months of signing/testing work before any product risk is retired |
+| User-mode packet path over a **first-party miniport** (rev 2) | Driver development, WHCP signing and HVCI validation on the critical path (≈ +7 wks to GA vs rev 1) | Bundling a third-party TUN (Wintun): excluded by the dependency policy (§4.8); survives only as the §11.2 time-boxed exception |
 | Own tunnel protocol (UDP + Noise-style handshake + sequence/path headers) | We own reordering, congestion and crypto-engineering burden | TCP encapsulation (TCP-over-TCP meltdown); waiting for multipath QUIC RFC + ecosystem adoption |
 | Rust for data plane | Most Windows networking samples are C; porting effort if a driver is later needed | C++ for everything: memory-safety risk in code that parses untrusted packets |
 | WinUI 3 / .NET 10 for GUI | Managed runtime in the shell; WinUI maturity gaps | WPF (older visual language), web-view shell (two rendering stacks, weaker native tray/a11y) |
 
-### 1.4 Hardest technical risks (top five; full register in §13)
+### 1.4 Hardest technical risks (full register in §13)
 
 1. **Relay economics and geography** — bonding gain can be eaten by relay RTT and egress cost. *Mitigation:* cost/RTT model for two candidate regions in Phase 1; gate G1.
 2. **Uplink steering reliability** — can user-mode sockets actually be pinned to a chosen uplink on Windows 11 when the routing table prefers another? *Mitigation:* Spike S1 in week 1–4; gate G2.
 3. **Heterogeneous links** (cellular vs Wi-Fi delay gaps) causing reordering and head-of-line stalls in bond mode. *Mitigation:* emulated-link rig (netem), reorder-buffer tuning, flow-level fallback always present; gate G4.
-4. **Coexistence** with VPN clients, security suites, Hyper-V/WSL2 and Memory Integrity. *Mitigation:* compatibility matrix from Phase 2, repeated every milestone; gate G6.
-5. **Signing/distribution path** if a driver is ever required (attestation limits, HLK effort, SBOM/VEX from 03/2027, Memory Integrity auto-enablement from Oct 2026). *Mitigation:* no own driver in MVP; signing spike before any driver investment; gates G3/G7.
+4. **In-house miniport performance / HVCI readiness** (we now own the packet path rev 2 removed from Wintun). *Mitigation:* Spike S2b + G3 benchmark + HVCI trio; optimization round budgeted.
+5. **Signing/distribution calendar for our own driver** (attestation limits, HLK effort, SBOM/VEX from 03/2027, Memory Integrity auto-enablement from Oct 2026). *Mitigation:* enrolment + EV ordered in Phase 1; dry-run at G3; final at G7; §11.2 exception policy as schedule rescue.
+6. **Coexistence** with VPN clients, security suites, Hyper-V/WSL2 and Memory Integrity (now including *our* driver in the matrix). *Mitigation:* compatibility matrix from Phase 2, repeated every milestone; gate G6.
 
 ### 1.5 Proof-of-concept strategy (three steps, cheapest first)
 
 1. **PoC-1 (no driver, no relay):** service balances flows across uplinks using source-address/interface binding; GUI shell shows live per-uplink telemetry. Validates steering + UX skeleton.
-2. **PoC-2 (relay):** Wintun adapter + encrypted UDP tunnel to a relay across two real links; measures end-to-end throughput, added latency, failover.
-3. **PoC-3 (decision experiment):** instrumented packet-path benchmark of the Wintun route (latency, CPU/Gbit/s, working set) against the proposed targets → **go/no-go on any kernel driver**.
+2. **PoC-2 (embedded endpoint):** first-party NDIS miniport skeleton + first-party encrypted datagram tunnel to the **in-binary server mode** across two real links; measures end-to-end throughput, added latency, failover.
+3. **PoC-3 (decision experiment):** instrumented packet-path benchmark of the in-house miniport (latency, CPU/Gbit/s, working set) plus the HVCI readiness trio against the proposed targets → **go/no-go on shipping the driver at GA versus invoking the §11.2 exception**.
 
 ---
 
@@ -149,7 +150,7 @@ Any vendor claim of "bonding without a server" for arbitrary Internet traffic on
 
 ![Data plane and control plane](assets/architecture-data-control-plane.png)
 
-*Figure 1 — Client/relay data plane and control plane (from the source blueprint). The dashed "optional fast path" box is the only component that may never be built unless gate G3 measures a need.*
+*Figure 1 — Client/relay data plane and control plane (rev-1 view from the source blueprint; per §4.8 rev 2 the adapter box is the **first-party miniport** and the relay box is the **in-binary server mode**).*
 
 Equivalent machine-readable view:
 
@@ -158,8 +159,8 @@ flowchart TB
   subgraph client["Windows client"]
     APPS["Applications (unchanged)"]
     subgraph kernel["Kernel mode"]
-      WINTUN["Wintun virtual adapter (signed, WireGuard project)"]
-      FASTPATH["Optional fast path: NDIS LWF / WFP callout — only if G3 says so"]
+      WINTUN["First-party NDIS virtual miniport (we sign it)"]
+      FASTPATH["WFP redirect callout in our driver (steering fallback)"]
     end
     subgraph svc["Balancify service (Rust, one Windows service)"]
       CLS["Classifier\n5-tuple / app / port / DNS rules"]
@@ -196,7 +197,7 @@ flowchart TB
 
 ### 4.3 Virtual interface and routing integration
 
-- Wintun presents a layer-3 IPv4/IPv6 adapter. The service owns its addresses, routes and MTU. Default-route or split-route modes are both supported: **full-tunnel** (all traffic via Balancify) and **selective** (only rules-matched traffic), the latter implemented by keeping per-uplink routes for unmatched destinations.
+- The first-party miniport presents a layer-3 IPv4/IPv6 adapter. The service owns its addresses, routes and MTU. Default-route or split-route modes are both supported: **full-tunnel** (all traffic via Balancify) and **selective** (only rules-matched traffic), the latter implemented by keeping per-uplink routes for unmatched destinations.
 - On service start and after any crash recovery, the service **reconciles** routes/addresses it owns and removes stale state from previous runs (§9.4).
 - Interface metric manipulation of *physical* adapters is deliberately avoided (it fights Windows and third-party software); steering happens at the socket/tunnel layer, not by re-ranking the OS route table.
 
@@ -204,7 +205,7 @@ flowchart TB
 
 | Boundary | Components | Privilege | Attack surface notes |
 |---|---|---|---|
-| B1 kernel | Wintun driver; (later, optional) our WFP/NDIS driver | SYSTEM | Signed, minimal IOCTLs; Memory Integrity compatible (§9) |
+| B1 kernel | Our NDIS virtual miniport (+ WFP redirect callout for steering fallback) | SYSTEM | Signed by us, minimal IOCTLs, validated lengths, fuzzed; Memory Integrity compatible (§9) |
 | B2 service | Balancify service (data + control plane) | LocalService-style restricted account with SeLoadDriverPrivilege **not** granted; service rights only | Parses untrusted packets (Rust), ACL'd pipe, no listening network ports |
 | B3 user | WinUI 3 GUI | Signed-in user, unprivileged | Can only talk to B2 via pipe; identity-checked |
 | B4 network | Relay | Unauthenticated UDP reachability | Rate-limited, authenticated handshake per client, abuse controls, no packet logs (§9) |
@@ -281,9 +282,27 @@ The dependency on an *external service* can be removed by shipping the cooperati
 #### 4.7.4 Integration plan (service side)
 
 - **Sans-I/O loop:** feed each endpoint instance `(packets, now)`; take back `(sends, reads)`; drive from the service async runtime; I/O adapters = Wintun ring (TUN side) + per-uplink bound UDP/TCP sockets (path side); monotonic clock source.
-- **Windows shim:** mptcp-rs's TUN helper is Linux; write a Wintun I/O shim in Spike S3 and contribute it upstream.
+- **Windows shim:** the vendored MPTCP module's TUN helper is Linux; in Spike S3 write its Windows I/O shim against **our miniport** (not Wintun) and keep it in-house.
 - **Server mode:** Linux binary exposing `Endpoint::listen`; PSK/key provisioning via the same signed control channel as the client; container image for NAS/VPS self-host (T1/T4).
 - **Test gates:** adopt the 33-case interop pattern against a kernel-MPTCP peer in our CI; fuzz the sans-I/O core; byte-exactness and 15 s blackhole transfers as regression gates [S32].
+
+### 4.8 Fully self-contained product policy (dependency policy rev 2)
+
+**Directive (product owner):** the shipped product carries every feature inside itself — no external cooperating services, no third-party runtime components we do not sign and maintain, no kernel binaries we do not own. Feature set, acceptance criteria (§10.3) and gate discipline are unchanged; only code ownership and therefore the critical path change (§11 rev 2).
+
+**Policy.** Every runtime component is (a) first-party code, or (b) a vendored fork we maintain in-house under a permissive licence, or (c) a vetted, pinned cryptography crate. Build-time tooling (Visual Studio, WDK, CI, docs generators) is necessarily external but is not part of the shipped product.
+
+| Component | Disposition rev 2 | Consequence |
+|---|---|---|
+| Virtual adapter | **First-party NDIS virtual miniport** (C/WDK), signed by us | Wintun/WinDivert excluded (third-party kernel binaries we don't sign); driver work + WHCP signing join the critical path from Phase 2 |
+| Tunnel datagram lane (seq, reorder buffer, reinjection, per-path CC, keepalives) | **First-party Rust** (the former "custom wire" E1, promoted by directive) | No draft-churn or fork dependency for the primary lane |
+| MPTCP lane (optional standard-interop module, topologies T2) | **Vendored in-house fork of mptcp-rs** (Apache-2.0/MIT) [S32], compile-time optional | Standard-wire interop retained without external runtime dependency; single-maintainer risk converted to in-house maintenance budget |
+| Crypto primitives | Vendored, pinned, audited crates (RustCrypto / aws-lc-rs) + first-party Noise-style handshake | Policy exception: never roll our own primitives |
+| Cooperating endpoint / relay | **First-party server mode inside the same binary** (§4.7 T1/T3/T4) | No external bonding service; egress infra is ours or the user's |
+| GUI, IPC, config, telemetry, updater, support bundle | First-party (WinUI 3 / .NET on platform SDKs) | Platform SDKs are OS platform, not external tools |
+| AEAD payload wrapper over the MPTCP lane | First-party (ChaCha20-Poly1305 under our handshake) | RFC 8684 carries no confidentiality [S32] |
+
+**Excluded by policy:** Wintun, WinDivert, OpenMPTCProuter, glorytun/MLVPN, Speedify/Peplink stacks, LKL ports, usrsctp — as shipped runtime components. A single **documented, time-boxed exception** exists for schedule rescue (§11.2).
 
 ---
 
@@ -294,15 +313,15 @@ The dependency on an *external service* can be removed by shipping the cooperati
 | Option | What it gives you | What it does **not** give you | Signing/compat burden | Verdict |
 |---|---|---|---|---|
 | **Service only (no driver)** | Sockets the service opens itself, bound to a chosen uplink (source address / `IP_UNICAST_IF` / strong-weak host settings) | Capture of other apps' traffic; a virtual adapter | None | Throwaway PoC-1 balancer; validates Spike S1 |
-| **Wintun virtual adapter** [S4] | Signed layer-3 TUN adapter; user-mode read/write of IP packets; prebuilt signed DLLs (AMD64/X86/ARM64/ARM32) are the *only supported* distribution form; used by WireGuard | Scheduling, bonding, reordering — all still ours in user mode; per-packet kernel↔user copy | None of ours (Wintun already signed) | **MVP choice** for M4/M5 |
-| **WinDivert** [S5][S6] | User-mode capture/modify/reinject via WFP-based driver; no adapter | A virtual adapter; README names Windows 7/8/10 (project site lists Windows 11 — test on 11 explicitly); LGPLv3/GPLv2 | Ships its own signed .sys; licence review | Backup steering route if S1 fails; licence check first |
+| **Wintun virtual adapter** [S4] | Signed layer-3 TUN adapter; user-mode read/write of IP packets; prebuilt signed DLLs are the *only supported* distribution form; used by WireGuard | Scheduling, bonding, reordering still ours; per-packet kernel↔user copy; **a third-party kernel binary we neither sign nor control** | None of ours | **Excluded by dependency policy rev 2 (§4.8)**; only inside the §11.2 time-boxed exception |
+| **WinDivert** [S5][S6] | User-mode capture/modify/reinject via WFP-based driver; no adapter | A virtual adapter; README names Windows 7/8/10 (project site lists Windows 11); LGPLv3/GPLv2 | Ships its own signed .sys | **Excluded by policy** (third-party kernel binary); steering fallbacks are first-party (source binding, WFP redirect callout) |
 | **WFP filter + callout driver** [S1] | Inspection, packet/stream modification, reinjection, logging at defined TCP/IP layers; the *supported* way to classify/redirect by process or flow | An adapter; a scheduler; a tunnel. A kernel callout is still a driver we sign and maintain | Attestation or HLK (§9.3) | Use **only** for classification/redirect if user-mode classification proves insufficient (M3 rules) |
-| **NDIS lightweight filter (LWF)** [S2] | Sees/modifies traffic between a miniport and protocol drivers; lighter than an intermediate driver; candidate **fast path** (e.g., kernel-side batching or zero-copy hints) | A new virtual NIC — it attaches to an existing adapter | Attestation or HLK | Optional post-G3 fast path |
-| **Custom NDIS virtual miniport** [S3] | Our own adapter; kernel-side batching; maximum control | Maturity: Microsoft's samples are educational, not production templates | Full WHCP burden | **Only** if G3 measurements show Wintun misses targets |
+| **NDIS lightweight filter (LWF)** [S2] | Sees/modifies traffic between a miniport and protocol drivers; lighter than an intermediate driver | A new virtual NIC — it attaches to an existing adapter | Attestation or HLK | Not planned in rev 2 (our miniport owns the fast path); reconsider only if measurements demand filtering on physical adapters |
+| **Custom NDIS virtual miniport (first-party)** [S3] | Our own layer-3 adapter; kernel-side batching; full control of signing, updates and the HVCI story | Maturity: Microsoft's samples are educational, not production templates; dev + WHCP calendar on critical path | Full WHCP burden (attestation first; HLK only if Server support is added later) | **Primary from Phase 2 (rev 2 directive)**; validated at G2/G3 |
 
 **Precision note (required by the quality bar):** neither WFP nor NDIS "performs aggregation". They expose interception/extension points. The scheduler, tunnel, sequence management and reorder logic are product code in every scenario; the driver question is only *where packets cross into our code* and *how many times*.
 
-### 5.2 Licensing notes that gate component choice
+### 5.2 Licensing notes (rev 2: both components excluded from the shipped product; retained for the §11.2 exception analysis)
 
 - **Wintun:** source GPL-2.0; prebuilt signed DLLs ship under a separate, more permissive licence inside the ZIP, and the signed DLLs are the only supported redistribution form [S4]. For a closed-source product (A5) we ship the signed DLLs, not source builds — counsel review is a Phase-1 task (risk R8).
 - **WinDivert:** LGPLv3 or GPLv2 dual [S5]; static linking or modification triggers obligations; keep as fallback only.
@@ -378,11 +397,11 @@ Confidence = our judgment of how well the choice is backed by evidence today (lo
 | Layer | Recommendation | Why | Credible alternative | Evidence | Risk | Validation experiment | Confidence |
 |---|---|---|---|---|---|---|---|
 | Service + data plane | **Rust** (single Windows service) | Memory safety in code that parses untrusted packets; no GC pauses in the packet path; strong concurrency model | C++20 if team already has deep Windows C++ | — | Most Windows networking samples are C; porting cost if a driver is later needed | Fuzz the parser; p99 latency under load vs C++ micro-benchmark | Medium-high |
-| Kernel driver (only if gates require) | **C with the WDK** (WFP callout or NDIS LWF/miniport) | The supported, documented toolchain; HLK/WHCP path assumes it | Rust drivers via windows-drivers-rs | windows-drivers-rs README: "still in early stages of development and is not yet recommended for production use"; crates.io crates cover KMDF v1.33 only [S7] | Driver signing + HVCI + SBOM/VEX burden (§9) | Driver Verifier + HLK HVCI readiness test on a spike driver | High |
-| Virtual adapter | **Wintun 0.14.1 signed DLLs** | Already signed; production-proven (WireGuard); no driver of ours in MVP | Custom NDIS miniport post-G3 | Wintun site: signed DLLs for AMD64/X86/ARM64/ARM32 are the only supported distribution form; source GPL-2.0, prebuilt DLLs under a more permissive licence in the ZIP [S4] | Licence terms for closed-source redistribution (counsel, Phase 1) | Spike S2 end-to-end tunnel through Wintun on 2 links | Medium |
-| Steering fallback | **WinDivert** (only if S1 fails) | User-mode capture/reinject without writing a driver | WFP redirect callout | README lists Windows 7/8/10 [S5]; project site lists Windows 11 [S6] — test explicitly | LGPL/GPL licence; Windows 11 behaviour unverified | S1-fail branch prototype | Medium |
-| Tunnel + crypto | **Embedded standards-wire engine: mptcp-rs crate (MPTCP v1, sans-I/O Rust) + AEAD payload wrapper (ChaCha20-Poly1305, Noise-style handshake)**; libmqvpn MPQUIC draft-21 datagram lane as complementary engine for lossy profiles (§4.7) | Standards wire ⇒ commodity Linux MPTCP endpoints and an in-product server mode; sans-I/O = no FFI; datagram lane avoids TCP-over-TCP | Custom wire (demoted); TQUIC/noq pure-Rust MPQUIC once mature (§4.7.3) | RFC 8684 is a Proposed Standard; mptcp-rs CI-interop vs kernel MPTCP 7.0 [S32]; mqvpn/mp0rta-xquic Apache-2.0, active [S25][S26]; RFC 8684 has no confidentiality ⇒ wrapper mandatory [S32][S28] | Embedded-engine maturity (single maintainer, server unreleased); TCP-over-TCP on lossy links | Spike S3: mptcp-rs over Wintun on Windows 11, p99 latency + CPU; lane-choice measurement in Spike S2-E2 | Medium |
-| Relay | **Product server mode**: same Rust codebase ships a `balancify relay` (Linux) embedding the endpoint engine (§4.7 T1); **commodity Linux kernel-MPTCP hosts accepted as zero-code endpoints (T2)**; region pair for managed service | One codebase both ends; endpoint internal to the product; T2 removes custom server code for self-host users | libmqvpn server mode; kernel MPTCP + AEAD wrapper only | mptcp-rs server role on main (unreleased) with stated scale limits [S32]; kernel MPTCP in Linux ≥ 5.6 | Server-mode scalability for managed cloud | Server-mode smoke + scale test (concurrent sessions, SYN flood behaviour) in Phase 4 | Medium |
+| Kernel driver — **first-party NDIS virtual miniport, from Phase 2 (rev 2)** | **C with the WDK** | The supported, documented toolchain; HLK/WHCP path assumes it; directive §4.8 excludes third-party kernel binaries | Rust drivers via windows-drivers-rs | windows-drivers-rs README: "still in early stages of development and is not yet recommended for production use"; crates.io crates cover KMDF v1.33 only [S7] | Driver signing + HVCI + SBOM/VEX burden on the critical path (§9) | Driver Verifier + HLK HVCI readiness trio at G3 [S15] | Medium-high |
+| Virtual adapter | **First-party miniport (§5, §4.8)**; Wintun only inside the §11.2 exception | We sign and service it; update path under our control | Wintun signed DLLs [S4] | Wintun: signed DLLs are the only supported distribution form; source GPL-2.0, prebuilt DLLs more permissive [S4] — excluded by policy rev 2 | WHCP calendar (mitigated: enrolment Phase 1, dry-run G3, final G7) | Spike S2b skeleton passes packets on test-signed rig; G3 benchmark | Medium |
+| Steering fallback (if S1 fails) | **First-party:** WFP redirect callout in our own driver, or stricter source-binding/`IP_UNICAST_IF` combinations | Stays inside our signed driver; no third-party kernel binary | WinDivert [S5][S6] | WinDivert README lists Windows 7/8/10; site lists Windows 11; LGPLv3/GPLv2 — excluded by policy rev 2 | Extra IOCTL/callout surface in our driver | S1-fail branch prototype in Phase 2 | Medium |
+| Tunnel + crypto | **First-party dual-lane tunnel (rev 2):** datagram lane (UDP + Noise-style handshake + path/seq headers + reorder buffer + reinjection) as primary; **optional vendored mptcp-rs module** (MPTCP v1 + AEAD wrapper) for standard-wire interop/topology T2 (§4.7, §4.8) | Directive §4.8: no external runtime engines; datagram lane avoids TCP-over-TCP; vendored module keeps RFC-8684 interop | libmqvpn/XQUIC engines (excluded as shipped components; designs borrowed under Apache-2.0 into first-party code) | RFC 8684 Proposed Standard; mptcp-rs CI-interop vs kernel MPTCP 7.0 [S32]; multipath QUIC still draft [S11] | First-party reorder/CC engineering burden returns (accepted by directive); TCP-over-TCP confined to optional lane | Spike S2a/S2c lane measurements; G4 acceptance rows per class | Medium-high |
+| Relay / cooperating endpoint | **First-party server mode inside the same binary** (`balancify relay`, Linux + container) for T1/T3/T4; **optional T2** (commodity Linux kernel-MPTCP hosts) only via the vendored MPTCP module | One codebase both ends; zero external services; self-host package for users | Managed-cloud scaling via kernel-MPTCP front-ends (T2) while server mode scales | First-party code needs no external evidence; vendored-lane scale limits per [S32]; kernel MPTCP in Linux ≥ 5.6 | Server-mode scale limits of the vendored stack apply only to the optional lane; first-party scale is ours to tune | Server-mode smoke + scale test (concurrent sessions, flood behaviour) in Phase 4 | Medium-high |
 | Desktop GUI | **WinUI 3 via Windows App SDK 2.5.1** | Native look, tray/notifications, accessibility; current stable | WPF (max maturity); web-view shell (one codebase w/ site) | Stable channel: 2.5.1 released 2026-09-16; back-compat to Windows 10 1809 [S8][S22][S24] | WinUI maturity gaps (memory-growth fixes still landing in 2026 releases) | GUI stress: 1 Hz telemetry for 24 h, UI thread < proposed 5 ms/frame p95 | Medium-high |
 | GUI runtime | **C# on .NET 10 (LTS)** | Serviced through Nov 2028; avoids re-migration mid-product | .NET 8 (EoS 2026-11-10 — do not start here); native C++/WinRT | .NET 10 LTS end of support 2028-11-14; .NET 8 & 9 end 2026-11-10 [S9] | Managed runtime in shell only (not data plane) | Shell cold-start and memory budget measured | High |
 | IPC | **Named pipe, length-prefixed binary messages, SDDL ACL + caller identity check** | No open network port; Windows identity authentication; simple security review | gRPC over named pipe (if we need streaming/schema tooling) | — | Schema evolution discipline | Authz negative tests (non-admin user, other session) | Medium |
@@ -461,7 +480,7 @@ Adversaries: (a) malicious/compromised local process trying to abuse the service
 | Attestation signing | EV certificate + Partner Center submission; no HLK run | Windows 10/11 desktop | Not "Windows Certified"; not eligible for retail Windows Update; Windows Server 2016+ rejects attested device/filter drivers [S12] |
 | HLK-tested, dashboard-signed (WHCP) | HLK pass via Windows Hardware Compatibility Program | All Windows incl. Server | Significant engineering/test time; required for Windows Update distribution [S12] |
 
-**Consequence:** MVP ships **no driver of ours** (Wintun is pre-signed [S4]), so Partner Center enrolment, HLK labs and WHCP paperwork are deferred behind gate G3 — but the *spike* for the signing path happens before any driver investment (Phase 3), because calendar time (enrolment, EV cert, submission queues) can dominate.
+**Consequence (rev 2):** the product ships **its own driver**, so Partner Center enrolment, the EV certificate, the attestation submission and — later, only if Server support is added — HLK/WHCP testing are **critical-path workstreams starting in Phase 1**, not options deferred behind a gate [S12]. The SBOM/VEX pipeline (SPDX 3.0, required for WHCP submissions of new builds from March 2027 [S13]) and the HVCI readiness trio [S15] run in CI from Phase 2–3. The §11.2 exception policy is the only schedule rescue.
 
 ### 9.4 Platform security features we must coexist with
 
@@ -513,54 +532,80 @@ G2 (steering + end-to-end tunnel), G3 (packet-path latency/CPU vs targets ⇒ dr
 
 ---
 
-## 11. Phased Development Roadmap
+## 11. Phased Development Roadmap — rev 2 (fully self-contained product)
 
-Nine phases, eight go/no-go gates. Durations are **proposals for a 4–5 engineer team** (A6) and are re-baselined after Phase 2. Gate **G3** decides whether any kernel code is ever written.
+**What is identical to rev 1:** the feature set (R1–R7, §2), the proposed acceptance criteria (§10.3), the gate discipline (eight go/no-go gates), the failure/health/scheduler designs (§6), and the topology options (§4.7). **What changes:** code ownership (§4.8) puts the **first-party NDIS virtual miniport and its signing/HVCI calendar on the critical path from Phase 2**, and the primary tunnel lane is first-party. Durations below are for a **5–6 engineer team including a kernel driver engineer from day one** (rev 1 assumed 4–5 with drivers contracted on trigger); re-baseline after Phase 2. Expected time to GA ≈ **47–58 weeks** (rev 1: ≈ 40–52), the delta being driver development, WHCP signing and HVCI validation that rev 1 deferred behind gate G3.
 
-![Roadmap with gates](assets/roadmap-gates.png)
+*Rev-1 gate view from the source blueprint (superseded by the rev-2 diagram below; kept for audit):*
 
-*Figure 2 — Phase bands and gates (from the source blueprint; not to scale).*
+![Roadmap rev 1](assets/roadmap-gates.png)
 
 ```mermaid
 flowchart LR
-  P1["1 Feasibility\n3–4 wks"] -->|G1 relay needed?| P2["2 Lab prototype\n4–6 wks"]
-  P2 -->|G2 steering works?| P3["3 Architecture spike\n3–4 wks"]
-  P3 -->|G3 driver needed?| P4["4 MVP\n10–14 wks"]
-  P4 -->|G4 targets met?| P5["5 Alpha\n6 wks"]
-  P5 -->|G5 soak passes?| P6["6 Beta\n8 wks"]
-  P6 -->|G6 review clear?| P7["7 Release candidate\n4 wks"]
-  P7 -->|G7 ship decision| P8["8 Production release\n2 wks"]
-  P8 -->|G8 field stable?| P9["9 Maintenance\nongoing"]
+  P1["1 Feasibility\n3–4 wks"] -->|"G1 policy + signing strategy"| P2["2 Lab prototype\n6–8 wks"]
+  P2 -->|"G2 in-house packet path"| P3["3 Architecture spike\n4 wks"]
+  P3 -->|"G3 driver perf + HVCI + signing dry-run"| P4["4 MVP\n14–18 wks"]
+  P4 -->|"G4 acceptance table"| P5["5 Alpha\n6–8 wks"]
+  P5 -->|"G5 soak + Driver Verifier"| P6["6 Beta\n8 wks"]
+  P6 -->|"G6 review + matrix"| P7["7 Release candidate\n4–6 wks"]
+  P7 -->|"G7 ship decision"| P8["8 Production release\n2 wks"]
+  P8 -->|"G8 field stable"| P9["9 Maintenance\nongoing"]
 ```
 
 ### 11.1 Phase detail
 
-| Phase | Objective & main tasks | Deliverables / owner profile | Test gate & exit criteria | Depends on | Risks retired | If gate fails |
+| Phase | Objective & main tasks | Deliverables / owner profile | Test gate & exit criteria | Depends on | Risks retired | If the gate fails |
 |---|---|---|---|---|---|---|
-| **1 Feasibility** | Requirements freeze; relay cost/RTT model (2 regions); threat sketch; licence review (Wintun/WinDivert); SBOM tooling decision | Decision memo; cost model; licence opinion — architect + product owner | **G1:** decisions D1/D2 settled; relay model fits budget | — | Commercial viability of bonding | Narrow scope to flow-level balancing, no relay |
-| **2 Lab prototype** | Spike S1 (steering); Spike S2 (Wintun + UDP tunnel, 2 links); build Rig B (netem); baselines | Spike reports; rig; baseline dataset — 2 systems engineers | **G2:** S1 forces egress per uplink on ≥3 adapter classes; S2 carries traffic end-to-end | G1 | Steering feasibility; tunnel viability | WinDivert/WFP redirect prototype before driver work |
-| **3 Architecture spike** | Packet-path benchmark of Wintun route (latency, CPU/Gbit/s, working set); **Spike S3: embed mptcp-rs sans-I/O core with a Wintun I/O shim on Windows 11 (p99, CPU, blackhole recovery) + Linux server-mode smoke test**; IPC contract v1; GUI wireframes + usability pass; signing-path spike (enrolment/EV/Artifact Signing) | Benchmark report; embedded-engine harness; IPC IDL; wireframes; signing runbook — perf engineer + UI engineer | **G3:** Wintun path meets proposed delay/CPU targets ⇒ **no driver**; embedded engine meets latency/CPU targets ⇒ engine locked; else fund NDIS fast-path prototype | G2 | Packet-path performance; embed feasibility; signing calendar risk | Fund NDIS prototype; keep Wintun fallback; fall back to libmqvpn-only design |
-| **4 MVP** | Service (classifier, schedulers, embedded tunnel engine + AEAD wrapper), **`balancify relay` server mode (T1) + kernel-MPTCP endpoint support (T2)**, WinUI shell (Home/Rules/Tray), installer + signing, CI+SBOM, docs site skeleton | Installable signed build; relay image + container; CI pipeline — full team | **G4:** §10.3 acceptance rows for throughput/delay/reorder/failover pass on Rig B, incl. lane choice (MPTCP vs datagram) per class | G3 | Product integration risk | Cut striping and the datagram lane; ship flow-level mode only |
-| **5 Alpha** | Internal users; support-bundle export; soak rig (72 h + flaps + resume); crash reporting; Diagnostics view | Alpha channel; soak reports — full team + support engineer | **G5:** soak & 100 resume cycles clean; no high-sev crash | G4 | Stability, recovery behaviour | Fix, repeat soak, delay beta |
-| **6 Beta** | Outside testers on real carriers; compatibility matrix (§10.3); external security review; docs site live; Relay view | Beta channel; compat matrix; review report — full team + security reviewer | **G6:** no open high-severity finding; matrix documented | G5 | Coexistence, security, carrier diversity | Extend beta and patch |
-| **7 Release candidate** | Feature freeze; signed installers + update feed; SBOM/VEX artifacts; rollback drill; release checklist | RC builds; rollback evidence — release engineer | **G7:** checklist signed off; rollback proven | G6 | Release-path defects | Fix blockers; cut new RC |
-| **8 Production release** | Public download + winget; status page; support process; telemetry (opt-in) live | GA; runbooks — release + support | **G8:** first weeks of field data show no widespread failure | G7 | Distribution/ops blind spots | Roll back through update feed |
-| **9 Maintenance** | Monthly patches; regression runs on new Windows builds; relay capacity/cost reviews; cert renewal automation | Standing routine | — | G8 | Drift (OS updates, cert expiry) | n/a |
+| **1 Feasibility** | Requirements freeze; **dependency policy (§4.8) ratification**; **signing strategy decision (attestation vs HLK) + Partner Center enrolment + EV certificate ordered**; relay/infra cost model for server mode; vendored-fork licence review (mptcp-rs Apache/MIT) | Decision memo; policy; enrolment receipts; cost model — architect + product owner + release eng | **G1:** D1–D5 settled; policy ratified; signing strategy approved and enrolment started; infra model fits budget | — | Commercial viability; signing calendar surprise | Narrow scope to flow-level balancing; re-plan signing |
+| **2 Lab prototype** | Spike S1 (steering); **S2a first-party datagram tunnel over bound sockets**; **S2b first-party NDIS miniport skeleton passing packets on a test-signed rig (Driver Verifier on)**; S2c reorder/reinjection measurements on netem rig; baselines B1–B3 | Spike reports; **unsigned driver binary**; rig; baseline dataset — 2 systems eng + **driver eng** | **G2:** S1 forces egress per uplink (≥3 adapter classes); end-to-end tunnel **through the in-house miniport** on test-signed rig; **no third-party kernel component in the data path** | G1 | Steering; in-house packet path viability | Miniport skeleton slips → continue S2a/S2c on sockets, re-gate in 2 wks; steering fail → WFP redirect prototype (first-party driver either way) |
+| **3 Architecture spike** | **Miniport packet-path benchmark vs §10.3 (added latency, CPU/Gbit/s, working set); HVCI readiness trio: Driver Verifier w/ CI checks, HLK HVCI readiness test, run on VBS/Memory-Integrity machine [S15]; attestation-submission dry-run**; IPC contract v1; GUI wireframes + usability pass | Benchmark report; HVCI report; signing dry-run result; IPC IDL; wireframes — driver eng + perf eng + UI eng | **G3:** miniport meets proposed delay/CPU targets; HVCI trio passed; dry-run accepted by Partner Center | G2 | Driver performance; memory-integrity compatibility; signing calendar | Perf miss → one 2-wk batching/optimization round then re-gate; HVCI/signing fail → fix in-place (no external driver; exception policy §11.2 only for schedule rescue) |
+| **4 MVP** | Service (classifier, schedulers, first-party dual-lane tunnel + AEAD wrapper), **server mode (T1/T3/T4) + container/self-host package**, WinUI shell (Home/Rules/Tray), **installer carrying our attestation-signed driver**, updater, CI + SBOM/VEX pipeline, docs skeleton | Installable signed build; relay image; CI pipeline — full team | **G4:** §10.3 acceptance rows pass on Rig B **with the signed driver in the loop**, incl. lane choice per class | G3 | Integration; driver-in-loop performance | Cut the datagram lane's striping (flow-level only); server mode ships without container packaging |
+| **5 Alpha** | Internal users; support bundles; **72 h soak + random flaps + 100 resume cycles with Driver Verifier (standard + random configs)**; crash/dump pipeline; Diagnostics view | Alpha channel; soak + verifier reports — full team + support eng | **G5:** soak and verifier clean; no high-sev crash; no leaked route/filter/handle/IOCTL buffer | G4 | Stability, recovery, driver robustness | Fix, repeat soak, delay beta |
+| **6 Beta** | Outside testers on real carriers; compatibility matrix (AV/VPN/Hyper-V/WSL2/**Memory Integrity on**); **external security review including driver fuzz results**; docs site live | Beta channel; matrix; review report — full team + security reviewer | **G6:** no open high-severity finding (client or driver); matrix documented | G5 | Coexistence, security, carrier diversity | Extend beta and patch |
+| **7 Release candidate** | Feature freeze; **final WHCP attestation submission for the miniport [S12]; SPDX 3.0 SBOM + VEX per driver in CI [S13]**; signed installers + update feed; **rollback drill including driver rollback**; release checklist | RC builds; attestation certificate; rollback evidence — release eng | **G7:** checklist signed off; rollback (service + driver) proven; SBOM/VEX validate | G6 | Release-path and signing defects | Fix blockers; cut new RC |
+| **8 Production release** | Public download + winget; status page; support process; opt-in telemetry live | GA; runbooks — release + support | **G8:** first weeks of field data show no widespread failure | G7 | Distribution/ops blind spots | Roll back through update feed (driver rollback path included) |
+| **9 Maintenance** | Monthly patches; **driver re-validation on each new Windows feature build**; relay capacity/cost reviews; **code-sign renewal automation (460-day cap [S16])**; vendored-fork upstream tracking | Standing routine | — | G8 | OS drift, cert expiry, fork drift | n/a |
 
-### 11.2 Dependency-aware milestone table
+### 11.2 Gate summary and the single documented exception
+
+| Gate | Pass criterion (short form) | Fallback |
+|---|---|---|
+| G1 | Decisions + dependency policy + signing strategy + enrolment | Re-scope, re-plan |
+| G2 | Steering proven; tunnel end-to-end via in-house miniport (test-signed) | 2-wk slip loop on sockets |
+| G3 | Miniport perf + HVCI trio + signing dry-run | Optimization round; in-place fixes |
+| G4 | Acceptance table with signed driver | Flow-level-only ship |
+| G5 | Soak + Driver Verifier clean | Repeat soak |
+| G6 | Review + matrix clean | Extend beta |
+| G7 | Checklist + rollback + final attestation | New RC |
+| G8 | Field stable | Update-feed rollback |
+
+**Exception policy (schedule rescue only).** If G3 or G7 is blocked > 4 weeks by signing/HVCI issues, the product owner may sign a time-boxed exception shipping **flow-level mode only** with the bundled Wintun signed DLL [S4] (the one third-party runtime artifact the policy tolerates, disclosed on the download page), while bonding and the in-house driver continue; the exception **must be retired by the next minor release**. Invoking it requires a written rationale in the release notes.
+
+### 11.3 Dependency-aware milestone table
 
 | Milestone | Phase | Predecessors | External prerequisites |
 |---|---|---|---|
-| M1 Decisions memo (D1–D5) | 1 | — | Counsel availability for licence review |
-| M2 Steering proven (S1) | 2 | M1 | Windows 11 lab machines, 3 adapter classes |
-| M3 End-to-end tunnel (S2) | 2 | M2 | Relay host + region quotes |
-| M4 Driver go/no-go (G3) | 3 | M3 | — |
-| M5 Signing path proven | 3 | M1 | Publisher identity / EV or Artifact Signing account |
-| M6 MVP installable (G4) | 4 | M4, M5 | — |
-| M7 Soak clean (G5) | 5 | M6 | Soak rig |
-| M8 Compat matrix + review (G6) | 6 | M7 | External reviewer booking |
-| M9 RC + rollback proven (G7) | 7 | M8 | — |
-| M10 GA + winget live (G8) | 8 | M9 | winget manifest validation |
+| M1 Decisions + dependency policy + signing enrolment/EV ordered | 1 | — | Partner Center, CA lead times |
+| M2 Steering proven (S1) | 2 | M1 | Win11 lab machines, 3 adapter classes |
+| M3 In-house miniport skeleton passing packets (test-signed) | 2 | M1 | Test-signing rig, WDK |
+| M4 End-to-end first-party tunnel + reorder/reinjection measurements | 2 | M2, M3 | netem rig |
+| M5 Miniport perf + HVCI-ready + signing dry-run accepted (G3) | 3 | M4 | Partner Center dry-run slot |
+| M6 IPC contract + validated wireframes | 3 | M1 | — |
+| M7 MVP installable with our signed driver (G4) | 4 | M5, M6 | Attestation cert issued |
+| M8 Server mode + self-host container package | 4 | M7 | — |
+| M9 Soak + Driver Verifier clean (G5) | 5 | M7 | Soak rig |
+| M10 Compat matrix + external review incl. driver (G6) | 6 | M9 | Reviewer booking |
+| M11 RC + final attestation + SBOM/VEX + rollback proven (G7) | 7 | M10 | WHCP submission queue |
+| M12 GA + winget + status page (G8) | 8 | M11 | winget validation |
+
+### 11.4 Delta vs rev 1 (audit trail)
+
+- Driver work moved from "contracted on trigger after G3" to **in-house from Phase 2**; team +1 kernel engineer at start (§12).
+- Wintun/WinDivert removed from the shipped design (§5, §7); Wintun survives only inside the §11.2 exception.
+- Primary tunnel lane is first-party (datagram lane); mptcp-rs becomes an **optional vendored module** (§4.8).
+- Signing/HVCI/SBOM-VEX workstreams start in Phase 1–3 instead of Phase 3–7 (§9.3).
+- Durations: P2 4–6→6–8 wks; P4 10–14→14–18 wks; P5 6→6–8 wks; P7 4→4–6 wks; GA ≈ 47–58 wks.
+- Gates keep their numbers and discipline; **G3's question changes** from "is a driver needed?" to "does our driver meet performance, HVCI and signing gates?".
 
 ---
 
@@ -575,7 +620,7 @@ Phase numbers per §11. **Now** = required on the starting team; **On trigger** 
 | Protocol & cryptography engineering | Noise-style handshake, framing, reorder buffer, key rotation | Rust, protocol specs, test vectors, fuzzers | Advanced | 2–6 | Now |
 | Concurrency & performance | Packet path, batching, queues, cache behaviour, ETW analysis | ETW, Windows Performance Recorder/Analyzer, profilers | Advanced | 3–7 | Now |
 | Windows services, IPC, installers | Service lifecycle, named pipes, upgrade/rollback | SCM, WiX/MSIX tooling, Sysinternals | Advanced | 3–8 | Now |
-| Kernel driver engineering | WFP callouts, NDIS LWF/miniport — **only if G3 triggers** | WDK, Visual Studio, WinDbg, Driver Verifier, HLK | Expert | decide 3; build 4–8 | On trigger |
+| Kernel driver engineering | **First-party NDIS virtual miniport from Phase 2 (rev 2)**; WFP redirect callout as steering fallback; HVCI readiness trio | WDK, Visual Studio, WinDbg, Driver Verifier, HLK | Expert | 2–9 | **Now (rev 2)** |
 | Security & threat modelling | Trust boundaries, fuzzing, secure update, external review | Threat-model workshops, fuzzers, Driver Verifier | Advanced | 2–8 | Part-time now; external review before G6 |
 | Desktop UI & accessibility | WinUI 3 screens, tray flyout, screen-reader support | Visual Studio, Windows App SDK, Narrator | Advanced | 3–8 | From Phase 3 |
 | Test automation & lab networks | Emulated links, soak, regression | GitHub Actions, Hyper-V, netem, iperf3 | Advanced | 2–9 | Now |
@@ -584,7 +629,7 @@ Phase numbers per §11. **Now** = required on the starting team; **On trigger** 
 | Technical writing & web | Docs site, quick start, release notes, this blueprint's public version | Starlight/Docusaurus, Markdown | Intermediate | 3–9 | From MVP |
 | Relay operations & product support | Relay hosting, cost tracking, abuse handling, customer support | Linux admin, monitoring, ticketing | Intermediate | 5–9 | Before beta |
 
-**Team shape (start):** 1 architect/tech-lead (Windows networking), 2 systems engineers (Rust, protocols/perf), 1 UI engineer (WinUI/.NET), 1 release/test engineer (part-time possible). **Contracted on trigger:** kernel driver specialist (post-G3), external security review (pre-G6), counsel (licence, Phase 1).
+**Team shape (start, rev 2):** 1 architect/tech-lead (Windows networking), **1 kernel driver engineer (NDIS/WDK)**, 2 systems engineers (Rust, protocols/perf), 1 UI engineer (WinUI/.NET), 1 release/test engineer (part-time possible) — 5–6 people. **Contracted later:** external security review (pre-G6), counsel (vendored-fork licences, Phase 1); kernel contracting is no longer a plan B — the driver is in-house from Phase 2.
 
 ---
 
@@ -597,15 +642,15 @@ Phase numbers per §11. **Now** = required on the starting team; **On trigger** 
 | R1 | Relay cost + distance eat bonding gain | Med | High | Bonding requires relay (§3); egress pricing is per-GB | Cost/RTT model, 2 regions, lab traffic profiles | Architect | Any >20 % model deviation |
 | R2 | User mode cannot reliably force egress uplink | Med | High | Windows source-address/`IP_UNICAST_IF` behaviour unverified on current builds | Spike S1 | Systems eng 1 | S1 any failure |
 | R3 | Heterogeneous links make bond < best link | High | Med | Delay-gap reordering is intrinsic to striping | Rig B 40 ms gap; reorder tuning; flow-level fallback | Systems eng 2 | G4 measurement |
-| R4 | Wintun packet copies miss latency/CPU targets | Med | High | User-mode copies are the known cost of TUN designs | Spike S2 + G3 benchmark | Perf eng | G3 |
-| R5 | Signing/Memory-Integrity/SBOM rules delay a driver | Med | High | 03/2027 SBOM/VEX [S13]; Oct 2026 MI expansion [S14]; 460-day certs [S16] | Signing spike Phase 3; SBOM in CI from Phase 1 | Release eng | Any policy change |
+| R4 | In-house miniport packet path misses latency/CPU targets, or fails HVCI readiness | Med | High | Rev 2 puts a first-party driver on the critical path; Microsoft samples are educational [S3]; HVCI trio required [S15] | Spike S2b skeleton; G3 benchmark + budgeted optimization round; Driver Verifier in CI | Driver eng | G3 |
+| R5 | WHCP signing / Memory-Integrity / SBOM calendar delays GA (driver now on critical path) | High | High | SBOM/VEX from 03/2027 [S13]; MI expansion Oct 2026 [S14]; 460-day certs [S16]; attestation submission queues | Enrolment + EV in Phase 1; dry-run at G3; final at G7; §11.2 exception policy as schedule rescue | Release eng | Any policy change or submission rejection |
 | R6 | VPN/AV/Hyper-V/WSL2 conflicts | Med | Med | Layered network software historically collides | Compat matrix each milestone | Test eng | Each gate |
 | R7 | Carrier NAT/plan limits break or meter UDP paths | Med | Med | CGNAT + metered plans common on cellular | Multi-carrier tests; path-quality warning in UI | Systems eng 1 | Beta carrier reports |
-| R8 | Licence terms (Wintun GPL-2.0 source / permissive DLLs; WinDivert LGPL/GPL) | Low | High | Project licences [S4][S5] | Counsel review Phase 1 | Product owner | Before M6 |
+| R8 | Licence terms: vendored mptcp-rs fork (Apache-2.0/MIT — compatible); Wintun/WinDivert only if the §11.2 exception is invoked | Low | Med | Project licences [S32][S4][S5] | Counsel review of vendored fork in Phase 1; exception invocation requires written rationale | Product owner | Before M7 / at exception |
 | R9 | Stale routes after crash/sleep strand machine offline | Med | High | Recovery bugs are classic in TUN products | Soak with forced crashes + resume cycles; watchdog | Systems eng 2 | G5 |
 | R10 | SmartScreen reputation blocks early downloads | High | Low | New publisher identities warn until reputation builds | Consistent identity + timestamping; docs guidance | Release eng | First beta installs |
 | R11 | MPQUIC draft wire churn / fork dependency for the datagram lane | Med | Med | draft-21 not yet RFC [S11]; draft-21 wire lives in a maintained fork of XQUIC [S26] | MPTCP lane (RFC wire) is primary; pin fork + wire version for the datagram lane; interop suite in CI | Protocol eng | RFC publication or fork stall |
-| R12 | Embedded-engine maturity/supply chain: mptcp-rs server unreleased, single maintainer (also mqvpn's), 0-star project | Med | High | Repo state 2026-10-16 [S32][S25] | Vendor an Apache-2.0 fork at embed time; in-house maintenance budget; libmqvpn + kernel-MPTCP (T2) as alternates; gate at G3/G4 | Architect | Any stall > 1 quarter |
+| R12 | Vendored mptcp-rs module: server role unreleased upstream, single maintainer | Med | Med (optional module only) | Repo state 2026-10-16 [S32] | In-house fork from day one (§4.8); module compile-time optional — T1/T3/T4 do not depend on it; primary lane first-party | Architect | Upstream stall > 1 quarter |
 | R13 | TCP-over-TCP meltdown for inner TCP on lossy links in the MPTCP lane | Med | Med | Intrinsic to TCP-in-TCP carriage; mptcp-rs mitigates with reinjection + opportunistic retransmission [S32] | Spike S2/S3 measurement on lossy netem profiles; libmqvpn datagram lane as per-class fallback (§4.7.3-2) | Perf eng | G4 measurements |
 
 ### 13.2 Open decisions (need product-owner input)
@@ -621,15 +666,16 @@ Phase numbers per §11. **Now** = required on the starting team; **On trigger** 
 
 ---
 
-## 14. Next Actions (prioritized)
+## 14. Next Actions (prioritized, rev 2)
 
-1. **Settle D1 and D2** — they fix the architecture (relay or no relay; bonding or balancing).
-2. **Run Spike S1** (uplink steering on Windows 11, ≥3 adapter classes) and **Spike S2** (Wintun + UDP tunnel to relay, two links) — **plus the S2-E2 leg: bond two links against a self-hosted mqvpn server to validate the standards-wire option (§4.6)**.
-3. **Build Rig B** (netem emulated links) and record baselines B1–B3.
-4. **Build the relay cost/RTT model** for two candidate regions using lab traffic profiles.
-5. **Hold the threat-model session and licence review** (Wintun DLL terms for closed-source redistribution).
-6. **Pick the docs framework, create the repo layout, CI with SBOM generation, and the signing account** (Artifact Signing vs OV).
-7. **Embed spike (Spike S3):** depend on the mptcp-rs crate in a harness with a Wintun I/O shim on Windows 11; stand up the Linux server mode; run the kernel-MPTCP interop suite in CI — this locks or kills the embedded-engine choice before MVP.
+1. **Settle D1–D5 and ratify the dependency policy (§4.8)** — the policy is what makes every later choice first-party.
+2. **Start the signing calendar now:** order the EV certificate, begin Partner Center enrolment, choose attestation vs HLK (G1 artifact) — it is the longest lead item in rev 2.
+3. **Run Spike S1** (uplink steering, ≥3 adapter classes) **in parallel with Spike S2b** (first-party NDIS miniport skeleton passing packets on a test-signed rig, Driver Verifier on).
+4. **Run Spike S2a/S2c:** first-party datagram tunnel over bound sockets, then through the miniport; reorder/reinjection measurements on the netem rig; record baselines B1–B3.
+5. **Stand up the in-binary server mode** on a Linux box and bond two lab links against it (topology T1) — proves the embedded endpoint end-to-end with zero external services.
+6. **Hold the threat-model session and vendored-fork licence review** (mptcp-rs Apache-2.0/MIT for the optional module).
+7. **Create the repo layout and CI with SBOM (SPDX 3.0) + VEX generation from the first commit**, signing account (Azure Artifact Signing vs OV), and the docs framework.
+8. **G3 harness:** miniport packet-path benchmark + HVCI readiness trio + attestation dry-run — locks the driver before MVP spend.
 
 ---
 
