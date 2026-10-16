@@ -139,7 +139,7 @@ Any vendor claim of "bonding without a server" for arbitrary Internet traffic on
 - **Ship M5 first** (per-uplink tunnels, flow-level balancing): delivers R3 + stable public exit address + fast failover with the simplest state machine, and is the substrate on which M4 is added.
 - **Add M4 striping** per flow-class, gated on measurement (§6.4, gate G4): delivers R4 where it actually pays (large transfers, uplink video), never by default on heterogeneous links.
 - **Keep M2/M3 semantics inside M5** (the classifier/scheduler still places flows; the tunnels are the egress).
-- **Track M6** as research: if multipath QUIC publishes as an RFC and a mature library lands, it becomes the preferred *end-to-end* option for our own client↔relay and client↔our-services traffic — it does not help arbitrary third-party servers.
+- **Track M6** as research: if multipath QUIC publishes as an RFC and a mature library lands, it becomes the preferred *end-to-end* option for our own client↔relay and client↔our-services traffic — it does not help arbitrary third-party servers. The cooperating endpoints actually available for the relay role (self-operated custom relay, mqvpn/MASQUE-MPQUIC servers, XQUIC, OpenMPTCProuter components, commercial clouds) are catalogued and evaluated in **§4.6**.
 
 ---
 
@@ -220,6 +220,28 @@ flowchart TB
 | Adapter removed / sleep-resume | PnP + power events | Re-run discovery, re-probe, Recovering ramp (§6.5) | Cards refresh |
 | GUI crash | — | No data-plane impact (by construction) | Tray re-launchable |
 | DNS server change on an uplink | DHCP/event | Tunnel-resolved DNS unaffected; per-uplink DNS never leaks (§6.6) | — |
+
+### 4.6 Cooperating-endpoint landscape (what the far end of the bond can be)
+
+Single-flow bonding (R4) requires a cooperating endpoint that sees every uplink as one session (§3.1). As of 2026-10-16 the available endpoints are:
+
+| # | Endpoint | What it is | Works with *our* Windows client? | Licence | Role in this blueprint |
+|---|---|---|---|---|---|
+| E1 | **Self-operated custom relay** (Rust core, Linux VPS pair) | Our own protocol: Noise-style handshake + path/sequence headers (§7) | Yes — we define both ends | Proprietary | **Default (core recommendation)** |
+| E2 | **Self-operated mqvpn server** | Open-source multipath VPN server: MASQUE CONNECT-IP (RFC 9484) over Multipath QUIC draft-21 (mp0rta/xquic fork); Linux server (Ubuntu 22.04 / Debian 12+); reorder buffer, reinjection, hybrid TCP lane, PSK over TLS 1.3 [S25][S26] | **Yes** — the project ships a Windows 10+ (amd64/arm64) client today, and a sans-I/O `libmqvpn` core is on its roadmap [S25] | Apache-2.0 [S25] | **Interop target, fallback relay, and candidate wire protocol** (Spike S2 leg; decision D6) |
+| E3 | **XQUIC-based relay** | Alibaba XQUIC implements MPQUIC drafts (main: -05/-06; mp0rta fork: -21); cross-platform incl. Windows; the only MPQUIC implementation with multiple schedulers per an independent study [S27] | Yes — same library at both ends | Apache-2.0 [S27] | Candidate foundation for E1 if D6 picks the standards wire |
+| E4 | OpenMPTCProuter VPS stack | Debian VPS script installing MPTCP kernel + shadowsocks + Glorytun multipath + MLVPN + **mqvpn server** [S28] | **No** — clients are OpenWrt/Linux; Windows has no MPTCP stack (§3) | GPL-3.0 (scripts) [S28] | Lab comparison/interference rig; proof that E2-class servers run in real bonding deployments |
+| E5 | Glorytun-multipath / MLVPN servers | Simple encrypted UDP multipath tunnels (OpenMPTCProuter fallbacks) | No Windows client; upstream glorytun unmaintained since 2022 (downstream forks carry it) | BSD-2-Clause [S31] | Last-resort interop; not recommended |
+| E6 | Commercial bonding clouds | Speedify shared/dedicated/**self-hosted** servers plus an embeddable bonding SDK [S29]; Peplink SpeedFusion/FusionHub (per-peer licences, free Solo tier) [S30] | **No for our client** — Speedify servers terminate only Speedify clients/SDK; SpeedFusion requires Peplink endpoints on both sides [S30] | Proprietary | Build-vs-buy alternative (Speedify SDK) and competitor analysis only |
+| E7 | Native MPTCP peer (Linux kernel) | In-kernel MPTCP (RFC 8684) at the far end | No — Windows implements no MPTCP client stack [S21] | n/a | Excluded |
+| E8 | Public/neutral bonding relay | A third-party open relay speaking a bondable protocol | None exists | — | Confirms "relay you operate" is the only route to R4 |
+
+**Decision rules.**
+
+1. The default remains **E1**: control of the wire, cost model, and product differentiation.
+2. **Spike S2 gains an E2 leg:** stand up a mqvpn server in the lab, bond two links from its Windows client, and measure its reorder/reinjection behaviour. For near-zero cost (Apache-2.0) this retires the "we must build the tunnel from scratch" risk and gives us a working fallback relay.
+3. **Phase 3 (with G3) decides D6:** custom wire (E1) versus standards wire — MASQUE CONNECT-IP over MPQUIC draft-21 on XQUIC (E2/E3-compatible). The standards wire buys interoperability and deletes crypto/reorder code we would otherwise own; it costs draft-churn exposure until the RFC publishes [S11] and a dependency on a maintained fork [S26].
+4. **E6 is a business alternative, not an architecture:** licensing Speedify's SDK replaces our client+server build but cedes the data plane and per-device economics; FusionHub cannot terminate our client at all [S29][S30].
 
 ---
 
@@ -317,7 +339,7 @@ Confidence = our judgment of how well the choice is backed by evidence today (lo
 | Kernel driver (only if gates require) | **C with the WDK** (WFP callout or NDIS LWF/miniport) | The supported, documented toolchain; HLK/WHCP path assumes it | Rust drivers via windows-drivers-rs | windows-drivers-rs README: "still in early stages of development and is not yet recommended for production use"; crates.io crates cover KMDF v1.33 only [S7] | Driver signing + HVCI + SBOM/VEX burden (§9) | Driver Verifier + HLK HVCI readiness test on a spike driver | High |
 | Virtual adapter | **Wintun 0.14.1 signed DLLs** | Already signed; production-proven (WireGuard); no driver of ours in MVP | Custom NDIS miniport post-G3 | Wintun site: signed DLLs for AMD64/X86/ARM64/ARM32 are the only supported distribution form; source GPL-2.0, prebuilt DLLs under a more permissive licence in the ZIP [S4] | Licence terms for closed-source redistribution (counsel, Phase 1) | Spike S2 end-to-end tunnel through Wintun on 2 links | Medium |
 | Steering fallback | **WinDivert** (only if S1 fails) | User-mode capture/reinject without writing a driver | WFP redirect callout | README lists Windows 7/8/10 [S5]; project site lists Windows 11 [S6] — test explicitly | LGPL/GPL licence; Windows 11 behaviour unverified | S1-fail branch prototype | Medium |
-| Tunnel + crypto | **UDP tunnel, Noise-style handshake (e.g., Noise_XK or WireGuard-like), own path/seq headers** | We control striping/reorder; avoids TCP-over-TCP; QUIC datagrams possible later | Multipath QUIC library once RFC publishes and matures | draft-ietf-quic-multipath-21 in RFC Editor queue ("In Progress (Second Edit)"), not yet an RFC [S11]; Windows has no MPTCP [S21, unconfirmed] | We own crypto/reorder engineering | Protocol test vectors + fuzzing; interop tests client↔relay | Medium |
+| Tunnel + crypto | **UDP tunnel, Noise-style handshake (e.g., Noise_XK or WireGuard-like), own path/seq headers** | We control striping/reorder; avoids TCP-over-TCP; QUIC datagrams possible later | **MASQUE CONNECT-IP (RFC 9484) over Multipath QUIC draft-21 via XQUIC (mp0rta fork), interoperable with a self-operated mqvpn server (§4.6 E2/E3)**; plain QUIC datagrams once the RFC publishes | draft-ietf-quic-multipath-21 in RFC Editor queue ("In Progress (Second Edit)"), not yet an RFC [S11]; Windows has no MPTCP [S21, unconfirmed]; mqvpn + mp0rta/xquic are Apache-2.0 and active [S25][S26] | We own crypto/reorder engineering (custom wire) or draft-churn + fork dependency (standards wire) — decided at D6 | Protocol test vectors + fuzzing; interop tests client↔our relay **and client↔mqvpn server** | Medium |
 | Relay | **Same Rust core on small Linux servers** (region pair) | One codebase both ends; placement near users; capacity scaling per region | Existing aggregation appliances (control vs build cost trade) | — | Egress cost, abuse, availability (§13 R1) | Cost/RTT model for 2 regions (Phase 1, gate G1) | Medium |
 | Desktop GUI | **WinUI 3 via Windows App SDK 2.5.1** | Native look, tray/notifications, accessibility; current stable | WPF (max maturity); web-view shell (one codebase w/ site) | Stable channel: 2.5.1 released 2026-09-16; back-compat to Windows 10 1809 [S8][S22][S24] | WinUI maturity gaps (memory-growth fixes still landing in 2026 releases) | GUI stress: 1 Hz telemetry for 24 h, UI thread < proposed 5 ms/frame p95 | Medium-high |
 | GUI runtime | **C# on .NET 10 (LTS)** | Serviced through Nov 2028; avoids re-migration mid-product | .NET 8 (EoS 2026-11-10 — do not start here); native C++/WinRT | .NET 10 LTS end of support 2028-11-14; .NET 8 & 9 end 2026-11-10 [S9] | Managed runtime in shell only (not data plane) | Shell cold-start and memory budget measured | High |
@@ -540,6 +562,7 @@ Phase numbers per §11. **Now** = required on the starting team; **On trigger** 
 | R8 | Licence terms (Wintun GPL-2.0 source / permissive DLLs; WinDivert LGPL/GPL) | Low | High | Project licences [S4][S5] | Counsel review Phase 1 | Product owner | Before M6 |
 | R9 | Stale routes after crash/sleep strand machine offline | Med | High | Recovery bugs are classic in TUN products | Soak with forced crashes + resume cycles; watchdog | Systems eng 2 | G5 |
 | R10 | SmartScreen reputation blocks early downloads | High | Low | New publisher identities warn until reputation builds | Consistent identity + timestamping; docs guidance | Release eng | First beta installs |
+| R11 | MPQUIC draft wire churn / fork dependency if D6 picks the standards wire | Med | Med | draft-21 not yet RFC [S11]; draft-21 wire lives in a maintained fork of XQUIC [S26] | Pin the fork + wire version; keep custom-wire (E1) fallback; re-check at each RFC Editor state change; interop suite in CI | Protocol eng | RFC publication or fork stall |
 
 ### 13.2 Open decisions (need product-owner input)
 
@@ -550,13 +573,14 @@ Phase numbers per §11. **Now** = required on the starting team; **On trigger** 
 | D3 | Fail-open or fail-closed when all uplinks/relay are down? | Fail-closed for tunneled, fail-open for balanced (§9.2) |
 | D4 | Is Windows 10 support required? | Best-effort only (A1) |
 | D5 | Closed source? (affects shippable components) | Closed source, open docs (A5) |
+| D6 | Tunnel wire: custom (Noise-style + own headers, E1) or standards (MASQUE CONNECT-IP over MPQUIC draft-21 via XQUIC, E2/E3-compatible)? | Custom wire for v1, standards wire re-evaluated at RFC publication; mqvpn kept as interop/fallback either way |
 
 ---
 
 ## 14. Next Actions (prioritized)
 
 1. **Settle D1 and D2** — they fix the architecture (relay or no relay; bonding or balancing).
-2. **Run Spike S1** (uplink steering on Windows 11, ≥3 adapter classes) and **Spike S2** (Wintun + UDP tunnel to relay, two links).
+2. **Run Spike S1** (uplink steering on Windows 11, ≥3 adapter classes) and **Spike S2** (Wintun + UDP tunnel to relay, two links) — **plus the S2-E2 leg: bond two links against a self-hosted mqvpn server to validate the standards-wire option (§4.6)**.
 3. **Build Rig B** (netem emulated links) and record baselines B1–B3.
 4. **Build the relay cost/RTT model** for two candidate regions using lab traffic profiles.
 5. **Hold the threat-model session and licence review** (Wintun DLL terms for closed-source redistribution).
@@ -594,12 +618,19 @@ Access date for all web sources: **2026-10-16**. "Primary" = vendor/standards bo
 | S22 | Windows App SDK 2.0 release notes (2.5.1) | Microsoft Learn — learn.microsoft.com/en-us/windows/apps/windows-app-sdk/release-notes/windows-app-sdk-2-0 | 2.5.1 content/date; WER support for self-contained MSIX |
 | S23 | Windows Multi-WAN Aggregation Blueprint.docx (rev 20) | This repository | Source blueprint: architecture, gates, targets, skills matrix baseline |
 | S24 | WinUI 3 overview | Microsoft Learn — learn.microsoft.com/en-us/windows/apps/winui/winui3/ | WinUI 3 runs on Windows 10 1809+ and Windows 11 |
+| S25 | mqvpn (multipath VPN: MASQUE CONNECT-IP over Multipath QUIC) | github.com/mp0rta/mqvpn + docs.mqvpn.org | Server Linux-only (Ubuntu 22.04/Debian 12+); **Windows 10+ amd64/arm64 client shipped**; reorder buffer, reinjection, hybrid TCP lane, WLB scheduler, PSK/TLS 1.3; sans-I/O libmqvpn on roadmap; **Apache-2.0**, active (pushed 2026-10-14, GitHub API) |
+| S26 | mp0rta/xquic fork | github.com/mp0rta/xquic | Adds draft-ietf-quic-multipath-21 wire compliance + RFC 9484 CONNECT-IP to XQUIC for mqvpn; Apache-2.0; active (pushed 2026-10-15, GitHub API) |
+| S27 | Alibaba XQUIC + TUM study "Increasing Throughput & Redundancy with Multipath QUIC" | github.com/alibaba/xquic; net.in.tum.de (2024-09) | XQUIC cross-platform incl. Windows; implements MPQUIC drafts (main -05/-06); per TUM study the only MPQUIC implementation with multiple schedulers |
+| S28 | OpenMPTCProuter + VPS scripts | github.com/Ysurac/openmptcprouter, …/openmptcprouter-vps, openmptcprouter.com wiki | VPS = Debian script installing MPTCP kernel, shadowsocks, Glorytun TCP/UDP multipath, MLVPN, mqvpn server; clients OpenWrt/Linux only; self-host only (no hosted cloud); GPL-3.0 (GitHub API) |
+| S29 | Speedify private servers & SDK | speedify.com/enterprise/server-infrastructure/; speedify.com blog (SDK for carriers/ISPs) | Bonding requires Speedify server half (shared, dedicated, or **self-hosted Linux package**); **Speedify SDK** licensable to embed bonding in own products — clients remain Speedify stack |
+| S30 | Peplink FusionHub / SpeedFusion licensing | peplink.com (FusionHub Solo, general software licence); buypeplink.com (FusionHub tiers) | FusionHub = virtual SpeedFusion endpoint in your cloud, per-peer one-time licences (Solo free, 1 peer); **SpeedFusion bonding endpoints must be Peplink products on both sides**; licence validation needs InControl connectivity |
+| S31 | glorytun | github.com/angt/glorytun (GitHub API) | BSD-2-Clause; upstream last push 2022-02 — multipath variants live in downstream forks (e.g., OpenMPTCProuter) |
 
 ### 15.1 Unresolved assumptions and what depends on them
 
 - **A1–A6 (§2.4)** — scope, relay ownership, audience, protocol scope, licensing, team size. D1–D5 (§13.2) are the decisions that collapse them.
 - **Unverified technical behaviours:** `IP_UNICAST_IF`/strong-weak-host steering on current Windows 11 (Spike S1); WinDivert on Windows 11; every performance number in §10.3 (proposed, never measured); WinUI 3 memory behaviour under 24 h telemetry load.
 - **Secondary-only claims:** S16 (460-day cap), S20 (docs versioning), S21 (no Windows MPTCP). Each has a named confirmation step before it is used in external communications or contracts.
-- **Time-sensitive claims to re-check each quarter:** S8 (WinAppSDK stable), S9 (.NET servicing), S11 (multipath QUIC RFC status), S13/S14 (signing & Memory Integrity policy), S16 (CA/B rules).
+- **Time-sensitive claims to re-check each quarter:** S8 (WinAppSDK stable), S9 (.NET servicing), S11 (multipath QUIC RFC status), S13/S14 (signing & Memory Integrity policy), S16 (CA/B rules), S25/S26 (mqvpn & fork activity, libmqvpn sans-I/O availability).
 
 *End of report.*
