@@ -95,15 +95,18 @@ impl DeficitRoundRobin {
     pub fn next(&mut self) -> u8 { self.next_with_cost(1400) }
     pub fn next_with_cost(&mut self, cost: u64) -> u8 {
         assert!(!self.paths.is_empty(), "no healthy paths");
+        let c = cost as i64;
         loop {
-            if self.deficit[self.idx] >= cost as i64 {
-                self.deficit[self.idx] -= cost as i64;
-                let p = self.paths[self.idx].0;
-                self.idx = (self.idx + 1) % self.paths.len();
-                return p;
+            // Classic DRR: a path keeps its turn (and its credit) while it can
+            // still pay for a unit; the quantum is added once when the turn
+            // passes to a path, never while it is mid-round. This keeps bytes
+            // sent proportional to quanta in steady state.
+            if self.deficit[self.idx] >= c {
+                self.deficit[self.idx] -= c;
+                return self.paths[self.idx].0;
             }
-            self.deficit[self.idx] += self.paths[self.idx].1 as i64;
             self.idx = (self.idx + 1) % self.paths.len();
+            self.deficit[self.idx] += self.paths[self.idx].1 as i64;
         }
     }
 }
