@@ -237,6 +237,6 @@ mod tests {
         assert!(should_duplicate(64, true, true));
         assert!(!should_duplicate(1000, true, true), "large packets never duplicated");
         assert!(!should_duplicate(64, false, true));
-        assert!(!should_duplicate(64, true, false), "mode off"));
+        assert!(!should_duplicate(64, true, false), "mode off");
     }
 }
