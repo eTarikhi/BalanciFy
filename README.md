@@ -1,5 +1,7 @@
 # balancify
 
+[![CI](https://github.com/eTarikhi/balancify/actions/workflows/ci.yml/badge.svg)](https://github.com/eTarikhi/balancify/actions/workflows/ci.yml)
+
 Windows-native multi-WAN **bonding + load balancing**: combine Wi-Fi, Ethernet
 and cellular behind one virtual adapter, with every capability embedded in the
 product — no external apps, services or solutions at runtime; the installer
