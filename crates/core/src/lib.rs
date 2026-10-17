@@ -202,7 +202,12 @@ pub fn place(
             .min_by_key(|u| u.2)
             .map(|u| u.0),
         FlowClass::Bulk => {
-            let w: Vec<(UplinkId, f64)> = uplinks.iter().map(|u| (u.0, u.1)).collect();
+            // Unhealthy uplinks carry zero weight: WRH then moves only the
+            // flows that were on a link when it leaves the healthy set (§6.2).
+            let w: Vec<(UplinkId, f64)> = uplinks
+                .iter()
+                .map(|u| (u.0, if matches!(u.3, LinkState::Down | LinkState::Probing) { 0.0 } else { u.1 }))
+                .collect();
             wrh_place(flow.hash64(), &w)
         }
     }

@@ -207,12 +207,11 @@ mod tests {
         rb.push(1, b"one".to_vec());   // seq 0 lost
         rb.push(2, b"two".to_vec());
         assert!(rb.pop_ready(t0).is_empty());
+        // Cap expiry skips the gap and releases the deliverable backlog in order.
         let r = rb.pop_ready(t0 + Duration::from_millis(45));
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0], b"one".to_vec());
+        assert_eq!(r, vec![b"one".to_vec(), b"two".to_vec()]);
         assert_eq!(rb.released_out_of_order, 1);
-        let r = rb.pop_ready(t0 + Duration::from_millis(46));
-        assert_eq!(r, vec![b"two".to_vec()]);
+        assert!(rb.pop_ready(t0 + Duration::from_millis(46)).is_empty());
     }
 
     #[test]

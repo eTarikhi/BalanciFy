@@ -7,7 +7,6 @@
 //! relays (§6.6), abuse controls and the no-destination-logging rule (§9.2).
 
 use balancify_tunnel::{Header, ReorderBuffer};
-use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
@@ -81,14 +80,11 @@ mod tests {
                 got.push(String::from_utf8(payload).unwrap());
             }
         }
-        // everything except the tail held by the gap must come out in order
-        let mut it = got.iter();
-        let mut prev: Option<&String> = None;
-        while let Some(g) = it.next() {
-            if let Some(p) = prev { assert!(p < g, "out of order: {} before {}", p, g); }
-            prev = Some(g);
-        }
-        assert!(got.len() >= 30, "most of the stream must be released, got {}", got.len());
+        got.extend(re.ingest(&[], t0).into_iter().map(|p| String::from_utf8(p).unwrap()));
+        // Once every datagram has arrived, the full stream must be released in order.
+        let expect: Vec<String> = (0..40).map(|i| format!("p{i:02}")).collect();
+        assert_eq!(got, expect);
+        assert_eq!(re.out_of_order_releases(), 0, "no cap expiry when all packets arrive");
     }
 
     #[test]
