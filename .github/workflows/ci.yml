@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/*"]
+  pull_request:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  core-tests-linux:
+    name: Rust workspace tests (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          cargo test --workspace --all-targets 2>&1 | tee test.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            SUMMARY="$(printf '### cargo test failed (exit %s)\n```\n%s\n```\n' "$code" "$(tail -n 100 test.log)")"
+            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '.check_runs[] | select(.name == "Rust workspace tests (ubuntu)") | .id' | head -1)
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test failure log" -f "output[summary]=$SUMMARY" || true
+            exit "$code"
+          fi
+      - run: cargo build --release --workspace
+
+  core-tests-windows:
+    name: Rust workspace tests (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          cargo test --workspace --all-targets 2>&1 | tee test.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            SUMMARY="$(printf '### cargo test failed (exit %s)\n```\n%s\n```\n' "$code" "$(tail -n 100 test.log)")"
+            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '.check_runs[] | select(.name == "Rust workspace tests (windows)") | .id' | head -1)
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test failure log" -f "output[summary]=$SUMMARY" || true
+            exit "$code"
+          fi
+
+  # Phase 4: add jobs for (a) WDK driver build + Driver Verifier lab,
+  # (b) WinUI shell build, (c) installer clean-machine VM matrix,
+  # (d) SPDX 3.0 SBOM + VEX generation (Microsoft sbom-tool).

@@ -1,0 +1,9 @@
+[package]
+name = "balancify-tunnel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "First-party datagram lane: framing, sequencing, reorder buffer, deficit round robin, reinjection policy"
+
+[dependencies]
+balancify-core = { path = "../core" }
