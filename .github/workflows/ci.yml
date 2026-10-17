@@ -19,6 +19,7 @@ jobs:
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             { echo "### cargo test failed (exit $code)"; echo '```'; tail -n 80 test.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 40 test.log | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error ::$l"; done
             exit "$code"
           fi
       - run: cargo build --release --workspace
@@ -37,6 +38,7 @@ jobs:
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
             { echo "### cargo test failed (exit $code)"; echo '```'; tail -n 80 test.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 40 test.log | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error ::$l"; done
             exit "$code"
           fi
 
