@@ -12,7 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-targets
+      - name: cargo test
+        run: |
+          set +e
+          cargo test --workspace --all-targets 2>&1 | tee test.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            { echo "### cargo test failed (exit $code)"; echo '```'; tail -n 80 test.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit "$code"
+          fi
       - run: cargo build --release --workspace
 
   core-tests-windows:
@@ -21,7 +29,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-targets
+      - name: cargo test
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-targets 2>&1 | tee test.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            { echo "### cargo test failed (exit $code)"; echo '```'; tail -n 80 test.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit "$code"
+          fi
 
   # Phase 4: add jobs for (a) WDK driver build + Driver Verifier lab,
   # (b) WinUI shell build, (c) installer clean-machine VM matrix,
