@@ -23,6 +23,8 @@ impl Reassembler {
         self.buf.push(hdr.seq, payload.to_vec());
         self.buf.pop_ready(now)
     }
+    /// Release everything deliverable at `now` without ingesting (final drain).
+    pub fn drain(&mut self, now: Instant) -> Vec<Vec<u8>> { self.buf.pop_ready(now) }
     pub fn out_of_order_releases(&self) -> u64 { self.buf.released_out_of_order }
 }
 
@@ -80,7 +82,7 @@ mod tests {
                 got.push(String::from_utf8(payload).unwrap());
             }
         }
-        got.extend(re.ingest(&[], t0).into_iter().map(|p| String::from_utf8(p).unwrap()));
+        got.extend(re.drain(t0).into_iter().map(|p| String::from_utf8(p).unwrap()));
         // Once every datagram has arrived, the full stream must be released in order.
         let expect: Vec<String> = (0..40).map(|i| format!("p{i:02}")).collect();
         assert_eq!(got, expect);
