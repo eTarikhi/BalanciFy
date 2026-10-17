@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/*"]
+  pull_request:
+
+jobs:
+  core-tests-linux:
+    name: Rust workspace tests (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace --all-targets
+      - run: cargo build --release --workspace
+
+  core-tests-windows:
+    name: Rust workspace tests (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace --all-targets
+
+  # Phase 4: add jobs for (a) WDK driver build + Driver Verifier lab,
+  # (b) WinUI shell build, (c) installer clean-machine VM matrix,
+  # (d) SPDX 3.0 SBOM + VEX generation (Microsoft sbom-tool).

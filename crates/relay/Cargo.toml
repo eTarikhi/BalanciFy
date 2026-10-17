@@ -1,0 +1,14 @@
+[package]
+name = "balancify-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-binary cooperating endpoint (server mode, blueprint §4.7 T1/T3/T4): reassembles striped paths, forwards from one stable address"
+
+[[bin]]
+name = "balancify-relay"
+path = "src/main.rs"
+
+[dependencies]
+balancify-core = { path = "../core" }
+balancify-tunnel = { path = "../tunnel" }

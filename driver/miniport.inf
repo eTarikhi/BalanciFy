@@ -1,0 +1,58 @@
+; Balancify virtual miniport INF - Phase 2 skeleton
+; Class Net; no co-installers; PnP add/remove must be side-effect free (§4.5).
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Net
+ClassGuid   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %Balancify%
+CatalogFile = balancify.cat
+DriverVer   = 10/17/2026,0.1.0.0
+
+[Manufacturer]
+%Balancify% = Balancify, NTamd64.10.0, NTarm64.10.0
+
+[Balancify.NTamd64.10.0]
+%bfcy.DeviceDesc% = bfcy.ndi, root\balancify
+
+[Balancify.NTarm64.10.0]
+%bfcy.DeviceDesc% = bfcy.ndi, root\balancify
+
+[bfcy.ndi]
+CopyFiles = bfcy.copy
+AddReg    = bfcy.reg
+
+[bfcy.copy]
+balancify.sys
+
+[bfcy.reg]
+HKR, Ndi, Service, 0, "balancify"
+HKR, Ndi, CoServices, 0x00010000, "balancify"
+
+[bfcy.ndi.Services]
+AddService = balancify, 2, bfcy.svc
+
+[bfcy.svc]
+DisplayName   = %bfcy.DeviceDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\balancify.sys
+AddReg        = bfcy.params
+
+[bfcy.params]
+; Ring sizes and debug flags; all validated by the driver (rule 1).
+HKR, Parameters, RingPages, 0x00010001, 16
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+balancify.sys = 1,,
+
+[DestinationDirs]
+bfcy.copy = 12
+
+[Strings]
+Balancify        = "Balancify"
+bfcy.DeviceDesc  = "Balancify Virtual Network Adapter"
+DiskName         = "Balancify driver disk"

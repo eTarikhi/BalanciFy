@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/tunnel", "crates/relay"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+description = "Balancify - Windows multi-WAN bonding and load balancing (first-party core)"
+
+[workspace.dependencies]
+# Vetted, pinned crates only (dependency policy docs/technical-blueprint.md §4.8).
+# Cryptography crates are added in Phase 4 behind the Crypto trait (crates/tunnel).
