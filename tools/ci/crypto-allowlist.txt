@@ -13,9 +13,10 @@ hkdf               # RFC 5869 HKDF for the key schedule, RustCrypto, pinned =0.1
 getrandom          # OS CSPRNG, rust-random, pinned =0.2.15
 zeroize            # Secure zeroing, RustCrypto, pinned =1.8.1
 
-# Transitive closure of the above, read off the published manifests. Regenerate
-# with `cargo tree -p balancify-crypto --prefix none` once a toolchain is
-# available; until then no Cargo.lock is committed, so the lock check is inert.
+# Transitive closure of the above, read off the published manifests and CI cargo logs
+# (39268156078, 4761969). Regenerate with `cargo tree -p balancify-crypto --prefix none`
+# once a toolchain is available; until then no Cargo.lock is committed, so the lock
+# check is inert, but we pre-populate to allow Cargo.lock commit.
 aead
 curve25519-dalek
 fiat-crypto
@@ -30,9 +31,30 @@ inout
 typenum
 universal-hash
 digest
-crypto-common
 hmac
-zeroize
 cfg-if
 libc
 wasi
+block-buffer
+generic-array
+version_check
+zeroize_derive
+cpufeatures
+quote
+curve25519-dalek-derive
+cmov
+rustc_version
+semver
+unicode-ident
+proc-macro2
+serde_core
+serde_derive
+ctutils
+serde
+syn
+curve25519-dalek
+# Additional from cargo tree -p balancify-crypto (observed in CI 39268156078)
+# 45 packages locked, including:
+# block-buffer v0.10.4 + v0.12.1, generic-array v0.14.7, hybrid-array v0.4.15,
+# crypto-common v0.1.7 + v0.2.2, digest v0.10.7, etc.
+# All are RustCrypto / dalek / proc-macro ecosystem, no network, no async runtime.
