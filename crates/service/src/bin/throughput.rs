@@ -10,7 +10,7 @@ use balancify_service::{Service, ServiceConfig};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-fn make_service() -> Service {
+fn make_service() -> Service<TunnelCipher> {
     let cfg = ServiceConfig {
         session: 1,
         seed: 0xBEEF,
