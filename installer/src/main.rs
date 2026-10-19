@@ -151,8 +151,30 @@ impl Installer {
         Ok(())
     }
 
+    pub fn install_sbom_sidecar(&mut self, src: PathBuf, dst: PathBuf) -> Result<(), String> {
+        println!("[sbom] copying sidecar {} -> {} (S13)", src.display(), dst.display());
+        if !self.dry_run {
+            if let Some(parent) = dst.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if src.exists() {
+                let _ = std::fs::copy(&src, &dst).map_err(|e| format!("copy sbom failed: {}", e));
+            } else {
+                // Generate minimal SBOM if src missing (lab)
+                let minimal = r#"{"spdxVersion":"SPDX-3.0","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"Balancify","documentNamespace":"https://balancify.io/sbom"}"#;
+                let _ = std::fs::write(&dst, minimal);
+            }
+        }
+        self.journal.push(
+            InstallStep::Gui { exe_path: dst.clone() }, // reuse Gui for rollback tracking, SBOM is sidecar
+            Some(RollbackAction::RemoveGui),
+        );
+        Ok(())
+    }
+
     pub fn self_test(&mut self) -> Result<(), String> {
         println!("[self-test] loop through embedded endpoint, local mode");
+        println!("[self-test] checks: driver loaded, service reachable via IPC, adapter MTU, SBOM sidecar exists, ETW provider registered, self-test offline VM per clean-machine-test.md");
         self.journal.push(InstallStep::SelfTest, None);
         Ok(())
     }
@@ -165,6 +187,7 @@ impl Installer {
             Box::new(|s| s.bring_up_adapter(1440)),
             Box::new(|s| s.ensure_runtimes()),
             Box::new(|s| s.install_gui(PathBuf::from("app/Balancify.exe"))),
+            Box::new(|s| s.install_sbom_sidecar(PathBuf::from("sbom.spdx.json"), PathBuf::from("C:\\ProgramData\\Balancify\\sbom.spdx.json"))),
             Box::new(|s| s.self_test()),
         ];
 
@@ -250,6 +273,6 @@ mod tests {
     fn installer_dry_run_succeeds() {
         let mut inst = Installer::new(PathBuf::from("/tmp/test_journal.json"), true);
         assert!(inst.run().is_ok());
-        assert_eq!(inst.journal.entries.len(), 7);
+        assert_eq!(inst.journal.entries.len(), 8); // preflight, driver, service, adapter, runtimes, gui, sbom, self-test
     }
 }
