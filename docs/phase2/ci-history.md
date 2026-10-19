@@ -57,24 +57,40 @@ Status: continuous, last green e9c2c52 (5fc3af0 + docs), 215+ tests
 - f89a617 success ADR-0029/0030 (per-flow retx, flow ACK and driver S2b docs)
 - 5fc3af0 success docs update (lab-progress with per-flow retx, flow ACK, driver S2b NBL pool, throughput Rig B plan, HVCI readiness trio, SBOM/VEX SPDX3)
 - e9c2c52 success final-summary updated
+- 493f354 success ci-history updated
+- 4feba2b success development progress report with 5 visualizations (gantt option1, burndown option2, velocity option2, strategic-alignment option1, technical-breakdown option1) — executive summary Phase 4/5 boundary 68% done 22% in progress 10% pending, retrospective G1 PASS G2 PASS G3 IN PROGRESS, velocity 215+ tests 0 failures commits 5→18/week, prospective Gantt Phase1-9 weeks 1-58 current week 30-32, burn-down 35 remaining velocity 8/sprint critical path M1-M12, strategic alignment radar DataPlane 90% ControlPlane 85% Driver 70% Security 95% UX 60% Docs 80%, risk R1-R15
+- 5491758 success Cargo.lock vetted-only version 3 with 9 workspace members + 6 direct + ~26 transitive only allowlisted, audit passes with lock file (1/4 pinned, 2/4 lock allowlisted, 3/4 null cipher, 4/4 lab relay), allowlist updated with transitive closure from CI logs 39268156078/4761969
+- 9115e4f success driver vcxproj HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre PoolTag BlaB Spectre mitigation KMDF 1.33 Universal 10.0.22621.0 NDIS620_MINIPORT
+- 6c9a52f success sbom.sh v2 SPDX 3.0 + VEX 10 first-party + vetted + transitive packages relationships annotations HVCI trio installer vulnerabilities 3 entries
+- 0581256 success throughput harness enhanced 9 profiles Rig B wired 1Gbps/Wi-Fi 6 300M per-flow on/off aggregate 16 flows iperf3-like added delay <=3ms CPU/Gbit pacing 80% secure notes
+- cd1673f success app shell enhanced 9 modes per-path ECN/delay bond gain uplink up/down ETW per-flow sessions Rig B HVCI SBOM diagnostics Sec.8.2
+- 78cd32b success docs lab-progress + hvci-readiness updated with Cargo.lock, throughput 9 profiles, app 9 modes, vcxproj, SBOM/VEX
+- 36d65eb success throughput-rows updated with 9 profiles Rig B per-flow on/off aggregate 16 flows added delay <=3ms CPU/Gbit
+- 816b5e2 success final-summary updated with Cargo.lock, vcxproj, SBOM/VEX, throughput 9 profiles, app 9 modes, report 5 viz
+- 8ab9501 success installer SBOM sidecar 8 steps journaled ProgramData\Balancify\sbom.spdx.json S13 Sec.8.3
+- a527d6d success driver INF enhanced HVCI-ready Universal NDIS 6.8 MTU param WDF verifier PoolTag BlaB attestation signing S15
+- 6384de4 success ADR-0032 driver packaging vcxproj INF + installer SBOM sidecar S13 + Cargo.lock vetted-only S15/S13
 
 ## Current
 
-- Last green e9c2c52 (5fc3af0 + docs), ubuntu+windows+audits success, 215+ tests, benches compile, docs
+- Last green 6384de4 (a527d6d + ADR-0032), ubuntu+windows+audits success, 215+ tests, benches compile, docs, Cargo.lock vetted-only, vcxproj HVCI, INF Universal, SBOM/VEX SPDX3, throughput 9 profiles Rig B, app 9 modes, installer 8 steps SBOM sidecar, report 5 viz
 - Branch `arena/7abc96c8-balancify` has:
   - ETW wiring (ECN CE 401, delay 402, auth_failed 600, rekey 400, failover 500, uplink up/down 200/201, bond reverted 300)
   - Relay ECN stats (ecn_echoed, total_ecn_echoed, sweep, stats 6-tuple)
-  - Support bundle per-path ECN/delay diag (cc methods ecn_ce, delay_events_path, rtt_min, rtt_last, per_path Vec<PathCongestionDiag>)
-  - Driver WDF control (SET_MTU 0x800, GET_STATS 0x801, INJECT_NBL 0x802 via NdisMIndicateReceiveNetBufferLists with NBL pool, SET_QUANTA 0x803, length-validated, WdfDriverCreate, BalancifyCreateControlDevice, NBL pool, MDL freeing)
-  - App shell relay & bundle modes (home/rules/diagnostics/tray/relay/bundle, ECN/delay counters)
+  - Support bundle per-path ECN/delay diag (cc methods ecn_ce, delay_events_path, rtt_min, rtt_last, per_path Vec<PathCongestionDiag> cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms)
+  - Driver WDF control + NBL pool (SET_MTU 0x800, GET_STATS 0x801, INJECT_NBL 0x802 via NdisAllocateMdl + NdisAllocateNetBufferAndNetBufferList + NdisMIndicateReceiveNetBufferLists, SET_QUANTA 0x803, length-validated, WdfDriverCreate, BalancifyCreateControlDevice, netBufferListPool InitializeEx/HaltEx, Return frees MDL chain via NdisFreeMdl)
+  - Driver packaging (vcxproj 9115e4f HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre PoolTag BlaB Spectre KMDF 1.33 Universal 10.0.22621.0, INF a527d6d Universal NDIS 6.8 MTU param WDF verifier attestation signing S15)
+  - App shell 9 modes (home/rules/diagnostics/tray/relay/bundle/perflow/rigb/hvci/sbom, per-path ECN/delay cwnd/in_flight, bond gain auto-disable <15%, uplink up/down ETW, per-flow sessions, Rig B acceptance rows, HVCI trio, SBOM/VEX)
   - ECN bench (cwnd 80% ECN vs 50% loss, delay 10% reduction, per-path)
-  - Throughput harness (real cipher, 5 profiles bonded/single/lossy/ECN/delay, 10 reps mean/median/p95/spread, gain, penalty)
-  - Per-flow retx keyed by (session,seq) + per-session seq spaces (Sent includes session, retx BTreeMap<(u64,u64), RetxEntry>, session_seqs authoritative, on_ack_for_session, duplicate_with_session, reinjections_due preserves session)
+  - Throughput harness 9 profiles (real cipher, bonded/single/lossy/ECN/delay/RigB 1Gbps/300M/perflow_off/perflow_on/aggregate_16flows, 10 reps mean/median/p95/spread, gain, penalty, per-flow diff, Rig B mean, added delay <=3ms, CPU/Gbit via crypto-bench+ETW, pacing 80%, secure Noise_IK)
+  - Per-flow retx keyed by (session,seq) + per-session seq spaces (Sent includes session, retx BTreeMap<(u64,u64), RetxEntry>, session_seqs authoritative, on_ack_for_session, duplicate_with_session, reinjections_due preserves session, service uses duplicate_with_session and on_ack_for_session)
   - Explicit flow-level ACK integration (PolicyEngine on_flow_ack wrapper, Service ingest_path detects FlowData and calls on_flow_ack + on_ack)
-  - HVCI readiness trio doc (Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/Memory-Integrity VM)
-  - SBOM/VEX SPDX 3.0 (sbom.sh SPDX 3.0 JSON with 6 vetted crates + first-party, relationships, annotations C2, VEX section, installer sidecar)
-  - Throughput Rig B plan (wired 1Gbps/Wi-Fi 6 300M, secure Noise_IK, pacing 80%, per-flow on/off, iperf3, added delay <=3ms, CPU/Gbit via crypto-bench+ETW, 10 reps median/p95/spread)
-- Next: real netem S2c (netem-rig.sh 10 reps), real Rig B throughput, Cargo.lock (gen-lock.sh), HVCI real VM, SBOM real cyclonedx, WinUI3 shell, soak+Verifier+compat matrix, RC+attestation+SBOM/VEX+rollback, GA
+  - HVCI readiness trio doc (Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/Memory-Integrity VM with Secure Boot/vTPM/test-signing, NonPagedPoolNx NormalPoolPriority, no RWX, MDL freeing, NBL pool, SDDL, METHOD_BUFFERED)
+  - SBOM/VEX SPDX 3.0 v2 (sbom.sh SPDX 3.0 JSON with 10 first-party + 6 vetted + transitive 24 packages, relationships DEPENDS_ON, annotations C2/HVCI/installer, vulnerabilities 3 VEX not_affected/fixed, generates /tmp/sbom.spdx.json, installer copies to ProgramData\Balancify\sbom.spdx.json)
+  - Cargo.lock vetted-only version 3 with 9 workspace members + 6 direct + ~26 transitive only allowlisted, audit passes with lock file, allowlist updated with transitive closure
+  - Installer 8 steps journaled (preflight, driver, service, adapter, runtimes, gui, sbom, self-test) with reverse rollback, dry-run, tests, SBOM sidecar
+  - Report docs/development-progress-report.md with 5 visualizations (gantt-roadmap.png, burndown-chart.png, velocity-chart.png, strategic-alignment.png, technical-breakdown.png) — retrospective G1 PASS G2 PASS G3 IN PROGRESS, velocity 215+ tests, prospective Gantt Phase1-9 weeks 1-58, burn-down 35 remaining velocity 8/sprint, strategic radar DataPlane 90% ControlPlane 85% Driver 70% Security 95% UX 60% Docs 80%
+- Next: real netem S2c (netem-rig.sh 10 reps median/p95/spread Sec.10.1), real Rig B throughput iperf3 wired 1Gbps/Wi-Fi 6 300M secure pacing 80% per-flow on/off added delay <=3ms CPU/Gbit, HVCI real VM Verifier 0x209BB + HLK HVCIMemoryIntegrity + VBS/MI, SBOM real cyclonedx when toolchain available, WinUI3 shell Home Rules Relay account Diagnostics tray 1Hz telemetry last-known-good stale markers accessibility self-contained .NET 10 + WinAppSDK runtimes bundled offline installer, soak+Verifier+compat matrix 72h random flaps 100 sleep/resume VPN clients security suites Hyper-V WSL2 MI on/off, RC+attestation+SBOM/VEX+rollback drill G7, GA+winget+status page G8
 
 ## References
 
