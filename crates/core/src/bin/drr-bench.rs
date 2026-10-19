@@ -1,8 +1,7 @@
 //! DRR benchmark — measures proportionality and throughput of DeficitRoundRobin
 //! No external deps.
 
-use balancify_core::placement::{UplinkId, FlowKey};
-use balancify_tunnel::{Sender, SenderConfig, Receiver, ReceiverConfig, Crypto};
+use balancify_tunnel::{Sender, Crypto};
 use std::time::Instant;
 
 #[derive(Clone)]

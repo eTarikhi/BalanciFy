@@ -16,7 +16,7 @@ fn main() {
     for _ in 0..iters {
         t += Duration::from_micros(10);
         pacer.on_send(0, payload, t);
-        let delay = pacer.delay_for(0, payload, t);
+        let delay = pacer.delay_until_next(0, t);
         if delay > Duration::from_millis(0) {
             delayed += 1;
         }
