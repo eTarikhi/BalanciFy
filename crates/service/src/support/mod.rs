@@ -60,6 +60,18 @@ pub struct CongestionDiag {
     pub ecn_events: u64,
     pub delay_events: u64,
     pub paths: Vec<u8>,
+    pub per_path: Vec<PathCongestionDiag>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PathCongestionDiag {
+    pub id: u8,
+    pub cwnd: u64,
+    pub in_flight: u64,
+    pub ecn_ce: u64,
+    pub delay_events: u64,
+    pub rtt_min_ms: Option<u64>,
+    pub rtt_last_ms: Option<u64>,
 }
 
 impl SupportBundle {
@@ -88,11 +100,24 @@ impl SupportBundle {
             last_rekey_ago_secs: svc.last_rekey().map(|t| now.duration_since(t).as_secs()),
         };
 
+        let paths = svc.cc.paths();
+        let per_path = paths.iter().map(|p| {
+            PathCongestionDiag {
+                id: *p,
+                cwnd: svc.cc.window(*p),
+                in_flight: svc.cc.in_flight(*p),
+                ecn_ce: svc.cc.ecn_ce(*p),
+                delay_events: svc.cc.delay_events_path(*p),
+                rtt_min_ms: svc.cc.rtt_min(*p).map(|d| d.as_millis() as u64),
+                rtt_last_ms: svc.cc.rtt_last(*p).map(|d| d.as_millis() as u64),
+            }
+        }).collect();
         let congestion = CongestionDiag {
             loss_events: svc.cc.loss_events(),
             ecn_events: svc.cc.ecn_events(),
             delay_events: svc.cc.delay_events(),
-            paths: svc.cc.paths(),
+            paths,
+            per_path,
         };
 
         SupportBundle {
@@ -116,7 +141,7 @@ impl SupportBundle {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_current\":{},\"failovers\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{}}}",
+            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_current\":{},\"failovers\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{},\"per_path\":{}}}",
             self.timestamp,
             self.service_version,
             self.schema_version,
@@ -128,7 +153,42 @@ impl SupportBundle {
             self.congestion.loss_events,
             self.congestion.ecn_events,
             self.congestion.delay_events,
-            self.rekey.packets_since_rekey
+            self.rekey.packets_since_rekey,
+            self.congestion.per_path.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Service, ServiceConfig};
+    use balancify_core::UplinkId;
+    use balancify_tunnel::PassThrough;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn bundle_includes_per_path_ecn_delay() {
+        let now = Instant::now();
+        let cfg = ServiceConfig::default();
+        let mut svc = Service::new(cfg, PassThrough, PassThrough);
+        svc.add_uplink(UplinkId(0), 100_000_000, false, 1500, now);
+        for _ in 0..3 {
+            svc.on_probe_ok(UplinkId(0), Duration::from_millis(10), now);
+        }
+        svc.publish(now);
+        svc.cc.on_ecn(0, now);
+        svc.cc.on_rtt(0, Duration::from_millis(10), now);
+        svc.cc.on_rtt(0, Duration::from_millis(50), now + Duration::from_millis(200));
+        let bundle = SupportBundle::collect(&svc, now + Duration::from_millis(300));
+        assert_eq!(bundle.congestion.ecn_events, 1);
+        assert_eq!(bundle.congestion.delay_events, 1);
+        assert_eq!(bundle.congestion.per_path.len(), 1);
+        assert_eq!(bundle.congestion.per_path[0].ecn_ce, 1);
+        assert_eq!(bundle.congestion.per_path[0].delay_events, 1);
+        assert!(bundle.congestion.per_path[0].rtt_min_ms.is_some());
+        let json = bundle.to_json();
+        assert!(json.contains("ecn"));
+        assert!(json.contains("per_path"));
     }
 }

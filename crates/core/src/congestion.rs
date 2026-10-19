@@ -102,6 +102,26 @@ impl CongestionController {
         self.paths.get(&path).map(|w| w.in_flight).unwrap_or(0)
     }
 
+    /// ECN CE marks seen on `path`.
+    pub fn ecn_ce(&self, path: u8) -> u64 {
+        self.paths.get(&path).map(|w| w.ecn_ce).unwrap_or(0)
+    }
+
+    /// Delay events on `path`.
+    pub fn delay_events_path(&self, path: u8) -> u64 {
+        self.paths.get(&path).map(|w| w.delay_events).unwrap_or(0)
+    }
+
+    /// Minimum RTT observed on `path`.
+    pub fn rtt_min(&self, path: u8) -> Option<Duration> {
+        self.paths.get(&path).and_then(|w| w.rtt_min)
+    }
+
+    /// Last RTT observed on `path`.
+    pub fn rtt_last(&self, path: u8) -> Option<Duration> {
+        self.paths.get(&path).and_then(|w| w.rtt_last)
+    }
+
     /// Drop all state for a removed path.
     pub fn forget(&mut self, path: u8) { self.paths.remove(&path); }
 
