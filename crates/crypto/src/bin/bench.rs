@@ -29,9 +29,8 @@ fn main() {
     let mut sealed = Vec::new();
     cipher.seal(0, 0, &header, &payload, &mut sealed);
     let start = Instant::now();
-    let mut plain_out = vec![0u8; 1500];
     for i in 0..iters {
-        let _ = cipher.open(0, i as u64, &header, &sealed[20..], &mut plain_out);
+        let _ = cipher.open(0, i as u64, &header, &sealed[20..]);
     }
     let elapsed = start.elapsed();
     println!("Open: {} iters, {:.3}s, {:.1}us/op", iters, elapsed.as_secs_f64(), elapsed.as_micros() as f64 / iters as f64);
