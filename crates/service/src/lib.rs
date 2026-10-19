@@ -2064,6 +2064,64 @@ mod tests {
     }
 
     #[test]
+    fn relay_failover_convergence_measured() {
+        let now = Instant::now();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let cfg = ServiceConfig { session: 1, ..ServiceConfig::default() };
+        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        let primary: std::net::SocketAddr = "10.0.0.1:4430".parse().unwrap();
+        let secondary: std::net::SocketAddr = "10.0.0.2:4430".parse().unwrap();
+        svc.set_relays(primary, Some(secondary));
+        svc.set_relay_failover_timeout(Duration::from_secs(5));
+        svc.on_relay_ack(now);
+        // Trigger failover after 6s
+        let switched = svc.check_relay_failover(now + Duration::from_secs(6));
+        assert_eq!(switched, Some(secondary));
+        assert!(svc.relay_failover_start().is_some());
+        assert!(svc.relay_failover_convergence().is_none());
+        // ACK 500ms later should measure convergence
+        svc.on_relay_ack(now + Duration::from_secs(6) + Duration::from_millis(500));
+        assert!(svc.relay_failover_convergence().is_some());
+        let conv = svc.relay_failover_convergence().unwrap();
+        assert!(conv.as_millis() >= 400 && conv.as_millis() <= 600, "convergence ~500ms, got {}ms", conv.as_millis());
+        assert_eq!(svc.relay_failover_history().len(), 1);
+        assert!(conv.as_secs_f64() <= 2.0, "target <=2s, got {}ms", conv.as_millis());
+    }
+
+    #[test]
+    fn uplink_failover_convergence_measured() {
+        let now = Instant::now();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let cfg = ServiceConfig { session: 1, ..ServiceConfig::default() };
+        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        svc.add_uplink(UplinkId(0), 200_000_000, false, 1500, now);
+        svc.add_uplink(UplinkId(1), 50_000_000, false, 1500, now);
+        for _ in 0..3 {
+            svc.on_probe_ok(UplinkId(0), Duration::from_millis(10), now);
+            svc.on_probe_ok(UplinkId(1), Duration::from_millis(50), now);
+        }
+        svc.publish(now);
+        assert_eq!(svc.uplink_failover_count(), 0);
+        // Unplug uplink 1
+        svc.remove_uplink_at(UplinkId(1), now + Duration::from_millis(100));
+        assert_eq!(svc.uplink_failover_count(), 1);
+        assert!(svc.uplink_failover_start().is_some());
+        // Replug after 1s — should measure convergence
+        svc.add_uplink(UplinkId(1), 50_000_000, false, 1500, now + Duration::from_millis(1100));
+        assert!(svc.uplink_failover_convergence().is_some());
+        let conv = svc.uplink_failover_convergence().unwrap();
+        assert!(conv.as_millis() >= 900 && conv.as_millis() <= 1100, "convergence ~1000ms, got {}ms", conv.as_millis());
+        assert_eq!(svc.uplink_failover_history().len(), 1);
+        assert!(conv.as_secs_f64() <= 2.0, "target <=2s, got {}ms", conv.as_millis());
+    }
+
+    #[test]
     fn rekey_auto_trigger_by_packet_count() {
         let now = Instant::now();
         let dummy_key = [0u8; 32];
