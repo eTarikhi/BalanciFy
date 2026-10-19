@@ -1,20 +1,20 @@
-//! Balancify **service core** — sans-I/O, platform-independent.
+//! Balancify **service core** -- sans-I/O, platform-independent.
 //!
-//! This is the brain of the Windows service (blueprint §4.2 control plane +
-//! §6 schedulers), written so it can be exercised in CI on Linux today and
+//! This is the brain of the Windows service (blueprint Sec.4.2 control plane +
+//! Sec.6 schedulers), written so it can be exercised in CI on Linux today and
 //! dropped behind the Windows I/O adapters later:
 //!
-//! - one [`PolicyEngine`] publishes the snapshot both schedulers read (§6.1);
-//! - the flow scheduler classifies, keeps affinity and places flows (§6.2);
+//! - one [`PolicyEngine`] publishes the snapshot both schedulers read (Sec.6.1);
+//! - the flow scheduler classifies, keeps affinity and places flows (Sec.6.2);
 //! - the striping scheduler runs the tunnel lane, duplicates critical packets
-//!   and reinjects on loss (§6.4);
+//!   and reinjects on loss (Sec.6.4);
 //! - the IPC contract v1 is served directly ([`Service::handle`]), so the shell
 //!   protocol is tested rather than mocked (Phase 3 milestone M6);
 //! - keepalives, idle capacity probes and the reorder hold-cap tick happen in
 //!   [`Service::tick`], which is where the real service's timer lands.
 //!
 //! Nothing here opens a socket or reads a clock: callers pass `now` and take
-//! back [`Action`]s (§4.7.4 sans-I/O loop).
+//! back [`Action`]s (Sec.4.7.4 sans-I/O loop).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -44,9 +44,9 @@ pub enum Action {
     /// Hand this in-order payload to the inner stack / virtual adapter.
     Deliver { data: Vec<u8> },
     /// Nothing healthy could carry the packet; the caller applies the
-    /// fail-open / fail-closed default (§9.2, decision D3).
+    /// fail-open / fail-closed default (Sec.9.2, decision D3).
     Refused { flow: FlowKey, class: FlowClass },
-    /// Every eligible path is inside its congestion window (§6.4 rule 4). The
+    /// Every eligible path is inside its congestion window (Sec.6.4 rule 4). The
     /// packet was *not* dropped: the caller holds it and offers it again. The
     /// miniport requeues it; a rig simply retries on a later step.
     Hold { flow: FlowKey, data: Vec<u8> },
@@ -55,7 +55,7 @@ pub enum Action {
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub session: u64,
-    /// Per-boot hash seed (§6.2 rule 4); logged in the support bundle.
+    /// Per-boot hash seed (Sec.6.2 rule 4); logged in the support bundle.
     pub seed: u64,
     pub bond_enabled: bool,
     pub duplicate_mode: bool,
@@ -66,14 +66,14 @@ pub struct ServiceConfig {
     pub keepalive_interval: Duration,
     /// Tunnel bytes added per packet (framing + encapsulation + AEAD tag).
     pub tunnel_overhead: u16,
-    /// Size the control plane asks for when probing an idle link (§6.3b).
+    /// Size the control plane asks for when probing an idle link (Sec.6.3b).
     pub idle_probe_bytes: u64,
     /// How long an unanswered idle probe is remembered before its entry is
     /// dropped. A reply that never comes must not leak table state.
     pub probe_timeout: Duration,
     /// Whether the receiver auto-accepts unknown sessions (lab form). Secure
     /// form sets this false and opens sessions explicitly after handshake
-    /// verifies peer identity (§9.2).
+    /// verifies peer identity (Sec.9.2).
     pub auto_accept: bool,
 }
 
@@ -97,7 +97,7 @@ impl Default for ServiceConfig {
     }
 }
 
-/// Service counters, in the shape the shell renders (§9.2: counters only,
+/// Service counters, in the shape the shell renders (Sec.9.2: counters only,
 /// never destinations or content).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counters {
@@ -110,14 +110,14 @@ pub struct Counters {
     pub refused: u64,
     /// Packets handed back to the caller because every path was congested.
     pub held: u64,
-    /// NAT mappings that moved under us (§6.6).
+    /// NAT mappings that moved under us (Sec.6.6).
     pub path_changes: u64,
-    /// Sleep/resume cycles handled (§4.5).
+    /// Sleep/resume cycles handled (Sec.4.5).
     pub resumes: u64,
     pub auth_failed: u64,
     pub keepalives: u64,
     pub probes: u64,
-    /// Peer sessions released after the idle timeout (§9.1). Not yet surfaced
+    /// Peer sessions released after the idle timeout (Sec.9.1). Not yet surfaced
     /// over IPC v1; the shell sees it in the support bundle.
     pub sessions_evicted: u64,
     pub ecn_ce: u64,
@@ -155,30 +155,30 @@ pub struct Service<C: Crypto> {
     /// (path, probe id) -> (sent at, probe size), so a reply becomes both an RTT
     /// sample and a capacity sample.
     probes: BTreeMap<(u8, u64), (Instant, u64)>,
-    /// Per-path congestion windows, coupled across paths (§6.4 rule 4).
+    /// Per-path congestion windows, coupled across paths (Sec.6.4 rule 4).
     pub cc: CongestionController,
-    /// Per-path pacing, in front of the congestion window (§6.4 rule 4).
+    /// Per-path pacing, in front of the congestion window (Sec.6.4 rule 4).
     pacing: PacingController,
     /// Last observed local (source) endpoint per uplink, for NAT re-binding
-    /// detection (§6.6).
+    /// detection (Sec.6.6).
     path_local: BTreeMap<UplinkId, SocketAddr>,
-    /// Rekey tracking for forward secrecy (§11.3).
+    /// Rekey tracking for forward secrecy (Sec.11.3).
     last_rekey: Option<Instant>,
     packets_since_rekey: u64,
     rekey_interval: Duration,
     rekey_packet_threshold: u64,
-    /// Relay failover (§4.5): primary + secondary relay addrs, health tracking
+    /// Relay failover (Sec.4.5): primary + secondary relay addrs, health tracking
     relay_primary: Option<SocketAddr>,
     relay_secondary: Option<SocketAddr>,
     relay_current: Option<SocketAddr>,
     relay_last_ack: Option<Instant>,
     relay_failover_timeout: Duration,
     relay_failover_count: u64,
-    /// Per-flow session mapping (§4.7.4, Phase-4): optional per-flow sessions
+    /// Per-flow session mapping (Sec.4.7.4, Phase-4): optional per-flow sessions
     per_flow_sessions: bool,
     flow_sessions: BTreeMap<FlowKey, u64>,
     next_session_id: u64,
-    /// Per-class session mapping (§4.7.4 alternative to per-flow)
+    /// Per-class session mapping (Sec.4.7.4 alternative to per-flow)
     per_class_sessions: bool,
     class_sessions: BTreeMap<u8, u64>, // BondClass as u8 -> session id
     /// Per-uplink rate limiting (service egress)
@@ -187,13 +187,13 @@ pub struct Service<C: Crypto> {
     /// (client side). When non-empty, auto_accept must be false.
     pinned_clients: balancify_crypto::PinnedKeys,
     pinned_relays: balancify_crypto::PinnedKeys,
-    /// Replay cache for handshake first flights (§11.4).
+    /// Replay cache for handshake first flights (Sec.11.4).
     replay_cache: balancify_crypto::ReplayCache,
     /// Static keypair for this side (client or relay), loaded from DPAPI store.
     static_keypair: Option<balancify_crypto::StaticKeypair>,
     /// In-progress handshake initiator (client side).
     handshake_initiator: Option<balancify_crypto::Initiator>,
-    /// ETW provider for diagnostics (§8.2)
+    /// ETW provider for diagnostics (Sec.8.2)
     etw: etw::EtwProvider,
     counters: Counters,
     event_interval_hz: u8,
@@ -231,7 +231,7 @@ impl<C: Crypto + Clone> Service<C> {
             path_local: BTreeMap::new(),
             last_rekey: None,
             packets_since_rekey: 0,
-            rekey_interval: Duration::from_secs(3600), // 1 hour default per §11.3
+            rekey_interval: Duration::from_secs(3600), // 1 hour default per Sec.11.3
             rekey_packet_threshold: 1_000_000,          // 1M packets or 1 hour
             relay_primary: None,
             relay_secondary: None,
@@ -284,12 +284,12 @@ impl<C: Crypto + Clone> Service<C> {
     }
     pub fn on_probe_miss(&mut self, id: UplinkId) { self.policy.on_probe_miss(id); }
 
-    /// Publish the snapshot both schedulers read (§6.1) and republish the
-    /// striping quanta from it (§6.4 rule 2). Returns true when it changed.
+    /// Publish the snapshot both schedulers read (Sec.6.1) and republish the
+    /// striping quanta from it (Sec.6.4 rule 2). Returns true when it changed.
     ///
     /// Topology changes take effect here, not at `add_uplink`/`remove_uplink`:
     /// one publish point is what keeps the two schedulers from disagreeing.
-    /// Also updates pacing rates from the capacity estimates (§6.4 rule 4).
+    /// Also updates pacing rates from the capacity estimates (Sec.6.4 rule 4).
     pub fn publish(&mut self, now: Instant) -> bool {
         let before = self.snapshot.revision;
         self.snapshot = self.policy.publish(now);
@@ -311,12 +311,12 @@ impl<C: Crypto + Clone> Service<C> {
     /// Idle probes awaiting a reply. Exposed for diagnostics: a number that
     /// grows without bound means replies are not coming back.
     pub fn pending_probes(&self) -> usize { self.probes.len() }
-    /// Congestion window currently granted to `path`, in bytes (§6.4 rule 4).
+    /// Congestion window currently granted to `path`, in bytes (Sec.6.4 rule 4).
     pub fn window(&self, path: UplinkId) -> u64 { self.cc.window(path.0) }
     /// Bytes in flight on `path`.
     pub fn in_flight(&self, path: UplinkId) -> u64 { self.cc.in_flight(path.0) }
     /// Pacing delay for `path` at `now`: how long to wait before next send
-    /// to avoid burst (§6.4 rule 4). Zero if can send now.
+    /// to avoid burst (Sec.6.4 rule 4). Zero if can send now.
     pub fn pacing_delay(&self, path: UplinkId, now: Instant) -> Duration {
         self.pacing.delay_until_next(path.0, now)
     }
@@ -335,7 +335,7 @@ impl<C: Crypto + Clone> Service<C> {
         self.cfg.bond_enabled && BondClass::of(class).map(|c| self.bond.enabled(c)).unwrap_or(false)
     }
 
-    /// §6.6: adapter MTU = min(live path MTU) − tunnel overhead.
+    /// Sec.6.6: adapter MTU = min(live path MTU) - tunnel overhead.
     pub fn adapter_mtu(&self) -> Option<u16> {
         let live: Vec<u16> = self
             .snapshot
@@ -349,7 +349,7 @@ impl<C: Crypto + Clone> Service<C> {
 
     // -------------------------------------------------------------- lifecycle
 
-    /// The machine woke up (§4.5). Everything learned before sleep is stale:
+    /// The machine woke up (Sec.4.5). Everything learned before sleep is stale:
     /// NAT mappings are gone, so packets in flight are unreachable and their
     /// RTO timers would only reinject into the void; the windows were measured
     /// on paths that no longer exist; probes went unanswered for a reason that
@@ -373,10 +373,10 @@ impl<C: Crypto + Clone> Service<C> {
 
     /// Report the local (source) endpoint observed on an uplink's socket.
     ///
-    /// A change means the NAT mapping moved (§6.6): frames in flight through
+    /// A change means the NAT mapping moved (Sec.6.6): frames in flight through
     /// the old mapping are unreachable and the window measured on it no longer
-    /// applies, so that path's state is re-keyed. The session survives — the
-    /// peer is the same peer — and so does flow affinity. Returns true when a
+    /// applies, so that path's state is re-keyed. The session survives -- the
+    /// peer is the same peer -- and so does flow affinity. Returns true when a
     /// re-binding was detected.
     pub fn note_local_endpoint(&mut self, uplink: UplinkId, observed: SocketAddr, now: Instant) -> bool {
         let previous = self.path_local.insert(uplink, observed);
@@ -532,7 +532,7 @@ impl<C: Crypto + Clone> Service<C> {
             return out;
         }
 
-        // Flow-level lane (§6.2)
+        // Flow-level lane (Sec.6.2)
         let sess = if self.per_flow_sessions {
             self.session_for_flow(flow, now)
         } else if self.per_class_sessions {
@@ -555,7 +555,7 @@ impl<C: Crypto + Clone> Service<C> {
             return vec![Action::Hold { flow: flow.clone(), data: payload.to_vec() }];
         }
         self.counters.packets_forwarded += 1;
-        // Flow-level capacity: count for estimator even without ACK clock (§6.3)
+        // Flow-level capacity: count for estimator even without ACK clock (Sec.6.3)
         self.policy.on_flow_packet(uplink, payload.len() as u64, now);
         self.packets_since_rekey += 1;
         if self.last_rekey.is_none() {
@@ -569,7 +569,7 @@ impl<C: Crypto + Clone> Service<C> {
     /// One datagram received on an uplink's socket.
     pub fn ingest_path(&mut self, uplink: UplinkId, dg: &[u8], now: Instant) -> Vec<Action> {
         if let Some((hdr, _)) = Header::decode(dg) {
-            // ECN CE mark on any frame (§6.4 rule 4)
+            // ECN CE mark on any frame (Sec.6.4 rule 4)
             if hdr.flags & balancify_tunnel::FLAG_ECN_CE != 0 {
                 let before = self.cc.ecn_events();
                 self.cc.on_ecn(hdr.path, now);
@@ -647,7 +647,7 @@ impl<C: Crypto + Clone> Service<C> {
         // is per-path NAT state, so a path that is merely unhealthy still has a
         // binding worth keeping alive - and right after sleep/resume there may
         // be no eligible path at all, which is exactly when the bindings need
-        // re-establishing (§6.6).
+        // re-establishing (Sec.6.6).
         for path in self.keepalives.paths() {
             if self.keepalives.due(path, now) {
                 let k = self.tx.keepalive(path);
@@ -660,7 +660,7 @@ impl<C: Crypto + Clone> Service<C> {
             self.counters.reinjections += 1;
             out.push(Action::Send { uplink: UplinkId(sent.path), bytes: sent.bytes });
         }
-        // A reinjection is a loss signal for the path it left on (§6.4 rule 4).
+        // A reinjection is a loss signal for the path it left on (Sec.6.4 rule 4).
         for path in self.tx.drain_losses() {
             self.cc.on_loss(path, now);
         }
@@ -677,7 +677,7 @@ impl<C: Crypto + Clone> Service<C> {
         }
 
         // Idle sessions must be released, or a peer that went away keeps its
-        // slot in the session cap for the lifetime of the service (§9.1).
+        // slot in the session cap for the lifetime of the service (Sec.9.1).
         self.counters.sessions_evicted += self.rx.sweep(now).len() as u64;
 
         // A probe whose reply never arrives would otherwise stay in the table
@@ -685,7 +685,7 @@ impl<C: Crypto + Clone> Service<C> {
         let probe_timeout = self.cfg.probe_timeout;
         self.probes.retain(|_, (sent_at, _)| now.duration_since(*sent_at) < probe_timeout);
 
-        // §11.3 rekey for forward secrecy: time-based (1h) or packet-based (1M)
+        // Sec.11.3 rekey for forward secrecy: time-based (1h) or packet-based (1M)
         if self.should_rekey(now) {
             if self.maybe_rekey(now) {
                 self.last_rekey = Some(now);
@@ -694,7 +694,7 @@ impl<C: Crypto + Clone> Service<C> {
             }
         }
 
-        // §4.5 relay failover: if no ACK from current relay within timeout,
+        // Sec.4.5 relay failover: if no ACK from current relay within timeout,
         // switch to secondary (or back to primary). The caller must re-handshake
         // if using secure mode; we just report the new relay via counter.
         if self.relay_primary.is_some() {
@@ -726,7 +726,7 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
 
-    /// Rekey transport keys for forward secrecy (§11.3). Generic version using Crypto::rekey().
+    /// Rekey transport keys for forward secrecy (Sec.11.3). Generic version using Crypto::rekey().
     /// Returns true if rekeyed (both ciphers support rekey).
     pub fn maybe_rekey(&mut self, now: Instant) -> bool {
         let tx_cipher = self.tx.crypto().clone();
@@ -822,7 +822,7 @@ impl<C: Crypto + Clone> Service<C> {
         self.relay_failover_timeout = timeout;
     }
 
-    // ----------------------------------------------- per-flow sessions (§4.7.4)
+    // ----------------------------------------------- per-flow sessions (Sec.4.7.4)
 
     pub fn set_per_flow_sessions(&mut self, enabled: bool) {
         self.per_flow_sessions = enabled;
@@ -907,7 +907,7 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
 
-    /// §6.4 rule 6: feed a measured window, get the telemetry event a revert
+    /// Sec.6.4 rule 6: feed a measured window, get the telemetry event a revert
     /// produces.
     pub fn observe_bond_gain(
         &mut self,
@@ -963,7 +963,7 @@ impl<C: Crypto + Clone> Service<C> {
                 if interval_hz == 0 || interval_hz > 10 {
                     return Response::Error {
                         status: ipc::Status::BadRequest,
-                        message: "interval_hz must be 1..=10 (§8.1: 1 Hz telemetry)".to_string(),
+                        message: "interval_hz must be 1..=10 (Sec.8.1: 1 Hz telemetry)".to_string(),
                     };
                 }
                 self.event_interval_hz = interval_hz;
@@ -974,14 +974,14 @@ impl<C: Crypto + Clone> Service<C> {
                 let detail = if ok {
                     format!("{} uplink(s) eligible; session {}", self.snapshot.eligible().count(), self.cfg.session)
                 } else {
-                    "no eligible uplink: probes have not completed (§6.5)".to_string()
+                    "no eligible uplink: probes have not completed (Sec.6.5)".to_string()
                 };
                 Response::SelfTest { passed: ok, detail }
             }
         }
     }
 
-    /// Conditions worth pushing to a subscribed shell (§4.5 failure modes).
+    /// Conditions worth pushing to a subscribed shell (Sec.4.5 failure modes).
     pub fn poll_events(&self) -> Vec<ipc::Event> {
         let mut out = Vec::new();
         if self.adapter_mtu().map(|m| m < IPV4_MIN_MTU).unwrap_or(false) {
@@ -1406,7 +1406,7 @@ mod tests {
 
         let idle_timeout = s.config().idle_timeout;
         s.tick(now + idle_timeout + Duration::from_secs(1));
-        assert_eq!(s.counters().sessions_evicted, 1, "a peer that went away must free its slot (§9.1)");
+        assert_eq!(s.counters().sessions_evicted, 1, "a peer that went away must free its slot (Sec.9.1)");
     }
 
     #[test]
@@ -1476,10 +1476,10 @@ mod tests {
         assert!(abandoned > 0, "packets in flight before sleep were abandoned");
         assert_eq!(s.in_flight(UplinkId(0)) + s.in_flight(UplinkId(1)), 0);
         assert_eq!(s.window(UplinkId(0)), s.window(UplinkId(1)), "windows are back to initial");
-        assert!(!s.snapshot().is_healthy(UplinkId(0)), "every uplink must re-probe (§6.5)");
+        assert!(!s.snapshot().is_healthy(UplinkId(0)), "every uplink must re-probe (Sec.6.5)");
         assert_eq!(s.counters().resumes, 1);
 
-        // Keepalives go out first, to re-establish the mappings (§6.6).
+        // Keepalives go out first, to re-establish the mappings (Sec.6.6).
         let actions = s.tick(woke);
         let keepalives = actions
             .iter()
@@ -1516,7 +1516,7 @@ mod tests {
         );
         assert_eq!(s.in_flight(UplinkId(1)), 0, "the dead mapping's packets are dropped");
         assert_eq!(s.in_flight(UplinkId(0)), untouched, "and only that path is re-keyed");
-        assert_eq!(s.config().session, session, "the session survives (§6.6)");
+        assert_eq!(s.config().session, session, "the session survives (Sec.6.6)");
         assert_eq!(s.active_flows(), flows_before, "and so does flow affinity");
         assert_eq!(s.counters().path_changes, 1);
         assert!(
@@ -1538,7 +1538,7 @@ mod tests {
             if actions.iter().any(|a| matches!(a, Action::Hold { .. })) { held += 1; } else { sent += 1; }
         }
         assert!(sent > 0, "the initial window admits packets");
-        assert!(held > 0, "and then applies backpressure (§6.4 rule 4)");
+        assert!(held > 0, "and then applies backpressure (Sec.6.4 rule 4)");
         assert_eq!(s.counters().held, held);
         assert_eq!(s.counters().refused, 0, "congestion is not a refusal: D3 is about health");
         assert!(s.in_flight(UplinkId(0)) + s.in_flight(UplinkId(1)) > 0);
@@ -1572,7 +1572,7 @@ mod tests {
     fn tick_emits_keepalives_and_a_bounded_probe() {
         let now = Instant::now();
         let mut s = ready_service(now);
-        // traffic arms the per-path keepalive timers (§6.6). A path that has
+        // traffic arms the per-path keepalive timers (Sec.6.6). A path that has
         // never carried traffic has no NAT binding to keep alive, so the test
         // has to cover a full DRR lap: at these quanta the faster path takes a
         // 20-packet burst before the slower one gets a turn.
@@ -1593,12 +1593,12 @@ mod tests {
         assert_eq!(
             actions.iter().filter(|a| kind_of(a) == Some(FrameKind::Keepalive)).count(),
             2,
-            "one keepalive per path (§6.6)"
+            "one keepalive per path (Sec.6.6)"
         );
         assert_eq!(
             actions.iter().filter(|a| kind_of(a) == Some(FrameKind::Probe)).count(),
             1,
-            "one bounded idle probe per tick (§6.3b)"
+            "one bounded idle probe per tick (Sec.6.3b)"
         );
         assert!(s.counters().keepalives >= 2);
         assert_eq!(s.counters().probes, 1);
