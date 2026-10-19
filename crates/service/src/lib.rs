@@ -193,6 +193,8 @@ pub struct Service<C: Crypto> {
     static_keypair: Option<balancify_crypto::StaticKeypair>,
     /// In-progress handshake initiator (client side).
     handshake_initiator: Option<balancify_crypto::Initiator>,
+    /// ETW provider for diagnostics (§8.2)
+    etw: etw::EtwProvider,
     counters: Counters,
     event_interval_hz: u8,
 }
@@ -248,6 +250,7 @@ impl<C: Crypto + Clone> Service<C> {
             replay_cache: balancify_crypto::ReplayCache::with_defaults(),
             static_keypair: None,
             handshake_initiator: None,
+            etw: etw::EtwProvider::new("BalancifyService"),
             counters: Counters::default(),
             event_interval_hz: 1,
         }
@@ -572,6 +575,10 @@ impl<C: Crypto + Clone> Service<C> {
                 self.cc.on_ecn(hdr.path, now);
                 if self.cc.ecn_events() > before {
                     self.counters.ecn_ce += 1;
+                    self.etw.info(
+                        etw::EVT_ECN_CE,
+                        &format!(\"ECN CE on path {} uplink {:?} cwnd={}\", hdr.path, uplink, self.cc.window(hdr.path)),
+                    );
                 }
             }
             match hdr.kind {
@@ -579,7 +586,15 @@ impl<C: Crypto + Clone> Service<C> {
                     for (path, bytes) in self.tx.on_ack(hdr.seq, now) {
                         if bytes == 0 { continue; }
                         self.policy.on_ack(UplinkId(path), bytes, now);
-                        self.cc.on_ack(path, bytes, now);
+                        let before_delay = self.cc.delay_events();
+                        self.cc.on_ack_with_rtt(path, bytes, now, None);
+                        if self.cc.delay_events() > before_delay {
+                            self.counters.delay_events += 1;
+                            self.etw.info(
+                                etw::EVT_DELAY_CONGESTION,
+                                &format!(\"delay congestion on path {} uplink {:?}\", path, uplink),
+                            );
+                        }
                     }
                     self.on_relay_ack(now);
                     return Vec::new();
@@ -593,6 +608,10 @@ impl<C: Crypto + Clone> Service<C> {
                         self.cc.on_rtt(hdr.path, rtt, now);
                         if self.cc.delay_events() > before {
                             self.counters.delay_events += 1;
+                            self.etw.info(
+                                etw::EVT_DELAY_CONGESTION,
+                                &format!(\"delay congestion via probe path {} rtt={:?}\", hdr.path, rtt),
+                            );
                         }
                     }
                     self.on_relay_ack(now);
@@ -603,6 +622,12 @@ impl<C: Crypto + Clone> Service<C> {
         }
         let mut out = Vec::new();
         for ev in self.rx.ingest(dg, now) {
+            match &ev {
+                Event::Dropped { reason } if matches!(reason, balancify_tunnel::DropReason::AuthFailed) => {
+                    self.etw.error(etw::EVT_AUTH_FAILED, &format!(\"auth failed on uplink {:?}\", uplink));
+                }
+                _ => {}
+            }
             out.extend(self.receiver_action(ev));
         }
         // Any payload or control from relay also counts as liveness
@@ -665,6 +690,7 @@ impl<C: Crypto + Clone> Service<C> {
             if self.maybe_rekey(now) {
                 self.last_rekey = Some(now);
                 self.packets_since_rekey = 0;
+                self.etw.info(etw::EVT_REKEY, &format!("rekeyed session {} at {:?}", self.cfg.session, now));
             }
         }
 
@@ -673,10 +699,10 @@ impl<C: Crypto + Clone> Service<C> {
         // if using secure mode; we just report the new relay via counter.
         if self.relay_primary.is_some() {
             if let Some(new_relay) = self.check_relay_failover(now) {
-                // Emit telemetry event? For now, just count; IPC will surface.
-                // The I/O loop should re-initiate handshake to new relay.
-                // We don't have an Action for relay switch yet, so we log via
-                // counter and let poll_events surface it.
+                self.etw.warn(
+                    etw::EVT_RELAY_FAILOVER,
+                    &format!("relay failover: {} -> {} count={}", self.relay_primary.unwrap(), new_relay, self.relay_failover_count),
+                );
                 eprintln!("relay failover: {} -> {}", self.relay_primary.unwrap(), new_relay);
             }
         }

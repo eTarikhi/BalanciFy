@@ -159,6 +159,7 @@ struct RelaySession {
     last_activity: Instant,
     bytes_forwarded: u64,
     packets_forwarded: u64,
+    ecn_echoed: u64,
     rate_limiter: RateLimiter,
     created_at: Instant,
 }
@@ -193,6 +194,7 @@ impl RelaySession {
             last_activity: now,
             bytes_forwarded: 0,
             packets_forwarded: 0,
+            ecn_echoed: 0,
             rate_limiter,
             created_at: now,
         }
@@ -230,6 +232,7 @@ impl RelaySession {
                 Event::Payload { data, .. } => payloads.push(data),
                 Event::Ack { path, seq, .. } => {
                     let sent = if simulate_ecn {
+                        self.ecn_echoed += 1;
                         self.tx.ack_with_ecn(path, seq)
                     } else {
                         self.tx.ack(path, seq)
@@ -254,6 +257,7 @@ impl RelaySession {
                 Event::Payload { data, .. } => payloads.push(data),
                 Event::Ack { path, seq, .. } => {
                     let sent = if simulate_ecn {
+                        self.ecn_echoed += 1;
                         self.tx.ack_with_ecn(path, seq)
                     } else {
                         self.tx.ack(path, seq)
@@ -285,6 +289,7 @@ struct SecureRelay {
     total_packets_forwarded: u64,
     total_handshakes: u64,
     total_rejected: u64,
+    total_ecn_echoed: u64,
 }
 
 impl SecureRelay {
@@ -302,6 +307,7 @@ impl SecureRelay {
             total_packets_forwarded: 0,
             total_handshakes: 0,
             total_rejected: 0,
+            total_ecn_echoed: 0,
         }
     }
     fn is_peer_allowed(&self, peer_static: &[u8; 32]) -> bool {
@@ -402,19 +408,25 @@ impl SecureRelay {
         let stale: Vec<u64> = self.sessions.iter()
             .filter(|(_, s)| now.duration_since(s.last_activity) >= idle_timeout)
             .map(|(id, _)| *id).collect();
-        for id in &stale { self.sessions.remove(id); }
+        for id in &stale {
+            if let Some(sess) = self.sessions.remove(id) {
+                self.total_ecn_echoed += sess.ecn_echoed;
+            }
+        }
         // Sweep old handshake attempt entries
         let window = Duration::from_secs(60);
         self.handshake_attempts.retain(|_, (_, start)| now.duration_since(*start) < window * 2);
         stale
     }
-    fn stats(&self) -> (usize, u64, u64, u64, u64) {
+    fn stats(&self) -> (usize, u64, u64, u64, u64, u64) {
+        let ecn_sum: u64 = self.sessions.values().map(|s| s.ecn_echoed).sum::<u64>() + self.total_ecn_echoed;
         (
             self.sessions.len(),
             self.total_handshakes,
             self.total_rejected,
             self.total_bytes_forwarded,
             self.total_packets_forwarded,
+            ecn_sum,
         )
     }
 }
@@ -589,9 +601,9 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                             peers.remove(&sid);
                             forward_socks.remove(&sid);
                         }
-                        let (sess_cnt, hs, rej, bytes, pkts) = relay.stats();
+                        let (sess_cnt, hs, rej, bytes, pkts, ecn) = relay.stats();
                         if sess_cnt > 0 {
-                            eprintln!("Stats: sessions={} handshakes={} rejected={} bytes={} pkts={}", sess_cnt, hs, rej, bytes, pkts);
+                            eprintln!("Stats: sessions={} handshakes={} rejected={} bytes={} pkts={} ecn={}", sess_cnt, hs, rej, bytes, pkts, ecn);
                         }
                     }
                 }
@@ -932,7 +944,7 @@ mod tests {
         );
         assert!(relay.handle_msg1(&msg1_4, peer4, now).is_err(), "global cap should reject");
 
-        let (sessions, handshakes, rejected, _, _) = relay.stats();
+        let (sessions, handshakes, rejected, _, _, _) = relay.stats();
         assert_eq!(sessions, 2);
         assert_eq!(handshakes, 2);
         assert!(rejected >= 2);
