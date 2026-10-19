@@ -1,9 +1,17 @@
 # Final summary — continuous development without stopping to report
 
-Date: 2026-10-19
-Status: continuous, CI green 5fc3af0 (latest), 215+ tests, all benches compile, driver S2b NBL pool + per-flow retx + flow ACK done
+Date: 2026-10-19 → 2026-10-20
+Status: continuous, CI green 36d65eb (latest), 215+ tests, Cargo.lock vetted-only, driver vcxproj HVCI flags, SBOM/VEX SPDX3, throughput 9 profiles Rig B, app shell 9 modes, report with 5 visualizations green
 
-User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change to report. This is the third time user said it, so we continue even more.
+User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change to report. This is the third+ time user said it, so we continue even more. Latest: "Create a comprehensive development progress report that utilizes data visualizations" done (4feba2b green), then "Continue developing app" ongoing.
+
+New since 5fc3af0: Cargo.lock gap closed (5491758) vetted-only version 3 with 9 workspace members + allowlisted transitive, audit passes with lock file; crypto-allowlist.txt updated with transitive closure from CI logs 39268156078/4761969; driver/balancify.vcxproj HVCI flags (9115e4f) /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre PoolTag BlaB Spectre mitigation KMDF 1.33 Universal 10.0.22621.0 NDIS620_MINIPORT; sbom.sh v2 SPDX 3.0 + VEX (6c9a52f) 10 first-party + vetted + transitive packages relationships annotations HVCI trio installer vulnerabilities 3 entries; throughput.rs enhanced 9 profiles (0581256) Rig B wired 1Gbps/Wi-Fi 6 300M per-flow on/off aggregate 16 flows iperf3-like added delay <=3ms CPU/Gbit pacing 80% secure notes; app shell 9 modes (cd1673f) per-path ECN/delay bond gain uplink up/down ETW per-flow sessions Rig B HVCI SBOM diagnostics; report docs/development-progress-report.md with 5 visualizations (gantt option1 burndown option2 velocity option2 strategic-alignment option1 technical-breakdown option1) 4feba2b green; lab-progress, throughput-rows, hvci-readiness, final-summary updated (78cd32b, 36d65eb).
+
+CI progression now includes: 4feba2b report+assets green, 5491758 Cargo.lock green, 9115e4f vcxproj green, 6c9a52f sbom green, 0581256 throughput green, cd1673f app green, 78cd32b docs green, 36d65eb docs green — all ubuntu+windows+audit success via check-runs API.
+
+Per-flow retx (session,seq) + flow ACK + driver S2b NBL pool + HVCI flags + SBOM/VEX + Cargo.lock + throughput 9 profiles + app 9 modes + report visualizations — all CI-verified.
+
+Next still: netem S2c real, driver S2b real VM Verifier 0x209BB + HLK HVCIMemoryIntegrity + VBS/MI, throughput Rig B real iperf3, HVCI trio real, WinUI3 shell, soak+Verifier+compat, RC+attestation+rollback, GA.
 
 ## What was done in this entire continuous session (from ADR-0015 to now)
 
