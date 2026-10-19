@@ -11,3 +11,7 @@ balancify-tunnel = { path = "../tunnel" }
 [[bin]]
 name = "drr-bench"
 path = "src/bin/drr-bench.rs"
+
+[[bin]]
+name = "pacing-bench"
+path = "src/bin/pacing-bench.rs"
