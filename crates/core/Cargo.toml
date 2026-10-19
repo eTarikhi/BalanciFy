@@ -6,3 +6,8 @@ license.workspace = true
 description = "Control-plane core: link health state machine, link scoring, flow placement (WRH)"
 
 [dependencies]
+balancify-tunnel = { path = "../tunnel" }
+
+[[bin]]
+name = "drr-bench"
+path = "src/bin/drr-bench.rs"
