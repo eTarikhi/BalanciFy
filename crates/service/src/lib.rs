@@ -587,7 +587,7 @@ impl<C: Crypto + Clone> Service<C> {
                         if bytes == 0 { continue; }
                         self.policy.on_ack(UplinkId(path), bytes, now);
                         let before_delay = self.cc.delay_events();
-                        self.cc.on_ack_with_rtt(path, bytes, now, None);
+                        self.cc.on_ack_with_rtt(path, bytes, None, now);
                         if self.cc.delay_events() > before_delay {
                             self.counters.delay_events += 1;
                             self.etw.info(
