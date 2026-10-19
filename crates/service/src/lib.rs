@@ -286,12 +286,12 @@ impl<C: Crypto + Clone> Service<C> {
             let convergence = now.duration_since(start);
             self.uplink_failover_convergence = Some(convergence);
             self.uplink_failover_history.push((id, start, convergence));
-            self.etw.event(200, &format!("uplink {} up, failover converged in {}ms count={}", id.0, convergence.as_millis(), self.uplink_failover_count));
+            self.etw.info(200, &format!("uplink {} up, failover converged in {}ms count={}", id.0, convergence.as_millis(), self.uplink_failover_count));
             if convergence.as_secs_f64() > 2.0 {
-                self.etw.event(500, &format!("WARN uplink failover convergence >2s: {}ms", convergence.as_millis()));
+                self.etw.warn(500, &format!("WARN uplink failover convergence >2s: {}ms", convergence.as_millis()));
             }
         } else {
-            self.etw.event(200, &format!("uplink {} up cap={}bps mtu={}", id.0, capacity_bps, mtu));
+            self.etw.info(200, &format!("uplink {} up cap={}bps mtu={}", id.0, capacity_bps, mtu));
         }
     }
 
@@ -308,7 +308,7 @@ impl<C: Crypto + Clone> Service<C> {
         self.uplink_failover_start = Some(Instant::now());
         self.uplink_failover_convergence = None;
         self.uplink_failover_count += 1;
-        self.etw.event(201, &format!("uplink {} down, failover count={} — measuring convergence <=2s", id.0, self.uplink_failover_count));
+        self.etw.info(201, &format!("uplink {} down, failover count={} — measuring convergence <=2s", id.0, self.uplink_failover_count));
     }
 
     pub fn remove_uplink_at(&mut self, id: UplinkId, now: Instant) {
@@ -323,7 +323,7 @@ impl<C: Crypto + Clone> Service<C> {
         self.uplink_failover_start = Some(now);
         self.uplink_failover_convergence = None;
         self.uplink_failover_count += 1;
-        self.etw.event(201, &format!("uplink {} down at {:?}, failover count={}", id.0, now, self.uplink_failover_count));
+        self.etw.info(201, &format!("uplink {} down at {:?}, failover count={}", id.0, now, self.uplink_failover_count));
     }
 
     pub fn on_probe_ok(&mut self, id: UplinkId, rtt: Duration, now: Instant) {
@@ -858,9 +858,9 @@ impl<C: Crypto + Clone> Service<C> {
             self.relay_failover_convergence = Some(convergence);
             self.relay_failover_history.push((start, convergence));
             // ETW 500 failover convergence
-            self.etw.event(500, &format!("relay failover converged in {}ms count={}", convergence.as_millis(), self.relay_failover_count));
+            self.etw.info(500, &format!("relay failover converged in {}ms count={}", convergence.as_millis(), self.relay_failover_count));
             if convergence.as_secs_f64() > 2.0 {
-                self.etw.event(500, &format!("WARN failover convergence >2s: {}ms", convergence.as_millis()));
+                self.etw.warn(500, &format!("WARN failover convergence >2s: {}ms", convergence.as_millis()));
             }
         }
     }
@@ -886,7 +886,7 @@ impl<C: Crypto + Clone> Service<C> {
                 self.relay_failover_count += 1;
                 self.relay_failover_start = Some(now);
                 self.relay_failover_convergence = None;
-                self.etw.event(500, &format!("relay failover: {} -> {} count={} timeout={}s", current, next_addr, self.relay_failover_count, self.relay_failover_timeout.as_secs()));
+                self.etw.info(500, &format!("relay failover: {} -> {} count={} timeout={}s", current, next_addr, self.relay_failover_count, self.relay_failover_timeout.as_secs()));
                 return Some(next_addr);
             }
         }
