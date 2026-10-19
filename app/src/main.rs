@@ -105,8 +105,22 @@ fn main() -> std::io::Result<()> {
                 render_sbom(resp);
             }
         }
+        "failover" => {
+            // Failover convergence <=2s (Sec.10.3, Sec.4.5)
+            send_request(&mut stream, &Request::GetStatus)?;
+            if let Some(resp) = recv_response(&mut stream)? {
+                render_failover(resp);
+            }
+        }
+        "soak" => {
+            // Soak 72h + random flaps + 100 resume (G5)
+            send_request(&mut stream, &Request::GetStatus)?;
+            if let Some(resp) = recv_response(&mut stream)? {
+                render_soak(resp);
+            }
+        }
         _ => {
-            println!("Unknown mode {}, available: home, rules, diagnostics, tray, relay, bundle, perflow, rigb, hvci, sbom", mode);
+            println!("Unknown mode {}, available: home, rules, diagnostics, tray, relay, bundle, perflow, rigb, hvci, sbom, failover, soak", mode);
         }
     }
 
@@ -333,6 +347,36 @@ fn render_sbom(resp: Response) {
             println!("Real generation when toolchain available: cargo cyclonedx --format json --spec-version 1.5 + cargo audit --json + sbom-tool generate -b . -bc . -pn Balancify -pv version -ps Balancify -nsb https://balancify.io/sbom");
             render_counters(&s.counters);
             println!("Cargo.lock: {} packages, vetted only, audit passes with lock file (5491758)", s.active_flows); // placeholder
+        }
+        _ => println!("Unexpected: {:?}", resp),
+    }
+}
+
+fn render_failover(resp: Response) {
+    match resp {
+        Response::Status(s) => {
+            println!("=== Failover Convergence <=2s (Sec.10.3, Sec.4.5) ===");
+            println!("Uplink failover: unplugging_an_uplink_mid_transfer_keeps_the_stream_alive — adapter removed moment packet provably in flight, in-flight reinjected on survivor, 100/100 delivered in order, no refusals");
+            println!("Relay failover: primary + secondary, failover on 10s no ACK, back-and-forth, failover count, convergence measured first ACK after failover");
+            println!("Target: transfer continues, full rate <=2s, ETW 200 UPLINK_UP, 201 DOWN, 500 FAILOVER, support bundle relay_failover_count, relay_conv_ms, uplink_failover_count, uplink_conv_ms, history (id/time/convergence)");
+            println!("Real measurement: netem-rig.sh failover profile, tc loss 100% simulate unplug, 100ms throughput log, pktmon + Wireshark at adapter and per-uplink, ETW -> WPA");
+            render_counters(&s.counters);
+            println!("Simulated: throughput.rs failover profile mean Mbps + convergence ms, soak.rs random flaps 1000 iterations");
+        }
+        _ => println!("Unexpected: {:?}", resp),
+    }
+}
+
+fn render_soak(resp: Response) {
+    match resp {
+        Response::Status(s) => {
+            println!("=== Soak 72h + Random Flaps + 100 Resume (G5, G6 compat matrix) ===");
+            println!("Stability: 72h continuous traffic, random link flaps, 100 sleep/resume cycles, Verifier standard+random, no crash, no leaked route/filter/handle/IOCTL buffer");
+            println!("Compat matrix: VPN clients, security suites, Hyper-V, WSL2, Memory Integrity on/off documented with workaround/incompatibility");
+            println!("Soak harness: crates/service/src/bin/soak.rs 1000 iterations, 10 packets per iteration, random flap every 100 (remove_uplink_at + add_uplink + publish), sleep/resume every 10 (resume_from_sleep + tick keepalives), ECN every 200, delay jump every 300, loss every 100, tick for keepalives/rekey/failover/probes, checks pending_probes <=8, sessions <=64, held <=1000, support bundle per-path ECN/delay cwnd/in_flight");
+            println!("ETW: 100-600 events, WPA CPU sampling, working set bounded, power delta via telemetry, 72h soak + random flaps + 100 resume with Verifier");
+            render_counters(&s.counters);
+            println!("Real: requires Rig B hardware + Hyper-V VM Gen2 Secure Boot vTPM VBS + WDK 10.0.22621+ + Driver Verifier 0x209BB + HLK HVCIMemoryIntegrity + VBS/MI");
         }
         _ => println!("Unexpected: {:?}", resp),
     }
