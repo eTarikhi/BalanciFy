@@ -2,6 +2,7 @@
 //! No external deps, uses std time.
 
 use balancify_crypto::TunnelCipher;
+use balancify_tunnel::Crypto;
 use std::time::Instant;
 
 fn main() {
