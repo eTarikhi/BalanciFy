@@ -25,16 +25,40 @@ This directory is the first-party NDIS virtual miniport that owns the packet pat
 - Minimal IOCTLs, validated lengths, fuzzed (same fuzz gate as tunnel).
 - Memory Integrity compatible.
 
-**Build (future, Windows only):**
+**Build (Windows only, WDK 10.0.22621+):**
 ```powershell
-msbuild driver.vcxproj /p:Configuration=Release /p:Platform=x64
-signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Balancify" x64\Release\balancify.sys
+# Prerequisites: Visual Studio 2022 with C++ desktop, WDK 10.0.22621+, SDK 10.0.22621+
+# From repo root:
+msbuild driver\balancify.vcxproj /p:Configuration=Release /p:Platform=x64
+msbuild driver\balancify.vcxproj /p:Configuration=Release /p:Platform=ARM64
+# Output: x64\Release\balancify.sys, ARM64\Release\balancify.sys
+# Sign test:
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f test.pfx /p password x64\Release\balancify.sys
+# Verify HVCI flags:
+dumpbin /headers x64\Release\balancify.sys | findstr /i "integrity DYNAMICBASE NXCOMPAT"
+# Check PoolTag:
+strings x64\Release\balancify.sys | findstr BlaB
 ```
 
-**Test (future):**
-- Test-signed install on Hyper-V VM with Driver Verifier `verifier /standard /driver balancify.sys`
-- S2b: socket test through miniport -- same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path.
-- G3 benchmark + HVCI trio.
+**Test (real VM required):**
+- Hyper-V VM Gen2 Secure Boot on vTPM VBS on, Memory Integrity on/off
+- Enable test-signing: `bcdedit /set testsigning on`, reboot
+- Install: `pnputil /add-driver driver\balancify.inf /install`
+- Driver Verifier: `verifier /standard /driver balancify.sys` flags 0x209BB special pool, force IRQL, pool tracking, I/O verification, deadlock, DMA, security, DDI compliance, code integrity — reboot, `!verifier` in WinDbg, run traffic, no bugchecks
+- HLK: Studio -> HVCIMemoryIntegrity test, checks no executable NonPagedPool, no executable MDL, no RWX, no self-modifying — pass criteria no failures
+- VBS/MI: `msinfo32` VBS Running MI enabled, driver loaded, traffic via `throughput.rs` + `balancify-service` binary, ETW 200/201/300/400/401/402/500/600 visible via WPA
+- S2b: socket test through miniport -- same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path: service SendNetBufferLists, relay receives, reorder, deliver, IOCTL INJECT_NBL allocates MDL via NdisAllocateMdl NBL via NdisAllocateNetBufferAndNetBufferList indicates via NdisMIndicateReceiveNetBufferLists, Return frees MDL chain via NdisFreeMdl
+- G3 benchmark + HVCI trio documented in `docs/phase2/hvci-readiness.md` with date, Windows build, hardware, driver version
+
+**INF:**
+- `driver/balancify.inf` Universal, PnpLockdown=1, NDIS 6.8, MTU param 576..9000 default 1440, WDF verifier, PoolTag BlaB, SDDL, METHOD_BUFFERED, length validation, attestation signing
+- `driver/miniport.inf` legacy skeleton, use balancify.inf for new builds
+
+**vcxproj:**
+- `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.22621.0, NDIS620_MINIPORT, NDIS 6.8, WDF
+
+**HVCI readiness trio (S15):**
+- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot vTPM test-signing — code ready, real VM run pending, CI only Rust (no WDK), future add WDK build job Phase 4 (a) in ci.yml
 
 **Exception policy (Sec.11.2):**
 If G3/G7 blocked >4 weeks by signing/HVCI, product owner may ship flow-level only with bundled Wintun signed DLL (single allowed third-party runtime artifact, disclosed), while bonding + driver continue; must be retired next minor release.
