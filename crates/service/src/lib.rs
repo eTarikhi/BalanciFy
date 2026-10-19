@@ -2012,6 +2012,29 @@ mod tests {
     }
 
     #[test]
+    fn rate_limiter_holds_when_over_limit() {
+        let now = Instant::now();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let cfg = ServiceConfig { session: 1, ..ServiceConfig::default() };
+        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        svc.add_uplink(UplinkId(0), 200_000_000, false, 1500, now);
+        for _ in 0..5 { svc.on_probe_ok(UplinkId(0), Duration::from_millis(10), now); }
+        svc.publish(now);
+        // Set very low rate: 1KB/s, burst 1KB
+        svc.set_uplink_rate_limit(UplinkId(0), 8000, 1000, now);
+        let flow = FlowKey::new(6, sa(5000), peer(443));
+        // First packet should pass (burst)
+        let actions1 = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
+        assert!(actions1.iter().any(|a| matches!(a, Action::Send { .. })), "first burst should pass");
+        // Second packet immediately should be held (rate limited)
+        let actions2 = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
+        assert!(actions2.iter().any(|a| matches!(a, Action::Hold { .. })), "second should be held due to rate limit");
+    }
+
+    #[test]
     fn ecn_and_delay_wire_via_ingest() {
         let now = Instant::now();
         let dummy_key = [0u8; 32];
