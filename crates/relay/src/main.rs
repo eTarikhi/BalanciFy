@@ -224,11 +224,16 @@ impl RelaySession {
         self.last_activity = now;
         let mut payloads = Vec::new();
         let mut replies = Vec::new();
+        let simulate_ecn = std::env::var("BALANCIFY_SIMULATE_ECN").map(|v| v == "1").unwrap_or(false);
         for ev in self.rx.ingest(dg, now) {
             match ev {
                 Event::Payload { data, .. } => payloads.push(data),
                 Event::Ack { path, seq, .. } => {
-                    let sent = self.tx.ack(path, seq);
+                    let sent = if simulate_ecn {
+                        self.tx.ack_with_ecn(path, seq)
+                    } else {
+                        self.tx.ack(path, seq)
+                    };
                     replies.push(sent.bytes);
                 }
                 Event::ProbeEcho { path, seq, .. } => {
@@ -243,11 +248,16 @@ impl RelaySession {
     fn drain(&mut self, now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut payloads = Vec::new();
         let mut replies = Vec::new();
+        let simulate_ecn = std::env::var("BALANCIFY_SIMULATE_ECN").map(|v| v == "1").unwrap_or(false);
         for ev in self.rx.drain(now) {
             match ev {
                 Event::Payload { data, .. } => payloads.push(data),
                 Event::Ack { path, seq, .. } => {
-                    let sent = self.tx.ack(path, seq);
+                    let sent = if simulate_ecn {
+                        self.tx.ack_with_ecn(path, seq)
+                    } else {
+                        self.tx.ack(path, seq)
+                    };
                     replies.push(sent.bytes);
                 }
                 Event::ProbeEcho { path, seq, .. } => {

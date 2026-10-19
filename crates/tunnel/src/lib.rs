@@ -409,8 +409,16 @@ impl<C: Crypto> Sender<C> {
 
     /// Cumulative ACK for everything up to and including `up_to`.
     pub fn ack(&self, path: u8, up_to: u64) -> Sent {
-        let bytes = self.frame(FrameKind::Ack, path, up_to, 0, &[]);
+        self.ack_with_flags(path, up_to, 0)
+    }
+
+    pub fn ack_with_flags(&self, path: u8, up_to: u64, flags: u8) -> Sent {
+        let bytes = self.frame(FrameKind::Ack, path, up_to, flags, &[]);
         Sent { path, seq: up_to, kind: FrameKind::Ack, bytes }
+    }
+
+    pub fn ack_with_ecn(&self, path: u8, up_to: u64) -> Sent {
+        self.ack_with_flags(path, up_to, FLAG_ECN_CE)
     }
 
     /// Record a probe reply: RTT sample for this path (§6.3).
