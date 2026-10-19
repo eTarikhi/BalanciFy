@@ -2023,8 +2023,8 @@ mod tests {
         svc.add_uplink(UplinkId(0), 200_000_000, false, 1500, now);
         for _ in 0..5 { svc.on_probe_ok(UplinkId(0), Duration::from_millis(10), now); }
         svc.publish(now);
-        // Set very low rate: 1KB/s, burst 1KB
-        svc.set_uplink_rate_limit(UplinkId(0), 8000, 1000, now);
+        // Set very low rate: 1KB/s, burst 2KB (to cover header+tag overhead)
+        svc.set_uplink_rate_limit(UplinkId(0), 8000, 2000, now);
         let flow = FlowKey::new(6, sa(5000), peer(443));
         // First packet should pass (burst)
         let actions1 = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
