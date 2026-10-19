@@ -61,8 +61,22 @@ fn main() -> std::io::Result<()> {
                 render_tray(resp);
             }
         }
+        "relay" => {
+            // Relay & account screen (Sec.8.2)
+            send_request(&mut stream, &Request::GetStatus)?;
+            if let Some(resp) = recv_response(&mut stream)? {
+                render_relay(resp);
+            }
+        }
+        "bundle" => {
+            // Support bundle (Sec.8.2)
+            send_request(&mut stream, &Request::GetStatus)?;
+            if let Some(resp) = recv_response(&mut stream)? {
+                render_bundle(resp);
+            }
+        }
         _ => {
-            println!("Unknown mode {}, available: home, rules, diagnostics, tray", mode);
+            println!("Unknown mode {}, available: home, rules, diagnostics, tray, relay, bundle", mode);
         }
     }
 
@@ -184,6 +198,38 @@ fn render_tray(resp: Response) {
             let up_count = s.uplinks.iter().filter(|u| u.eligible).count();
             println!("Tray: {} uplinks up, {} flows, bond={}, dup={}",
                 up_count, s.active_flows, s.bond_enabled, s.duplicate_mode);
+        }
+        _ => println!("Unexpected: {:?}", resp),
+    }
+}
+
+fn render_relay(resp: Response) {
+    match resp {
+        Response::Status(s) => {
+            println!("=== Relay & Account ===");
+            println!("Service version: {} schema: {}", s.service_version, s.schema_version);
+            println!("Counters: ecn={} delay={} loss via cwnd? (see diagnostics)", s.counters.ecn_ce, s.counters.delay_events);
+            // In real shell, would show relay addrs, failover count, account, pinned keys
+            // For lab, we show what we have: counters + uplinks
+            for u in &s.uplinks {
+                println!("  uplink id={} cap={}bps rtt={}ms eligible={}", u.id, u.capacity_bps, u.rtt_ms, u.eligible);
+            }
+        }
+        _ => println!("Unexpected: {:?}", resp),
+    }
+}
+
+fn render_bundle(resp: Response) {
+    match resp {
+        Response::Status(s) => {
+            println!("=== Support Bundle (redacted, Sec.8.2) ===");
+            println!("Version: {} policy_rev={} rules_rev={} active_flows={}", s.service_version, s.policy_revision, s.rules_revision, s.active_flows);
+            render_counters(&s.counters);
+            println!("Uplinks: {} total, {} eligible", s.uplinks.len(), s.uplinks.iter().filter(|u| u.eligible).count());
+            for u in &s.uplinks {
+                println!("  id={} state={} rtt={}ms loss={} per mille cap={}bps", u.id, u.state, u.rtt_ms, u.loss_permille, u.capacity_bps);
+            }
+            println!("Bundle JSON would include cwnd/in_flight per uplink, congestion diag loss/ecn/delay+paths, rekey diag, relay stats (see service support mod)");
         }
         _ => println!("Unexpected: {:?}", resp),
     }
