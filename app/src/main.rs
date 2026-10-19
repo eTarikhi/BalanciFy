@@ -214,7 +214,9 @@ fn render_diagnostics(resp: Response) {
             }
             println!("Bond gain tracker: auto-disable <15% gain reverts class to flow-level, emits BondReverted event 300");
             println!("Rekey: packets_since_rekey, last_rekey_ago_secs, forward secrecy 1h/1M packets, ETW 400");
-            println!("Relay: current + failover count, ETW 500 failover, 600 auth failed");
+            println!("Relay: current + failover count, convergence <=2s, ETW 500 failover, 600 auth failed, history (time, convergence)");
+            println!("Uplink failover: count + convergence <=2s Sec.10.3 Sec.4.5, ETW 200 UP 201 DOWN, history (id, time, convergence), target full rate <=2s after unplug");
+            println!("Support bundle JSON includes: relay_failover_count, relay_conv_ms, uplink_failover_count, uplink_conv_ms, cwnd/in_flight per uplink, congestion diag loss/ecn/delay+paths per_path Vec<PathCongestionDiag> cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, rekey diag, relay stats, ETW export, route table, adapter state");
         }
         _ => println!("Unexpected: {:?}", resp),
     }
