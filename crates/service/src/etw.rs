@@ -23,7 +23,7 @@ pub struct EtwEvent {
 pub struct EtwProvider {
     provider_name: String,
     #[cfg(windows)]
-    handle: Option<windows_etw_handle>,
+    handle: Option<WindowsEtwHandle>,
 }
 
 #[cfg(windows)]
