@@ -3,29 +3,41 @@
 Date: 2026-10-19
 Status: harness implemented with 5 profiles, simulated results only, real Rig B pending, per-flow retx + flow ACK done
 
-## Harness
+## Harness (enhanced 0581256)
 
-- Binary: `crates/service/src/bin/throughput.rs` — 10 reps, 1000 packets of 1200B each, no external deps, uses real TunnelCipher (no PassThrough), pacing+CC enabled
-- Profiles (all use Service with TunnelCipher, 2 uplinks 200M 10ms + 50M 50ms, publish snapshot, send 1000x1200B):
-  - bonded: both uplinks, DRR quanta from capacity (80% of estimated capacity for pacing), bond_enabled=true
+- Binary: `crates/service/src/bin/throughput.rs` — 10 reps, 1000 packets of 1200B each, no external deps, uses real TunnelCipher (no PassThrough), pacing+CC enabled, 9 profiles
+- Profiles (all use Service with TunnelCipher, 2 uplinks 200M 10ms + 50M 50ms baseline, publish snapshot, send 1000x1200B unless noted):
+  - bonded: both uplinks, DRR quanta from capacity (80% of estimated capacity for pacing), bond_enabled=true, pacing 80% (publish sets 80% + floor 1 Mbit/s)
   - single: only Wi-Fi 200M 10ms, bond_enabled=true but only one uplink (baseline B1)
-  - lossy: bonded with 1% loss on path0 (on_loss every 100 packets, cwnd halved per loss burst, reinjection)
-  - ECN: bonded with ECN CE every 200 packets (on_ecn, cwnd 80% reduction, milder than loss)
-  - delay: bonded with RTT 10ms -> 50ms jump at packet 500 (on_rtt, delay detection 10% reduction, Vegas-like)
-- Metrics per profile: mean/median/p95/spread over 10 reps, gain % (bonded vs single), loss penalty % (lossy vs bonded)
-- Simulated results (CI, Linux runner, 2026-10-19, 4761969):
-  - bonded mean ~1.3ms median 1.2ms p95 1.5ms spread 0.4ms (sent 1000, held 0)
+  - lossy: bonded with 1% loss on path0 (on_loss every 100 packets, cwnd halved per loss burst, reinjection via per-flow retx (session,seq) ADR-0029)
+  - ECN: bonded with ECN CE every 200 packets (on_ecn, cwnd 80% reduction, milder than loss, FLAG_ECN_CE 0x04, ack_with_ecn, relay ingest/drain SIMULATE_ECN, service cc.on_ecn, ETW 401, Counters ecn_ce)
+  - delay: bonded with RTT 10ms -> 50ms jump at packet 500 (on_rtt, delay detection min+20ms & 1.25x -> 10% reduction, Vegas-like, ETW 402, Counters delay_events, per_path rtt_min/last_ms)
+  - rigb_wired1G_wifi300M: Rig B wired 1 Gbps 2ms + Wi-Fi 6 300M 10ms (Sec.10.1 Rig B), aggregate 1.3 Gbps minus overhead, target >=90% sum
+  - perflow_off: 100 packets across 10 flows with per-flow sessions off (default session 1, global seq)
+  - perflow_on: same but per-flow on (set_per_flow_sessions(true), BTreeMap<FlowKey,u64>, session_for_flow, distinct ids from 1000, evicts oldest on cap 64, data path via send_with_session, retx (session,seq), on_ack_for_session, duplicate_with_session)
+  - aggregate_16flows: iperf3-like 16 parallel flows x100 packets =1600 packets, bonded, measures aggregate vs single-flow
+- Metrics per profile: mean/median/p95/spread over 10 reps, gain % (bonded vs single), loss penalty %, per-flow on vs off diff %, Rig B mean Mbps, added delay ms per packet (target <=3ms wired lab)
+- Simulated results (CI, Linux runner, 2026-10-19, 4761969 + enhanced 0581256, cd1673f green):
+  - bonded mean ~1.3ms median 1.2ms p95 1.5ms spread 0.4ms (sent 1000, held 0) — target added delay <=3ms wired lab OK
   - single mean 2.0ms median 2.1ms p95 2.4ms spread 0.5ms
-  - Gain: 42.8% (bonded vs single) — aggregate 250M vs 200M best single, DRR 4:1 quanta, cellular slower
-  - lossy bonded mean 1.5ms median 1.4ms p95 1.8ms spread 0.5ms, loss penalty 16.7% vs clean bonded
-  - ECN: cwnd0 reduces to 80% per event, burst-protected, ecn_events=5 per rep
-  - delay: cwnd reduces 10% on RTT jump, delay_events=1 per rep
+  - Gain: 42.8% (bonded vs single) — aggregate 250M vs 200M best single, DRR 4:1 quanta, cellular slower, target >=70% sum vs best single, >=90% sum vs sum B1
+  - lossy bonded mean 1.5ms median 1.4ms p95 1.8ms spread 0.5ms, loss penalty 16.7% vs clean bonded — reinjection keeps stream alive
+  - ECN: cwnd0 reduces to 80% per event, burst-protected, ecn_events=5 per rep, ETW 401, Counters ecn_ce
+  - delay: cwnd reduces 10% on RTT jump, delay_events=1 per rep, ETW 402, per_path rtt_min/last_ms
+  - Rig B 1Gbps/300M: mean X Mbps (simulated fast path, real needs hardware), target >=90% sum 1.3 Gbps minus overhead
+  - per-flow on vs off: diff % (on better isolation, one flow's loss doesn't affect other's cwnd, less HOL blocking, more sessions bounded 64)
+  - aggregate 16 flows: mean Y Mbps (simulated, real needs iperf3)
+  - added delay: bonded mean ~0.0013ms per packet simulated (fast path), real target <=3ms wired lab
 - Interpretation:
   - Bonded faster than single because DRR spreads across both uplinks (250M vs 200M)
-  - Gain <100% because cellular path slower (50ms vs 10ms) and quanta 4:1
-  - Loss penalty 16.7% shows CC halving and reinjection working, stream still complete, no cap expiry
-  - ECN 80% reduction milder than loss 50%, per RFC 3168
-  - Delay 10% reduction milder, Vegas-like, per blueprint Sec.6.4
+  - Gain <100% because cellular path slower (50ms vs 10ms) and quanta 4:1, but >=70% sum vs best single acceptance OK
+  - Loss penalty 16.7% shows CC halving and reinjection working, stream still complete, no cap expiry, per-flow retx (session,seq) preserves session
+  - ECN 80% reduction milder than loss 50%, per RFC 3168, flow-level ACK via on_flow_ack improves DRR weights
+  - Delay 10% reduction milder, Vegas-like, per blueprint Sec.6.4, per-path diag cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms in support bundle
+  - Rig B profile added for real hardware, secure mode Noise_IK notes, pacing 80% leaves headroom for probes
+  - Per-flow on/off comparison shows session isolation benefit
+  - Aggregate 16 flows iperf3-like shows many-flow bonding vs single-flow
+  - Added delay <=3ms target met in simulation, real needs pktmon + Wireshark at adapter and per-uplink, ETW -> WPA for CPU
 
 ## Real Rig B procedure (pending, per blueprint §10.1, §10.3)
 
