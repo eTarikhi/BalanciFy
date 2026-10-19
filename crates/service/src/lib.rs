@@ -167,13 +167,21 @@ pub struct Service<C: Crypto> {
     packets_since_rekey: u64,
     rekey_interval: Duration,
     rekey_packet_threshold: u64,
-    /// Relay failover (Sec.4.5): primary + secondary relay addrs, health tracking
+    /// Relay failover (Sec.4.5): primary + secondary relay addrs, health tracking + convergence measurement Sec.10.3 failover <=2s
     relay_primary: Option<SocketAddr>,
     relay_secondary: Option<SocketAddr>,
     relay_current: Option<SocketAddr>,
     relay_last_ack: Option<Instant>,
     relay_failover_timeout: Duration,
     relay_failover_count: u64,
+    relay_failover_start: Option<Instant>,
+    relay_failover_convergence: Option<Duration>,
+    relay_failover_history: Vec<(Instant, Duration)>, // (failover_time, convergence_duration)
+    /// Uplink failover convergence tracking Sec.10.3 failover <=2s, Sec.4.5 unplugging mid-transfer
+    uplink_failover_start: Option<Instant>,
+    uplink_failover_convergence: Option<Duration>,
+    uplink_failover_history: Vec<(UplinkId, Instant, Duration)>, // (uplink_id, failover_time, convergence)
+    uplink_failover_count: u64,
     /// Per-flow session mapping (Sec.4.7.4, Phase-4): optional per-flow sessions
     per_flow_sessions: bool,
     flow_sessions: BTreeMap<FlowKey, u64>,
@@ -239,6 +247,13 @@ impl<C: Crypto + Clone> Service<C> {
             relay_last_ack: None,
             relay_failover_timeout: Duration::from_secs(10),
             relay_failover_count: 0,
+            relay_failover_start: None,
+            relay_failover_convergence: None,
+            relay_failover_history: Vec::new(),
+            uplink_failover_start: None,
+            uplink_failover_convergence: None,
+            uplink_failover_history: Vec::new(),
+            uplink_failover_count: 0,
             per_flow_sessions: false,
             flow_sessions: BTreeMap::new(),
             next_session_id: 1000, // start after default session 1
@@ -266,6 +281,18 @@ impl<C: Crypto + Clone> Service<C> {
         );
         self.path_mtu.insert(id, mtu);
         self.bond.reset_on_link_mix_change();
+        // If this is a replug after failover, measure convergence
+        if let Some(start) = self.uplink_failover_start.take() {
+            let convergence = now.duration_since(start);
+            self.uplink_failover_convergence = Some(convergence);
+            self.uplink_failover_history.push((id, start, convergence));
+            self.etw.event(200, &format!("uplink {} up, failover converged in {}ms count={}", id.0, convergence.as_millis(), self.uplink_failover_count));
+            if convergence.as_secs_f64() > 2.0 {
+                self.etw.event(500, &format!("WARN uplink failover convergence >2s: {}ms", convergence.as_millis()));
+            }
+        } else {
+            self.etw.event(200, &format!("uplink {} up cap={}bps mtu={}", id.0, capacity_bps, mtu));
+        }
     }
 
     pub fn remove_uplink(&mut self, id: UplinkId) {
@@ -277,6 +304,26 @@ impl<C: Crypto + Clone> Service<C> {
         self.pacing.forget(id.0);
         self.path_local.remove(&id);
         self.bond.reset_on_link_mix_change();
+        // Track uplink failover start for convergence measurement Sec.10.3 failover <=2s
+        self.uplink_failover_start = Some(Instant::now());
+        self.uplink_failover_convergence = None;
+        self.uplink_failover_count += 1;
+        self.etw.event(201, &format!("uplink {} down, failover count={} — measuring convergence <=2s", id.0, self.uplink_failover_count));
+    }
+
+    pub fn remove_uplink_at(&mut self, id: UplinkId, now: Instant) {
+        self.policy.remove_uplink(id);
+        self.policy.drop_uplink(id);
+        self.path_mtu.remove(&id);
+        self.flows.forget_uplink(id);
+        self.cc.forget(id.0);
+        self.pacing.forget(id.0);
+        self.path_local.remove(&id);
+        self.bond.reset_on_link_mix_change();
+        self.uplink_failover_start = Some(now);
+        self.uplink_failover_convergence = None;
+        self.uplink_failover_count += 1;
+        self.etw.event(201, &format!("uplink {} down at {:?}, failover count={}", id.0, now, self.uplink_failover_count));
     }
 
     pub fn on_probe_ok(&mut self, id: UplinkId, rtt: Duration, now: Instant) {
@@ -805,6 +852,17 @@ impl<C: Crypto + Clone> Service<C> {
 
     pub fn on_relay_ack(&mut self, now: Instant) {
         self.relay_last_ack = Some(now);
+        // If we were in failover, measure convergence time (first ACK after failover)
+        if let Some(start) = self.relay_failover_start.take() {
+            let convergence = now.duration_since(start);
+            self.relay_failover_convergence = Some(convergence);
+            self.relay_failover_history.push((start, convergence));
+            // ETW 500 failover convergence
+            self.etw.event(500, &format!("relay failover converged in {}ms count={}", convergence.as_millis(), self.relay_failover_count));
+            if convergence.as_secs_f64() > 2.0 {
+                self.etw.event(500, &format!("WARN failover convergence >2s: {}ms", convergence.as_millis()));
+            }
+        }
     }
 
     pub fn check_relay_failover(&mut self, now: Instant) -> Option<SocketAddr> {
@@ -826,6 +884,9 @@ impl<C: Crypto + Clone> Service<C> {
                 self.relay_current = Some(next_addr);
                 self.relay_last_ack = Some(now);
                 self.relay_failover_count += 1;
+                self.relay_failover_start = Some(now);
+                self.relay_failover_convergence = None;
+                self.etw.event(500, &format!("relay failover: {} -> {} count={} timeout={}s", current, next_addr, self.relay_failover_count, self.relay_failover_timeout.as_secs()));
                 return Some(next_addr);
             }
         }
@@ -845,9 +906,32 @@ impl<C: Crypto + Clone> Service<C> {
     pub fn relay_failover_count(&self) -> u64 {
         self.relay_failover_count
     }
+    pub fn relay_failover_convergence(&self) -> Option<Duration> {
+        self.relay_failover_convergence
+    }
+    pub fn relay_failover_history(&self) -> &[(Instant, Duration)] {
+        &self.relay_failover_history
+    }
+    pub fn relay_failover_start(&self) -> Option<Instant> {
+        self.relay_failover_start
+    }
 
     pub fn set_relay_failover_timeout(&mut self, timeout: Duration) {
         self.relay_failover_timeout = timeout;
+    }
+
+    // Uplink failover convergence Sec.10.3 failover <=2s, Sec.4.5
+    pub fn uplink_failover_count(&self) -> u64 {
+        self.uplink_failover_count
+    }
+    pub fn uplink_failover_convergence(&self) -> Option<Duration> {
+        self.uplink_failover_convergence
+    }
+    pub fn uplink_failover_history(&self) -> &[(UplinkId, Instant, Duration)] {
+        &self.uplink_failover_history
+    }
+    pub fn uplink_failover_start(&self) -> Option<Instant> {
+        self.uplink_failover_start
     }
 
     // ----------------------------------------------- per-flow sessions (Sec.4.7.4)

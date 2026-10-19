@@ -29,6 +29,9 @@ pub struct SupportBundle {
     pub held_packets: usize,
     pub relay_current: Option<String>,
     pub relay_failover_count: u64,
+    pub relay_failover_convergence_ms: Option<u64>,
+    pub uplink_failover_count: u64,
+    pub uplink_failover_convergence_ms: Option<u64>,
     pub rekey: RekeyDiag,
     pub congestion: CongestionDiag,
     pub warnings: Vec<String>,
@@ -133,6 +136,9 @@ impl SupportBundle {
             held_packets: svc.held_packets(),
             relay_current: svc.relay_current().map(|a| a.to_string()),
             relay_failover_count: svc.relay_failover_count(),
+            relay_failover_convergence_ms: svc.relay_failover_convergence().map(|d| d.as_millis() as u64),
+            uplink_failover_count: svc.uplink_failover_count(),
+            uplink_failover_convergence_ms: svc.uplink_failover_convergence().map(|d| d.as_millis() as u64),
             rekey,
             congestion,
             warnings: Vec::new(),
@@ -141,7 +147,7 @@ impl SupportBundle {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_current\":{},\"failovers\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{},\"per_path\":{}}}",
+            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_current\":{},\"failovers\":{},\"relay_conv_ms\":{},\"uplink_failovers\":{},\"uplink_conv_ms\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{},\"per_path\":{}}}",
             self.timestamp,
             self.service_version,
             self.schema_version,
@@ -150,6 +156,9 @@ impl SupportBundle {
             self.sessions,
             self.relay_current.as_ref().map(|s| format!("\"{}\"", s)).unwrap_or_else(|| "null".to_string()),
             self.relay_failover_count,
+            self.relay_failover_convergence_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+            self.uplink_failover_count,
+            self.uplink_failover_convergence_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
             self.congestion.loss_events,
             self.congestion.ecn_events,
             self.congestion.delay_events,
