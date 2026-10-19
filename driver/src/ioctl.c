@@ -1,0 +1,229 @@
+// Balancify WDF control device + IOCTLs -- Phase 2 S2b
+// Minimal control device for service to talk to miniport: set MTU, inject NBL, query stats
+// Length-validated, fuzzed same gate as tunnel (no third-party kernel component in data path)
+// Build with WDK 10.0.22621+, test-signed, Driver Verifier on
+// References: blueprint Sec.6.1 TAP-like adapter, Sec.4.5 pause/resume, Sec.8.2 diagnostics, C2
+
+#include <ndis.h>
+#include <wdf.h>
+#include <ntstrsafe.h>
+
+#define BALANCIFY_TAG 'laBB'
+#define BALANCIFY_DEVICE_NAME L"\\Device\\Balancify"
+#define BALANCIFY_DOS_NAME L"\\DosDevices\\Balancify"
+
+// IOCTLs (METHOD_BUFFERED, FILE_ANY_ACCESS, custom codes 0x800-0x8FF)
+#define IOCTL_BALANCIFY_SET_MTU CTL_CODE(FILE_DEVICE_NETWORK, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_BALANCIFY_INJECT_NBL CTL_CODE(FILE_DEVICE_NETWORK, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_BALANCIFY_SET_QUANTA CTL_CODE(FILE_DEVICE_NETWORK, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// Input for SET_MTU: ULONG mtu
+// Input for GET_STATS: none, output: BALANCIFY_STATS
+// Input for INJECT_NBL: raw IP packet (max 1500) to inject as NBL into NDIS stack
+// Input for SET_QUANTA: array of (u8 path, u64 quanta)
+
+typedef struct _BALANCIFY_STATS {
+    ULONG64 txPackets;
+    ULONG64 rxPackets;
+    ULONG64 txBytes;
+    ULONG64 rxBytes;
+    ULONG mtu;
+    BOOLEAN paused;
+} BALANCIFY_STATS, *PBALANCIFY_STATS;
+
+typedef struct _BALANCIFY_QUANTA {
+    UCHAR path;
+    ULONGLONG quanta;
+} BALANCIFY_QUANTA, *PBALANCIFY_QUANTA;
+
+// Forward decls from miniport.c
+typedef struct _BALANCIFY_ADAPTER BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;
+extern NDIS_HANDLE gDriverHandle;
+
+// Control device context
+typedef struct _BALANCIFY_CONTROL {
+    PBALANCIFY_ADAPTER adapter; // associated miniport adapter (one for now)
+} BALANCIFY_CONTROL, *PBALANCIFY_CONTROL;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(BALANCIFY_CONTROL, BalancifyControlGetData)
+
+EVT_WDF_DEVICE_FILE_CREATE BalancifyEvtDeviceFileCreate;
+EVT_WDF_FILE_CLOSE BalancifyEvtFileClose;
+EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL BalancifyEvtIoDeviceControl;
+
+// Create control device in MiniportInitializeEx (called from miniport.c)
+NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapter) {
+    NTSTATUS status;
+    WDFDEVICE device;
+    PWDFDEVICE_INIT deviceInit;
+    WDF_OBJECT_ATTRIBUTES deviceAttributes;
+    WDF_IO_QUEUE_CONFIG queueConfig;
+    WDF_FILEOBJECT_CONFIG fileConfig;
+    UNICODE_STRING deviceName, dosName;
+    PBALANCIFY_CONTROL control;
+
+    RtlInitUnicodeString(&deviceName, BALANCIFY_DEVICE_NAME);
+    RtlInitUnicodeString(&dosName, BALANCIFY_DOS_NAME);
+
+    deviceInit = WdfControlDeviceInitAllocate(driver, &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
+    if (!deviceInit) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    WdfDeviceInitSetDeviceType(deviceInit, FILE_DEVICE_NETWORK);
+    WdfDeviceInitSetCharacteristics(deviceInit, FILE_DEVICE_SECURE_OPEN, FALSE);
+    status = WdfDeviceInitAssignName(deviceInit, &deviceName);
+    if (!NT_SUCCESS(status)) {
+        WdfDeviceInitFree(deviceInit);
+        return status;
+    }
+
+    WDF_FILEOBJECT_CONFIG_INIT(&fileConfig, BalancifyEvtDeviceFileCreate, BalancifyEvtFileClose, WDF_NO_EVENT_CALLBACK);
+    WdfDeviceInitSetFileObjectConfig(deviceInit, &fileConfig, WDF_NO_OBJECT_ATTRIBUTES);
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, BALANCIFY_CONTROL);
+    status = WdfDeviceCreate(&deviceInit, &deviceAttributes, &device);
+    if (!NT_SUCCESS(status)) {
+        WdfDeviceInitFree(deviceInit);
+        return status;
+    }
+
+    control = BalancifyControlGetData(device);
+    control->adapter = adapter;
+
+    WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig, WdfIoQueueDispatchParallel);
+    queueConfig.EvtIoDeviceControl = BalancifyEvtIoDeviceControl;
+
+    status = WdfIoQueueCreate(device, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, WDF_NO_HANDLE);
+    if (!NT_SUCCESS(status)) {
+        WdfObjectDelete(device);
+        return status;
+    }
+
+    WdfControlFinishInitializing(device);
+
+    status = WdfSymlinkCreate(&dosName, &deviceName);
+    if (!NT_SUCCESS(status)) {
+        WdfObjectDelete(device);
+        return status;
+    }
+
+    adapter->controlDevice = device;
+
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: Control device created %wZ\n", &deviceName));
+    return STATUS_SUCCESS;
+}
+
+VOID BalancifyEvtDeviceFileCreate(WDFDEVICE device, WDFREQUEST request, WDFFILEOBJECT fileObject) {
+    UNREFERENCED_PARAMETER(device);
+    UNREFERENCED_PARAMETER(fileObject);
+    WdfRequestComplete(request, STATUS_SUCCESS);
+}
+
+VOID BalancifyEvtFileClose(WDFFILEOBJECT fileObject) {
+    UNREFERENCED_PARAMETER(fileObject);
+}
+
+VOID BalancifyEvtIoDeviceControl(
+    WDFQUEUE queue,
+    WDFREQUEST request,
+    size_t outputBufferLength,
+    size_t inputBufferLength,
+    ULONG ioControlCode) {
+    NTSTATUS status = STATUS_NOT_SUPPORTED;
+    WDFDEVICE device = WdfIoQueueGetDevice(queue);
+    PBALANCIFY_CONTROL control = BalancifyControlGetData(device);
+    PBALANCIFY_ADAPTER adapter = control->adapter;
+    size_t bytesReturned = 0;
+    PVOID inputBuffer = NULL;
+    PVOID outputBuffer = NULL;
+
+    // Length validation: all IOCTLs use METHOD_BUFFERED, so buffers are in request
+    switch (ioControlCode) {
+    case IOCTL_BALANCIFY_SET_MTU: {
+        if (inputBufferLength < sizeof(ULONG)) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        status = WdfRequestRetrieveInputBuffer(request, sizeof(ULONG), &inputBuffer, NULL);
+        if (!NT_SUCCESS(status)) break;
+        ULONG mtu = *(PULONG)inputBuffer;
+        if (mtu < 576 || mtu > 9000) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        // Update adapter MTU (Sec.6.1)
+        NdisAcquireSpinLock(&adapter->lock);
+        adapter->mtu = mtu;
+        NdisReleaseSpinLock(&adapter->lock);
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU %lu\n", mtu));
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_BALANCIFY_GET_STATS: {
+        if (outputBufferLength < sizeof(BALANCIFY_STATS)) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        status = WdfRequestRetrieveOutputBuffer(request, sizeof(BALANCIFY_STATS), &outputBuffer, NULL);
+        if (!NT_SUCCESS(status)) break;
+        PBALANCIFY_STATS stats = (PBALANCIFY_STATS)outputBuffer;
+        NdisAcquireSpinLock(&adapter->lock);
+        stats->txPackets = adapter->txPackets;
+        stats->rxPackets = adapter->rxPackets;
+        stats->txBytes = adapter->txBytes;
+        stats->rxBytes = adapter->rxBytes;
+        stats->mtu = adapter->mtu;
+        stats->paused = adapter->paused;
+        NdisReleaseSpinLock(&adapter->lock);
+        bytesReturned = sizeof(BALANCIFY_STATS);
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_BALANCIFY_INJECT_NBL: {
+        // Inject raw IP packet as NBL into NDIS stack (for testing S2b)
+        // Input: raw IP packet (max 1500), output: none
+        // Length validation: max 9000 (jumbo) to prevent overflow
+        if (inputBufferLength == 0 || inputBufferLength > 9000) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
+        if (!NT_SUCCESS(status)) break;
+        // For skeleton: just count as rx and complete
+        // Real impl: allocate NBL/NB/MDL, copy packet, NdisMIndicateReceiveNetBufferLists
+        NdisAcquireSpinLock(&adapter->lock);
+        adapter->rxPackets++;
+        adapter->rxBytes += inputBufferLength;
+        NdisReleaseSpinLock(&adapter->lock);
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: INJECT_NBL %zu bytes\n", inputBufferLength));
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_BALANCIFY_SET_QUANTA: {
+        // Set DRR quanta from service (Sec.6.4 rule 2)
+        // Input: array of BALANCIFY_QUANTA, count = inputBufferLength / sizeof(BALANCIFY_QUANTA)
+        if (inputBufferLength == 0 || inputBufferLength % sizeof(BALANCIFY_QUANTA) != 0) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (inputBufferLength > 256 * sizeof(BALANCIFY_QUANTA)) {
+            status = STATUS_INVALID_PARAMETER; // max 256 paths
+            break;
+        }
+        status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
+        if (!NT_SUCCESS(status)) break;
+        // For skeleton: just log, real impl would update DRR weights via shared memory or service ring
+        ULONG count = (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA));
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_QUANTA count=%lu\n", count));
+        status = STATUS_SUCCESS;
+        break;
+    }
+    default:
+        status = STATUS_NOT_SUPPORTED;
+        break;
+    }
+
+    WdfRequestCompleteWithInformation(request, status, bytesReturned);
+}

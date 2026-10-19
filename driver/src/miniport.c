@@ -1,4 +1,4 @@
-// Balancify NDIS virtual miniport — Phase 2 S2b skeleton
+// Balancify NDIS virtual miniport -- Phase 2 S2b skeleton
 // This file documents the intended driver layout and compiles on WDK.
 // It is not yet wired to the service data path; S2b requires test-signed
 // load with Driver Verifier and packet loopback through it.
@@ -8,7 +8,7 @@
 //
 // References:
 // - NDIS 6.8 miniport driver model (Windows Driver Kit docs)
-// - blueprint §6.1 TAP-like virtual adapter, §4.5 pause/resume, §6.6 NAT keepalive
+// - blueprint Sec.6.1 TAP-like virtual adapter, Sec.4.5 pause/resume, Sec.6.6 NAT keepalive
 // - No third-party kernel component in data path (C2): only NDIS + WDF
 
 #include <ndis.h>
@@ -17,13 +17,13 @@
 #define BALANCIFY_TAG 'laBB' // 'BBal' reversed
 #define BALANCIFY_POOL_TAG BALANCIFY_TAG
 
-// Adapter context — one per virtual NIC
+// Adapter context -- one per virtual NIC
 typedef struct _BALANCIFY_ADAPTER {
     NDIS_HANDLE miniportAdapterHandle;
     WDFDEVICE controlDevice; // for IOCTLs from service (WDF)
     NDIS_SPIN_LOCK lock;
     BOOLEAN paused;
-    ULONG mtu; // §6.1 adapter MTU, follows narrowest live path
+    ULONG mtu; // Sec.6.1 adapter MTU, follows narrowest live path
     // Stats for OID_GEN_STATISTICS
     ULONG64 txPackets;
     ULONG64 rxPackets;
@@ -32,6 +32,9 @@ typedef struct _BALANCIFY_ADAPTER {
     // Service ring: shared memory for packet exchange (planned)
     // For now, packets are looped back in MiniportSendNetBufferLists
 } BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;
+
+// IOCTL control device (ioctl.c)
+NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapter);
 
 // Forward decls
 DRIVER_INITIALIZE DriverEntry;
@@ -76,6 +79,7 @@ _Use_decl_annotations_
 NDIS_STATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
     NDIS_STATUS status;
     WDF_DRIVER_CONFIG wdfConfig;
+    WDFDRIVER wdfDriver;
     UNREFERENCED_PARAMETER(RegistryPath);
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: DriverEntry\n"));
@@ -84,8 +88,13 @@ NDIS_STATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPat
     wdfConfig.DriverInitFlags |= WdfDriverInitNonPnpDriver;
     wdfConfig.EvtDriverUnload = DriverUnload;
 
-    // In real driver, WdfDriverCreate + NdisMRegisterMiniportDriver
-    // For skeleton, just register NDIS
+    status = WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &wdfConfig, &wdfDriver);
+    if (!NT_SUCCESS(status)) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Balancify: WdfDriverCreate failed 0x%x\n", status));
+        return status;
+    }
+
+    // Now register NDIS miniport
     status = NdisMRegisterMiniportDriver(
         DriverObject, RegistryPath, gNdisDriverContext,
         &gCharacteristics, &gDriverHandle);
@@ -123,8 +132,19 @@ NDIS_STATUS MiniportInitializeEx(
 
     NdisZeroMemory(adapter, sizeof(BALANCIFY_ADAPTER));
     adapter->miniportAdapterHandle = miniportAdapterHandle;
-    adapter->mtu = 1440; // §6.1 default, updated from service via IOCTL
+    adapter->mtu = 1440; // Sec.6.1 default, updated from service via IOCTL
     NdisAllocateSpinLock(&adapter->lock);
+
+    // Create WDF control device for IOCTLs (Sec.8.2, G2 S2b)
+    // In real driver, we need WDFDRIVER handle -- get via WdfGetDriver()
+    {
+        WDFDRIVER wdfDriver = WdfGetDriver();
+        NTSTATUS wdfStatus = BalancifyCreateControlDevice(wdfDriver, adapter);
+        if (!NT_SUCCESS(wdfStatus)) {
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Balancify: Control device creation failed 0x%x\n", wdfStatus));
+            // Non-fatal for skeleton: continue without control device
+        }
+    }
 
     NdisMSetMiniportAttributes(miniportAdapterHandle,
         (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)NULL); // TODO: set registration attributes
@@ -151,7 +171,7 @@ NDIS_STATUS MiniportPause(NDIS_HANDLE miniportAdapterContext, PNDIS_MINIPORT_PAU
     NdisAcquireSpinLock(&adapter->lock);
     adapter->paused = TRUE;
     NdisReleaseSpinLock(&adapter->lock);
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportPause (§4.5 sleep)\n"));
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportPause (Sec.4.5 sleep)\n"));
     return NDIS_STATUS_SUCCESS;
 }
 
@@ -164,7 +184,7 @@ NDIS_STATUS MiniportRestart(
     NdisAcquireSpinLock(&adapter->lock);
     adapter->paused = FALSE;
     NdisReleaseSpinLock(&adapter->lock);
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportRestart (§4.5 resume)\n"));
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportRestart (Sec.4.5 resume)\n"));
     return NDIS_STATUS_SUCCESS;
 }
 
