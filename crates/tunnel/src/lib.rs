@@ -209,6 +209,7 @@ pub struct SenderCounters {
 pub struct Sent {
     pub path: u8,
     pub seq: u64,
+    pub session: u64,
     pub kind: FrameKind,
     pub bytes: Vec<u8>,
 }
@@ -218,18 +219,19 @@ struct RetxEntry {
     path: u8,
     sent_at: Instant,
     reinjections: u8,
+    session: u64,
 }
 
 /// Sender: numbers packets, selects the egress path per packet (Sec.6.4 rule 2),
 /// keeps a bounded retransmission window and reinjects on loss (Sec.6.4 rule 5).
+/// Retransmission is keyed by (session, seq) per Sec.4.7.4 ADR-0011.
 pub struct Sender<C: Crypto> {
     pub session: u64,
-    next_seq: u64,
     next_probe_id: u64,
     crypto: C,
     cfg: SenderConfig,
     drr: DeficitRoundRobin,
-    retx: BTreeMap<u64, RetxEntry>,
+    retx: BTreeMap<(u64, u64), RetxEntry>, // (session, seq)
     retx_bytes: usize,
     /// Per-session sequence counters for per-flow sessions (Sec.4.7.4)
     session_seqs: BTreeMap<u64, u64>,
@@ -249,7 +251,6 @@ impl<C: Crypto> Sender<C> {
         seqs.insert(session, 0);
         Self {
             session,
-            next_seq: 0,
             next_probe_id: 0,
             crypto,
             cfg,
@@ -264,15 +265,12 @@ impl<C: Crypto> Sender<C> {
     }
 
     fn next_seq_for(&mut self, session: u64) -> u64 {
-        // For now, seq is globally unique across sessions to keep retx simple.
-        // We also track per-session seq for telemetry.
-        let global = self.next_seq;
-        self.next_seq += 1;
+        // Per-session sequence space (ADR-0011): each session has its own counter,
+        // retx keyed by (session, seq). This enables true per-flow session demux.
         let entry = self.session_seqs.entry(session).or_insert(0);
+        let cur = *entry;
         *entry += 1;
-        // Keep default session map in sync
-        self.session_seqs.insert(self.session, self.next_seq);
-        global
+        cur
     }
 
     /// Update path quanta when the control plane republishes weights (Sec.6.1).
@@ -289,8 +287,12 @@ impl<C: Crypto> Sender<C> {
     /// unreachable, and their RTO timers would only reinject into the void
     /// (Sec.6.6 "re-key path, keep session"). Returns the packets dropped.
     pub fn forget_path(&mut self, path: u8) -> u64 {
-        let stale: Vec<u64> =
-            self.retx.iter().filter(|(_, e)| e.path == path).map(|(k, _)| *k).collect();
+        let stale: Vec<(u64, u64)> = self
+            .retx
+            .iter()
+            .filter(|(_, e)| e.path == path)
+            .map(|(k, _)| *k)
+            .collect();
         for k in &stale {
             if let Some(e) = self.retx.remove(k) {
                 self.retx_bytes = self.retx_bytes.saturating_sub(e.plain.len());
@@ -309,7 +311,12 @@ impl<C: Crypto> Sender<C> {
         n
     }
     pub fn in_flight(&self) -> usize { self.retx.len() }
-    pub fn next_seq(&self) -> u64 { self.next_seq }
+    pub fn next_seq(&self) -> u64 {
+        self.session_seqs.get(&self.session).copied().unwrap_or(0)
+    }
+    pub fn next_seq_for_session(&self, session: u64) -> u64 {
+        self.session_seqs.get(&session).copied().unwrap_or(0)
+    }
     pub fn path_stats(&self, path: u8) -> PathStats { self.stats.get(&path).copied().unwrap_or_default() }
     pub fn config(&self) -> &SenderConfig { &self.cfg }
     pub fn crypto(&self) -> &C { &self.crypto }
@@ -325,27 +332,24 @@ impl<C: Crypto> Sender<C> {
     /// uplink sheds load to the others instead of being overrun (Sec.6.4 rule 4).
     /// `None` when no path can carry the packet; the caller then holds it.
     pub fn send_excluding(&mut self, plain: &[u8], now: Instant, blocked: &[u8]) -> Option<Sent> {
-        let path = self.drr.next_filtered(plain.len().max(1) as u64, blocked)?;
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        let bytes = self.frame(FrameKind::Data, path, seq, 0, plain);
-        self.counters.data_frames += 1;
-        self.counters.bytes_sealed += bytes.len() as u64;
-        self.stat(path).sent += 1;
-        self.remember(seq, plain, path, now);
-        Some(Sent { path, seq, kind: FrameKind::Data, bytes })
+        self.send_excluding_with_session(plain, self.session, now, blocked)
     }
 
     /// Sec.6.4 rule 5 duplicate mode: the same payload and seq on a second path.
     /// The receiver deduplicates by seq, so the copy is free at the inner stack
     /// and buys tail latency for small critical packets.
+    /// Default session variant (backward compat).
     pub fn duplicate(&mut self, plain: &[u8], seq: u64, path: u8) -> Option<Sent> {
+        self.duplicate_with_session(plain, self.session, seq, path)
+    }
+
+    pub fn duplicate_with_session(&mut self, plain: &[u8], session: u64, seq: u64, path: u8) -> Option<Sent> {
         if !self.paths().contains(&path) { return None; }
-        let bytes = self.frame(FrameKind::Data, path, seq, FLAG_DUPLICATE, plain);
+        let bytes = self.frame_with_session(FrameKind::Data, path, session, seq, FLAG_DUPLICATE, plain);
         self.counters.duplicates += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
-        Some(Sent { path, seq, kind: FrameKind::Data, bytes })
+        Some(Sent { path, seq, session, kind: FrameKind::Data, bytes })
     }
 
     /// Flow-level lane (Sec.6.2): send one packet of a non-striped flow on a
@@ -362,7 +366,7 @@ impl<C: Crypto> Sender<C> {
         self.counters.flow_packets += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
-        Some(Sent { path, seq: 0, kind: FrameKind::FlowData, bytes })
+        Some(Sent { path, seq: 0, session, kind: FrameKind::FlowData, bytes })
     }
 
     pub fn send_with_session(&mut self, plain: &[u8], session: u64, now: Instant) -> Option<Sent> {
@@ -376,17 +380,15 @@ impl<C: Crypto> Sender<C> {
         self.counters.data_frames += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
-        // For per-flow sessions, seq is per-session; retx still keyed by seq+session? For now keep global retx keyed by seq only for simplicity
-        // but store with session in mind -- we store seq as global unique per session map
-        self.remember(seq, plain, path, now);
-        Some(Sent { path, seq, kind: FrameKind::Data, bytes })
+        self.remember(session, seq, plain, path, now);
+        Some(Sent { path, seq, session, kind: FrameKind::Data, bytes })
     }
 
     /// Per-path NAT keepalive (Sec.6.6). Consumes no sequence number.
     pub fn keepalive(&mut self, path: u8) -> Sent {
         let bytes = self.frame(FrameKind::Keepalive, path, 0, 0, &[]);
         self.counters.keepalives += 1;
-        Sent { path, seq: 0, kind: FrameKind::Keepalive, bytes }
+        Sent { path, seq: 0, session: self.session, kind: FrameKind::Keepalive, bytes }
     }
 
     /// Health / capacity probe (Sec.6.5 probes are tunnel control messages;
@@ -398,27 +400,35 @@ impl<C: Crypto> Sender<C> {
         let bytes = self.frame(FrameKind::Probe, path, id, 0, &vec![0u8; pad]);
         self.counters.probes += 1;
         self.stat(path).probes += 1;
-        Sent { path, seq: id, kind: FrameKind::Probe, bytes }
+        Sent { path, seq: id, session: self.session, kind: FrameKind::Probe, bytes }
     }
 
     /// Answer to a probe; the peer measures RTT from it.
     pub fn probe_reply(&self, path: u8, probe_id: u64) -> Sent {
         let bytes = self.frame(FrameKind::ProbeReply, path, probe_id, 0, &[]);
-        Sent { path, seq: probe_id, kind: FrameKind::ProbeReply, bytes }
+        Sent { path, seq: probe_id, session: self.session, kind: FrameKind::ProbeReply, bytes }
     }
 
-    /// Cumulative ACK for everything up to and including `up_to`.
+    /// Cumulative ACK for everything up to and including `up_to` on default session.
     pub fn ack(&self, path: u8, up_to: u64) -> Sent {
         self.ack_with_flags(path, up_to, 0)
     }
 
     pub fn ack_with_flags(&self, path: u8, up_to: u64, flags: u8) -> Sent {
-        let bytes = self.frame(FrameKind::Ack, path, up_to, flags, &[]);
-        Sent { path, seq: up_to, kind: FrameKind::Ack, bytes }
+        self.ack_for_session(self.session, path, up_to, flags)
+    }
+
+    pub fn ack_for_session(&self, session: u64, path: u8, up_to: u64, flags: u8) -> Sent {
+        let bytes = self.frame_with_session(FrameKind::Ack, path, session, up_to, flags, &[]);
+        Sent { path, seq: up_to, session, kind: FrameKind::Ack, bytes }
     }
 
     pub fn ack_with_ecn(&self, path: u8, up_to: u64) -> Sent {
         self.ack_with_flags(path, up_to, FLAG_ECN_CE)
+    }
+
+    pub fn ack_with_ecn_for_session(&self, session: u64, path: u8, up_to: u64) -> Sent {
+        self.ack_for_session(session, path, up_to, FLAG_ECN_CE)
     }
 
     /// Record a probe reply: RTT sample for this path (Sec.6.3).
@@ -441,8 +451,19 @@ impl<C: Crypto> Sender<C> {
     /// Attributing the whole range to the path the ACK arrived on would inflate
     /// that path's estimate and starve the others of samples, which corrupts
     /// the DRR quanta (Sec.6.3a, Sec.6.4 rule 2).
+    ///
+    /// Now keyed by (session, seq) per ADR-0011.
     pub fn on_ack(&mut self, up_to: u64, _now: Instant) -> Vec<(u8, u64)> {
-        let keys: Vec<u64> = self.retx.range(..=up_to).map(|(k, _)| *k).collect();
+        self.on_ack_for_session(self.session, up_to, _now)
+    }
+
+    pub fn on_ack_for_session(&mut self, session: u64, up_to: u64, _now: Instant) -> Vec<(u8, u64)> {
+        // Collect keys where session matches and seq <= up_to
+        let keys: Vec<(u64, u64)> = self
+            .retx
+            .range((session, 0)..=(session, up_to))
+            .map(|(k, _)| *k)
+            .collect();
         let mut per_path: Vec<(u8, u64)> = Vec::new();
         for k in keys {
             let Some(entry) = self.retx.remove(&k) else { continue };
@@ -462,7 +483,7 @@ impl<C: Crypto> Sender<C> {
     pub fn reinjections_due(&mut self, now: Instant) -> Vec<Sent> {
         let rto = self.cfg.rto;
         let max_re = self.cfg.max_reinjections;
-        let due: Vec<u64> = self
+        let due: Vec<(u64, u64)> = self
             .retx
             .iter()
             .filter(|(_, e)| e.reinjections < max_re && now.duration_since(e.sent_at) >= rto)
@@ -470,18 +491,18 @@ impl<C: Crypto> Sender<C> {
             .collect();
 
         let mut out = Vec::with_capacity(due.len());
-        for seq in due {
-            let (plain, old_path) = match self.retx.get(&seq) {
+        for (session, seq) in due {
+            let (plain, old_path) = match self.retx.get(&(session, seq)) {
                 Some(e) => (e.plain.clone(), e.path),
                 None => continue,
             };
             let Some(new_path) = self.drr.next_excluding(old_path, plain.len().max(1) as u64) else {
                 continue; // single-path session: reinjection would buy nothing
             };
-            let bytes = self.frame(FrameKind::Data, new_path, seq, FLAG_REINJECTED, &plain);
+            let bytes = self.frame_with_session(FrameKind::Data, new_path, session, seq, FLAG_REINJECTED, &plain);
             self.counters.reinjections += 1;
             self.counters.bytes_sealed += bytes.len() as u64;
-            if let Some(e) = self.retx.get_mut(&seq) {
+            if let Some(e) = self.retx.get_mut(&(session, seq)) {
                 e.path = new_path;
                 e.sent_at = now;
                 e.reinjections += 1;
@@ -491,14 +512,17 @@ impl<C: Crypto> Sender<C> {
             let s = self.stat(new_path);
             s.reinjections += 1;
             s.sent += 1;
-            out.push(Sent { path: new_path, seq, kind: FrameKind::Data, bytes });
+            out.push(Sent { path: new_path, seq, session, kind: FrameKind::Data, bytes });
         }
         out
     }
 
-    fn remember(&mut self, seq: u64, plain: &[u8], path: u8, now: Instant) {
+    fn remember(&mut self, session: u64, seq: u64, plain: &[u8], path: u8, now: Instant) {
         self.retx_bytes += plain.len();
-        self.retx.insert(seq, RetxEntry { plain: plain.to_vec(), path, sent_at: now, reinjections: 0 });
+        self.retx.insert(
+            (session, seq),
+            RetxEntry { plain: plain.to_vec(), path, sent_at: now, reinjections: 0, session },
+        );
         while self.retx_bytes > self.cfg.max_retx_bytes {
             let Some((_, oldest)) = self.retx.pop_first() else { break; };
             self.retx_bytes = self.retx_bytes.saturating_sub(oldest.plain.len());

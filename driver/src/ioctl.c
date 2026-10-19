@@ -182,22 +182,64 @@ VOID BalancifyEvtIoDeviceControl(
         break;
     }
     case IOCTL_BALANCIFY_INJECT_NBL: {
-        // Inject raw IP packet as NBL into NDIS stack (for testing S2b)
-        // Input: raw IP packet (max 1500), output: none
-        // Length validation: max 9000 (jumbo) to prevent overflow
-        if (inputBufferLength == 0 || inputBufferLength > 9000) {
+        // Inject raw IP packet as NBL into NDIS stack (S2b socket test through miniport)
+        // Input: raw IP packet (max 9000), output: none
+        // Real impl: allocate MDL/NBL, copy packet, NdisMIndicateReceiveNetBufferLists (Sec.6.1)
+        // Length validation: min 20 (IP header) max 9000 (jumbo) to prevent overflow
+        if (inputBufferLength < 20 || inputBufferLength > 9000) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
         status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
-        // For skeleton: just count as rx and complete
-        // Real impl: allocate NBL/NB/MDL, copy packet, NdisMIndicateReceiveNetBufferLists
+
+        // Allocate MDL for the packet (NdisAllocateMdl requires adapter handle)
+        PMDL mdl = NdisAllocateMdl(adapter->miniportAdapterHandle, inputBuffer, (ULONG)inputBufferLength);
+        if (!mdl) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        // Allocate NBL/NB from pool (pool created in MiniportInitializeEx)
+        PNET_BUFFER_LIST nbl = NULL;
+        if (adapter->netBufferListPool) {
+            nbl = NdisAllocateNetBufferAndNetBufferList(
+                adapter->netBufferListPool,
+                0, 0,
+                mdl,
+                0,
+                (ULONG)inputBufferLength);
+        }
+
+        if (!nbl) {
+            NdisFreeMdl(mdl);
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        NBL_SET_PORT_NUMBER(nbl, 0);
+
         NdisAcquireSpinLock(&adapter->lock);
         adapter->rxPackets++;
         adapter->rxBytes += inputBufferLength;
+        BOOLEAN paused = adapter->paused;
         NdisReleaseSpinLock(&adapter->lock);
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: INJECT_NBL %zu bytes\n", inputBufferLength));
+
+        if (paused) {
+            NdisFreeNetBufferList(nbl);
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        // Indicate to NDIS stack (Sec.6.1 TAP-like adapter, S2b)
+        NdisMIndicateReceiveNetBufferLists(
+            adapter->miniportAdapterHandle,
+            nbl,
+            NDIS_DEFAULT_PORT_NUMBER,
+            1,
+            NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL);
+
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: INJECT_NBL %zu bytes indicated\n", inputBufferLength));
         status = STATUS_SUCCESS;
         break;
     }

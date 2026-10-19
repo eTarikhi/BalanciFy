@@ -536,7 +536,12 @@ impl<C: Crypto + Clone> Service<C> {
             if self.cfg.duplicate_mode && should_duplicate(payload.len(), critical, true) {
                 if let Some(other) = self.other_path(sent.path) {
                     if self.cc.allows(other, cost) {
-                        if let Some(copy) = self.tx.duplicate(payload, sent.seq, other) {
+                        let copy_opt = if use_custom {
+                            self.tx.duplicate_with_session(payload, sess, sent.seq, other)
+                        } else {
+                            self.tx.duplicate(payload, sent.seq, other)
+                        };
+                        if let Some(copy) = copy_opt {
                             self.cc.on_send(copy.path, payload.len() as u64);
                             self.pacing.on_send(copy.path, payload.len() as u64, now);
                             self.counters.duplicates_sent += 1;
@@ -584,6 +589,7 @@ impl<C: Crypto + Clone> Service<C> {
 
     /// One datagram received on an uplink's socket.
     pub fn ingest_path(&mut self, uplink: UplinkId, dg: &[u8], now: Instant) -> Vec<Action> {
+        let mut is_flow_data = false;
         if let Some((hdr, _)) = Header::decode(dg) {
             // ECN CE mark on any frame (Sec.6.4 rule 4)
             if hdr.flags & balancify_tunnel::FLAG_ECN_CE != 0 {
@@ -597,9 +603,10 @@ impl<C: Crypto + Clone> Service<C> {
                     );
                 }
             }
+            is_flow_data = hdr.kind == FrameKind::FlowData;
             match hdr.kind {
                 FrameKind::Ack => {
-                    for (path, bytes) in self.tx.on_ack(hdr.seq, now) {
+                    for (path, bytes) in self.tx.on_ack_for_session(hdr.session, hdr.seq, now) {
                         if bytes == 0 { continue; }
                         self.policy.on_ack(UplinkId(path), bytes, now);
                         let before_delay = self.cc.delay_events();
@@ -641,6 +648,11 @@ impl<C: Crypto + Clone> Service<C> {
             match &ev {
                 Event::Dropped { reason } if matches!(reason, balancify_tunnel::DropReason::AuthFailed) => {
                     self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
+                }
+                Event::Payload { data, .. } if is_flow_data => {
+                    // Explicit flow-level ACK (Sec.6.3): flow lane ACK clock
+                    self.policy.on_flow_ack(uplink, data.len() as u64, now);
+                    self.policy.on_ack(uplink, data.len() as u64, now);
                 }
                 _ => {}
             }

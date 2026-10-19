@@ -20,6 +20,8 @@
 // Adapter context -- one per virtual NIC
 typedef struct _BALANCIFY_ADAPTER {
     NDIS_HANDLE miniportAdapterHandle;
+    NDIS_HANDLE netBufferListPool;
+    NDIS_HANDLE netBufferPool;
     WDFDEVICE controlDevice; // for IOCTLs from service (WDF)
     NDIS_SPIN_LOCK lock;
     BOOLEAN paused;
@@ -135,6 +137,25 @@ NDIS_STATUS MiniportInitializeEx(
     adapter->mtu = 1440; // Sec.6.1 default, updated from service via IOCTL
     NdisAllocateSpinLock(&adapter->lock);
 
+    // Create NBL pool for RX injection (S2b INJECT_NBL -> NdisMIndicateReceiveNetBufferLists)
+    {
+        NET_BUFFER_LIST_POOL_PARAMETERS nblParams;
+        NdisZeroMemory(&nblParams, sizeof(nblParams));
+        nblParams.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+        nblParams.Header.Revision = NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
+        nblParams.Header.Size = NDIS_SIZEOF_NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
+        nblParams.ProtocolId = NDIS_PROTOCOL_ID_DEFAULT;
+        nblParams.fAllocateNetBuffer = TRUE;
+        nblParams.ContextSize = 0;
+        nblParams.PoolTag = BALANCIFY_POOL_TAG;
+        nblParams.DataSize = 0;
+        adapter->netBufferListPool = NdisAllocateNetBufferListPool(miniportAdapterHandle, &nblParams);
+        if (!adapter->netBufferListPool) {
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Balancify: NdisAllocateNetBufferListPool failed\n"));
+            // Non-fatal for skeleton, but injection will fail
+        }
+    }
+
     // Create WDF control device for IOCTLs (Sec.8.2, G2 S2b)
     // In real driver, we need WDFDRIVER handle -- get via WdfGetDriver()
     {
@@ -159,6 +180,10 @@ VOID MiniportHaltEx(NDIS_HANDLE miniportAdapterContext, NDIS_HALT_ACTION haltAct
     UNREFERENCED_PARAMETER(haltAction);
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportHaltEx\n"));
     if (adapter) {
+        if (adapter->netBufferListPool) {
+            NdisFreeNetBufferListPool(adapter->netBufferListPool);
+            adapter->netBufferListPool = NULL;
+        }
         NdisFreeSpinLock(&adapter->lock);
         NdisFreeMemory(adapter, sizeof(BALANCIFY_ADAPTER), 0);
     }
@@ -231,12 +256,22 @@ VOID MiniportReturnNetBufferLists(
     PNET_BUFFER_LIST curr = netBufferLists;
     while (curr) {
         PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(curr);
-        NdisAcquireSpinLock(&adapter->lock);
-        adapter->rxPackets++;
-        NdisReleaseSpinLock(&adapter->lock);
+        // For RX NBLs we allocated, free MDL chain then NBL
+        PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr);
+        if (nb) {
+            PMDL mdl = NET_BUFFER_FIRST_MDL(nb);
+            // The MDL was allocated via NdisAllocateMdl and owns the buffer copy
+            // Free chain if present (normally single MDL for injected packet)
+            PMDL nextMdl = NULL;
+            for (PMDL m = mdl; m; m = nextMdl) {
+                nextMdl = m->Next;
+                NdisFreeMdl(m);
+            }
+        }
         NdisFreeNetBufferList(curr);
         curr = next;
     }
+    UNREFERENCED_PARAMETER(adapter);
     UNREFERENCED_PARAMETER(returnFlags);
 }
 

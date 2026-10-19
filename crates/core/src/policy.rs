@@ -212,6 +212,11 @@ impl PolicyEngine {
         if let Some(u) = self.uplinks.get_mut(&id) { u.capacity.on_flow_packet(bytes, now); }
     }
 
+    /// Explicit flow-level ACK (Sec.6.3): flow lane ACK clock.
+    pub fn on_flow_ack(&mut self, id: UplinkId, bytes: u64, now: Instant) {
+        if let Some(u) = self.uplinks.get_mut(&id) { u.capacity.on_flow_ack(bytes, now); }
+    }
+
     /// Ask whether an idle capacity probe may be sent, and how large (Sec.6.3
     /// bounded probing). Returns `Some((uplink, bytes))`.
     pub fn request_idle_probe(&mut self, want_bytes: u64, now: Instant) -> Option<(UplinkId, u64)> {
