@@ -577,7 +577,7 @@ impl<C: Crypto + Clone> Service<C> {
                     self.counters.ecn_ce += 1;
                     self.etw.info(
                         etw::EVT_ECN_CE,
-                        &format!(\"ECN CE on path {} uplink {:?} cwnd={}\", hdr.path, uplink, self.cc.window(hdr.path)),
+                        &format!("ECN CE on path {} uplink {:?} cwnd={}", hdr.path, uplink, self.cc.window(hdr.path)),
                     );
                 }
             }
@@ -592,7 +592,7 @@ impl<C: Crypto + Clone> Service<C> {
                             self.counters.delay_events += 1;
                             self.etw.info(
                                 etw::EVT_DELAY_CONGESTION,
-                                &format!(\"delay congestion on path {} uplink {:?}\", path, uplink),
+                                &format!("delay congestion on path {} uplink {:?}", path, uplink),
                             );
                         }
                     }
@@ -610,7 +610,7 @@ impl<C: Crypto + Clone> Service<C> {
                             self.counters.delay_events += 1;
                             self.etw.info(
                                 etw::EVT_DELAY_CONGESTION,
-                                &format!(\"delay congestion via probe path {} rtt={:?}\", hdr.path, rtt),
+                                &format!("delay congestion via probe path {} rtt={:?}", hdr.path, rtt),
                             );
                         }
                     }
@@ -624,7 +624,7 @@ impl<C: Crypto + Clone> Service<C> {
         for ev in self.rx.ingest(dg, now) {
             match &ev {
                 Event::Dropped { reason } if matches!(reason, balancify_tunnel::DropReason::AuthFailed) => {
-                    self.etw.error(etw::EVT_AUTH_FAILED, &format!(\"auth failed on uplink {:?}\", uplink));
+                    self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
                 }
                 _ => {}
             }
@@ -1514,7 +1514,7 @@ mod tests {
             s.note_local_endpoint(UplinkId(1), local(5001), now + Duration::from_secs(30)),
             "a new source port is a re-binding"
         );
-        assert_eq!(s.in_flight(UplinkId(1)), 0, "the dead mapping's packets are dropped");
+        assert_eq!(s.in_flight(UplinkId(1)), 0, "the dead mappings packets are dropped");
         assert_eq!(s.in_flight(UplinkId(0)), untouched, "and only that path is re-keyed");
         assert_eq!(s.config().session, session, "the session survives (Sec.6.6)");
         assert_eq!(s.active_flows(), flows_before, "and so does flow affinity");
