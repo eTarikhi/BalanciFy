@@ -1983,6 +1983,35 @@ mod tests {
     }
 
     #[test]
+    fn per_class_sessions_assign_distinct_ids() {
+        let now = Instant::now();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let cfg = ServiceConfig { session: 1, ..ServiceConfig::default() };
+        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        svc.set_per_class_sessions(true);
+
+        let bulk = FlowClass::Bulk;
+        let latency = FlowClass::LatencySensitive;
+        let pinned = FlowClass::Pinned(UplinkId(1));
+
+        let s_bulk = svc.session_for_class(bulk, now);
+        let s_bulk_again = svc.session_for_class(bulk, now);
+        let s_lat = svc.session_for_class(latency, now);
+        let s_pin = svc.session_for_class(pinned, now);
+
+        assert_eq!(s_bulk, s_bulk_again);
+        assert_ne!(s_bulk, s_lat);
+        assert_ne!(s_lat, s_pin);
+        assert_eq!(svc.class_session_count(), 3);
+
+        svc.set_per_class_sessions(false);
+        assert_eq!(svc.class_session_count(), 0);
+    }
+
+    #[test]
     fn ecn_and_delay_wire_via_ingest() {
         let now = Instant::now();
         let dummy_key = [0u8; 32];
