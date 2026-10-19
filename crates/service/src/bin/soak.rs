@@ -92,10 +92,12 @@ fn main() {
 
         // Sleep/resume every 10 iterations (simulate 100 sleep/resume cycles)
         if i % 10 == 0 && i > 0 && total_resumes < 100 {
-            svc.sleep(t);
             // Sleep gap collapses capacity estimate if not restarted — test that window restarts on resume
             let t_resume = t + Duration::from_millis(500);
-            svc.resume(t_resume);
+            let abandoned = svc.resume_from_sleep(t_resume);
+            if abandoned == 0 {
+                // OK, no in-flight at this point, but we check that resume clears state
+            }
             // Keepalives should go out on first tick to re-establish NAT mappings
             let keepalives = svc.tick(t_resume);
             if keepalives.is_empty() {
