@@ -178,6 +178,9 @@ pub struct Service<C: Crypto> {
     per_flow_sessions: bool,
     flow_sessions: BTreeMap<FlowKey, u64>,
     next_session_id: u64,
+    /// Per-class session mapping (§4.7.4 alternative to per-flow)
+    per_class_sessions: bool,
+    class_sessions: BTreeMap<u8, u64>, // BondClass as u8 -> session id
     /// Per-uplink rate limiting (service egress)
     rate_limiter: balancify_core::RateLimiter,
     /// Pinned client identities (relay side) and pinned relay identities
@@ -237,6 +240,8 @@ impl<C: Crypto + Clone> Service<C> {
             per_flow_sessions: false,
             flow_sessions: BTreeMap::new(),
             next_session_id: 1000, // start after default session 1
+            per_class_sessions: false,
+            class_sessions: BTreeMap::new(),
             rate_limiter: balancify_core::RateLimiter::new(1_000_000_000, 1_000_000), // 1Gbps default, 1MB burst
             pinned_clients: balancify_crypto::PinnedKeys::new(),
             pinned_relays: balancify_crypto::PinnedKeys::new(),
@@ -469,13 +474,16 @@ impl<C: Crypto + Clone> Service<C> {
         if self.bond_enabled_for(class) {
             let cost = payload.len() as u64;
             let blocked = self.cc.blocked(cost);
-            // Per-flow session: when enabled, use flow's dedicated session id
+            // Session selection: per-flow > per-class > default
             let sess = if self.per_flow_sessions {
                 self.session_for_flow(flow, now)
+            } else if self.per_class_sessions {
+                self.session_for_class(class, now)
             } else {
                 self.cfg.session
             };
-            let sent_opt = if self.per_flow_sessions {
+            let use_custom = self.per_flow_sessions || self.per_class_sessions;
+            let sent_opt = if use_custom {
                 self.tx.send_excluding_with_session(payload, sess, now, &blocked)
             } else {
                 self.tx.send_excluding(payload, now, &blocked)
@@ -522,8 +530,15 @@ impl<C: Crypto + Clone> Service<C> {
         }
 
         // Flow-level lane (§6.2)
-        let sess = if self.per_flow_sessions { self.session_for_flow(flow, now) } else { self.cfg.session };
-        let sent_opt = if self.per_flow_sessions {
+        let sess = if self.per_flow_sessions {
+            self.session_for_flow(flow, now)
+        } else if self.per_class_sessions {
+            self.session_for_class(class, now)
+        } else {
+            self.cfg.session
+        };
+        let use_custom = self.per_flow_sessions || self.per_class_sessions;
+        let sent_opt = if use_custom {
             self.tx.send_flow_with_session(payload, uplink.0, sess, now)
         } else {
             self.tx.send_flow(payload, uplink.0, now)
@@ -814,6 +829,32 @@ impl<C: Crypto + Clone> Service<C> {
 
     pub fn flow_session_count(&self) -> usize {
         self.flow_sessions.len()
+    }
+
+    pub fn set_per_class_sessions(&mut self, enabled: bool) {
+        self.per_class_sessions = enabled;
+        if !enabled {
+            self.class_sessions.clear();
+        }
+    }
+
+    pub fn session_for_class(&mut self, class: BondClass, now: Instant) -> u64 {
+        if !self.per_class_sessions {
+            return self.cfg.session;
+        }
+        let key = class as u8;
+        if let Some(sid) = self.class_sessions.get(&key) {
+            return *sid;
+        }
+        let sid = self.next_session_id;
+        self.next_session_id = self.next_session_id.wrapping_add(1).max(1);
+        self.class_sessions.insert(key, sid);
+        self.rx.open_session(sid, now);
+        sid
+    }
+
+    pub fn class_session_count(&self) -> usize {
+        self.class_sessions.len()
     }
 
     // ----------------------------------------------- rate limiting (service egress)
