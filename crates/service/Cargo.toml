@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Service core: classifies flows, drives both schedulers from one policy snapshot, runs the tunnel lane and serves the IPC contract (sans-I/O)"
 
+[features]
+wintun-fallback = []
+
 [dependencies]
 balancify-core = { path = "../core" }
 balancify-tunnel = { path = "../tunnel" }

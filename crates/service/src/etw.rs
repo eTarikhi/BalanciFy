@@ -27,7 +27,7 @@ pub struct EtwProvider {
 }
 
 #[cfg(windows)]
-struct windows_etw_handle {
+struct WindowsEtwHandle {
     // In real impl: REGHANDLE from EventRegister
     _private: (),
 }
@@ -40,7 +40,7 @@ impl EtwProvider {
             // For stub, just store name
             Self {
                 provider_name: name.to_string(),
-                handle: Some(windows_etw_handle { _private: () }),
+                handle: Some(WindowsEtwHandle { _private: () }),
             }
         }
         #[cfg(not(windows))]

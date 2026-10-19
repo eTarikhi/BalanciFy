@@ -838,11 +838,16 @@ impl<C: Crypto + Clone> Service<C> {
         }
     }
 
-    pub fn session_for_class(&mut self, class: BondClass, now: Instant) -> u64 {
+    pub fn session_for_class(&mut self, class: FlowClass, now: Instant) -> u64 {
         if !self.per_class_sessions {
             return self.cfg.session;
         }
-        let key = class as u8;
+        // FlowClass discriminant as u8: Bulk=0, LatencySensitive=1, Pinned=2
+        let key = match class {
+            FlowClass::Bulk => 0u8,
+            FlowClass::LatencySensitive => 1u8,
+            FlowClass::Pinned(_) => 2u8,
+        };
         if let Some(sid) = self.class_sessions.get(&key) {
             return *sid;
         }
