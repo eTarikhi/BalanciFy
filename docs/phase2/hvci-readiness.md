@@ -21,7 +21,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - Adapter context: miniportAdapterHandle, netBufferListPool, controlDevice, spinlock, paused, mtu, tx/rx counters
 - NBL pool: `NdisAllocateNetBufferListPool` with `fAllocateNetBuffer=TRUE`, `ProtocolId=NDIS_PROTOCOL_ID_DEFAULT`, `PoolTag=BALANCIFY_POOL_TAG`, created in InitializeEx, freed in HaltEx
 - No executable pools: uses `NormalPoolPriority` (NonPagedPoolNx equivalent via NDIS), no `NonPagedPoolExecute`, no inline assembly, no RWX sections
-- WDK build flags (to be added in vcxproj): `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`
+- WDK build flags (now in vcxproj 9115e4f): `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, 10.0.22621.0, NDIS620_MINIPORT, NDIS 6.8
 - Send path: counts txPackets/txBytes, completes NBL immediately (skeleton, real impl copies to service ring)
 - Return path: for RX NBLs injected via IOCTL, frees MDL chain via `NdisFreeMdl` then `NdisFreeNetBufferList`
 
@@ -73,9 +73,10 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 ## Lab progress
 
 - Code: NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists implemented (ADR-0030), length validation, SDDL, no executable pools
-- Docs: this file + `clean-machine-test.md` + `throughput-rows.md`
-- Real VM run: pending (requires WDK 10.0.22621+, Hyper-V VM, test-signing)
-- CI: driver compiles on WDK in theory, but CI currently only checks Rust workspace (no WDK), so driver is not built in CI yet. Future: add WDK build job (Phase 4 job (a) in ci.yml comment)
+- Build: `driver/balancify.vcxproj` exists (9115e4f) with HVCI trio flags, PoolTag BlaB, KMDF 1.33, Universal, 10.0.22621.0 — `msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64` (requires WDK)
+- Docs: this file + `clean-machine-test.md` + `throughput-rows.md` + `lab-progress.md`
+- Real VM run: pending (requires WDK 10.0.22621+, Hyper-V VM Gen2 Secure Boot vTPM VBS, test-signing bcdedit, pnputil)
+- CI: driver not yet built in CI (Rust only), future add WDK build job (Phase 4 job (a) in ci.yml), currently verified via docs + code review + pool flags
 
 ## Next actions
 
