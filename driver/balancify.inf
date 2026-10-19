@@ -1,0 +1,37 @@
+; Balancify NDIS virtual miniport INF — skeleton
+; For test-signing only at this stage
+
+[Version]
+Signature = "$WINDOWS NT$"
+Class = Net
+ClassGuid = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider = %Provider%
+DriverVer = 10/19/2026,0.1.0
+CatalogFile = balancify.cat
+PnpLockdown = 1
+
+[Manufacturer]
+%Provider% = Balancify, NTamd64, NTarm64
+
+[Balancify.NTamd64]
+%Balancify% = Balancify.ndi, ROOT\Balancify
+
+[Balancify.NDarm64]
+%Balancify% = Balancify.ndi, ROOT\Balancify
+
+[Balancify.ndi]
+Characteristics = 0x1 ; NCF_VIRTUAL
+*IfType = 53 ; IF_TYPE_PROP_VIRTUAL
+*MediaType = 0 ; NdisMedium802_3
+*PhysicalMediaType = 0
+AddReg = Balancify.reg
+
+[Balancify.reg]
+HKR, Ndi, Service, 0, "Balancify"
+HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange, 0, "ethernet"
+
+[Strings]
+Provider = "Balancify"
+Balancify = "Balancify Virtual Adapter"
+

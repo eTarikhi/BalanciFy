@@ -1,0 +1,25 @@
+[package]
+name = "balancify-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Payload protection for the tunnel lane: ChaCha20-Poly1305 (RFC 8439) behind the Crypto trait, with the nonce and AAD discipline that makes it safe per path"
+
+[dependencies]
+balancify-tunnel = { path = "../tunnel" }
+# The only third-party runtime dependency in the product, admitted by
+# docs/technical-blueprint.md §4.8 policy rule (c) and ADR-0006: a vetted,
+# audited primitive crate at an exact pin, allowlisted by tools/ci/audit-deps.sh.
+# Blueprint line 309 is explicit that we never roll our own primitives.
+chacha20poly1305 = { workspace = true }
+x25519-dalek = { workspace = true }
+blake2 = { workspace = true }
+hkdf = { workspace = true }
+getrandom = { workspace = true }
+zeroize = { workspace = true }
+
+# The tests drive a real Sender/Receiver pair through the cipher; the regular
+# path dependency above is already in scope for them.
+
+[features]
+dpapi = []

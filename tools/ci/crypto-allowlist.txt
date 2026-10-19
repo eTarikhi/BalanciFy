@@ -1,0 +1,38 @@
+# Third-party crates this product is allowed to depend on.
+#
+# Policy: docs/technical-blueprint.md §4.8 (a runtime component is first-party,
+# a vendored fork we maintain, or "a vetted, pinned cryptography crate") and
+# ADR-0006. tools/ci/audit-deps.sh fails the build on any declared dependency
+# that is not on this list, and on any that is not pinned to an exact version.
+#
+# Direct dependency (the only one declared in a manifest):
+chacha20poly1305   # RFC 8439 AEAD, RustCrypto, Apache-2.0 OR MIT, pinned =0.11.0
+x25519-dalek       # X25519 ECDH, dalek-cryptography, BSD-3-Clause, pinned =2.0.1
+blake2             # BLAKE2s transcript hash, RustCrypto, Apache-2.0 OR MIT, pinned =0.10.6
+hkdf               # RFC 5869 HKDF for the key schedule, RustCrypto, pinned =0.12.4
+getrandom          # OS CSPRNG, rust-random, pinned =0.2.15
+zeroize            # Secure zeroing, RustCrypto, pinned =1.8.1
+
+# Transitive closure of the above, read off the published manifests. Regenerate
+# with `cargo tree -p balancify-crypto --prefix none` once a toolchain is
+# available; until then no Cargo.lock is committed, so the lock check is inert.
+aead
+curve25519-dalek
+fiat-crypto
+subtle
+rand_core
+chacha20
+cipher
+poly1305
+crypto-common
+hybrid-array
+inout
+typenum
+universal-hash
+digest
+crypto-common
+hmac
+zeroize
+cfg-if
+libc
+wasi

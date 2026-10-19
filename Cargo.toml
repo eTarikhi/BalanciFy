@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/tunnel", "crates/relay"]
+members = ["crates/core", "crates/tunnel", "crates/crypto", "crates/relay", "crates/ipc", "crates/service", "crates/client", "installer", "app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,5 +9,20 @@ license = "Proprietary"
 description = "Balancify - Windows multi-WAN bonding and load balancing (first-party core)"
 
 [workspace.dependencies]
-# Vetted, pinned crates only (dependency policy docs/technical-blueprint.md §4.8).
-# Cryptography crates are added in Phase 4 behind the Crypto trait (crates/tunnel).
+# Vetted, pinned crates only (dependency policy docs/technical-blueprint.md §4.8;
+# ADR-0006). Exact pins, and each one must be allowlisted by
+# tools/ci/audit-deps.sh - the audit fails on anything not on that list.
+#
+# The single runtime exception is the AEAD primitive. §4.8 policy rule (c)
+# admits "a vetted, pinned cryptography crate" and the §4.8 table is explicit
+# that we never roll our own primitives; it enters behind the Crypto trait.
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc"] }
+# The Noise-style handshake (§9.2). X25519 for key agreement, BLAKE2s for the
+# transcript hash, HKDF for the key schedule - the three primitives the spec
+# names. `static_secrets` is required to build a key from stored bytes; the
+# ephemeral secret is an argument, so nothing here reaches for an RNG.
+x25519-dalek = { version = "=2.0.1", default-features = false, features = ["alloc", "static_secrets", "zeroize"] }
+blake2 = { version = "=0.10.6", default-features = false }
+hkdf = { version = "=0.12.4", default-features = false }
+getrandom = { version = "=0.2.15", default-features = false, features = ["std"] }
+zeroize = { version = "=1.8.1", default-features = false, features = ["alloc"] }

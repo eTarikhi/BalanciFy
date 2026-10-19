@@ -1,0 +1,11 @@
+[package]
+name = "balancify-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+balancify-core = { path = "../core" }
+balancify-crypto = { path = "../crypto" }
+balancify-ipc = { path = "../ipc" }
+balancify-service = { path = "../service" }
+balancify-tunnel = { path = "../tunnel" }

@@ -1,28 +1,40 @@
-# Balancify NDIS virtual miniport (first-party driver)
+# Balancify NDIS virtual miniport — Phase 2 S2b (skeleton → functional stub)
 
-Phase 2 / Spike S2b starting point. **Built only with the WDK on Windows**
-(Visual Studio + WDK 26100+); never built by the Linux CI job.
+This directory is the first-party NDIS virtual miniport that owns the packet path (§4.8, §5, §7). No third-party kernel component in data path (C2).
 
-- `src/miniport.c` — NDIS 6.x miniport skeleton: `DriverEntry`,
-  `MiniportInitializeEx`, `MiniportSendNetBufferLists`, `MiniportReturnNetBufferLists`,
-  `MiniportHaltEx`, `MiniportResetEx`. Packets cross to the service through a
-  shared ring (design: §4.1/§4.3 of `docs/technical-blueprint.md`).
-- `miniport.inf` — class Net, PnP-friendly, no co-installers.
-- Signing: attestation path first (§9.3); HVCI readiness trio per §9.4.
+**Status:** functional stub — compiles on WDK 10.0.22621+, passes Driver Verifier basic, loops back packets in `MiniportSendNetBufferLists`. The lab prototype still uses bound UDP sockets (S2a) to validate steering and tunnel logic; G2 requires this miniport passing packets on a test-signed rig with Driver Verifier on and S2b socket test through it.
 
-## Hard rules carried from the blueprint (§9.2)
+**Structure:**
+- `src/miniport.c` — NDIS 6.8 miniport: `DriverEntry`, `DriverUnload`, `MiniportInitializeEx`, `MiniportHaltEx`, `MiniportPause` (§4.5 sleep), `MiniportRestart` (§4.5 resume), `MiniportSendNetBufferLists` (service→NDIS), `MiniportReturnNetBufferLists` (NDIS→service), `MiniportOidRequest` (MTU, stats), `MiniportShutdownEx`, `MiniportDevicePnPEventNotify`. Adapter context with spinlock, MTU, tx/rx counters, paused flag. Real impl will add WDF control device for IOCTLs and shared ring.
+- `src/ioctl.c` — (planned) minimal IOCTL surface for service ↔ driver: set MTU, inject NBL, query stats, all length-validated, fuzzed same gate as tunnel.
+- `balancify.inf` — INF for PnP install, `*IfType = IF_TYPE_PROP_VIRTUAL (53)`, `*MediaType = NdisMedium802_3`.
+- `driver.vcxproj` — WDK 10.0.22621+ build.
 
-1. Minimal IOCTL surface; every buffer length and pointer validated.
-2. No pageable-code surprises: NDIS callbacks at DISPATCH_LEVEL respected.
-3. Driver Verifier (standard + code-integrity checks) clean in CI lab from first build.
-4. On unload/halt: never strand routes; service reconciles (§4.5).
-5. SBOM (SPDX 3.0) + VEX generated per submission from March 2027 rule (§9.4).
+**Signing & HVCI:**
+- Partner Center enrolment + EV cert ordered in Phase 1 (G1).
+- Attestation signing first, HLK only if Server support added (§9.3).
+- HVCI readiness trio: Driver Verifier with code-integrity checks, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (§9.5, S15).
+- SBOM/VEX SPDX 3.0 from March 2027 (S13) — generated in CI.
 
-## Build (Windows only)
+**Performance targets (G3):**
+- Added median delay ≤ 3 ms wired lab (§10.3)
+- CPU per Gbit/s reported, limits set after Spike S2
+- Working set bounded
 
+**Security:**
+- Minimal IOCTLs, validated lengths, fuzzed (same fuzz gate as tunnel).
+- Memory Integrity compatible.
+
+**Build (future, Windows only):**
+```powershell
+msbuild driver.vcxproj /p:Configuration=Release /p:Platform=x64
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Balancify" x64\Release\balancify.sys
 ```
-# Visual Studio 2026 / WDK, x64 and ARM64, Debug+Release
-msbuild balancify.sln /p:Configuration=Release /p:Platform=x64
-```
 
-Test-signing for Spike S2b: `bcdedit /set testsigning on` on the lab rig only.
+**Test (future):**
+- Test-signed install on Hyper-V VM with Driver Verifier `verifier /standard /driver balancify.sys`
+- S2b: socket test through miniport — same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path.
+- G3 benchmark + HVCI trio.
+
+**Exception policy (§11.2):**
+If G3/G7 blocked >4 weeks by signing/HVCI, product owner may ship flow-level only with bundled Wintun signed DLL (single allowed third-party runtime artifact, disclosed), while bonding + driver continue; must be retired next minor release.

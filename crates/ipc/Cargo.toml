@@ -1,0 +1,10 @@
+[package]
+name = "balancify-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IPC contract v1 between the Windows service and the desktop shell: versioned, length-checked, first-party framing (blueprint §9.2, Phase 3 M6)"
+
+[dependencies]
+# None: the contract is hand-encoded so the shell and the service agree on one
+# schema without a serialisation dependency (ADR-0004, ADR-0002).

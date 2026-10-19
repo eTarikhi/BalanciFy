@@ -1,0 +1,12 @@
+[package]
+name = "balancify-app"
+version = "0.1.0"
+edition = "2021"
+description = "Balancify desktop shell — IPC client (lab CLI mimicking WinUI shell)"
+
+[[bin]]
+name = "balancify-app"
+path = "src/main.rs"
+
+[dependencies]
+balancify-ipc = { path = "../crates/ipc" }

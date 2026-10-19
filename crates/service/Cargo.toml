@@ -1,0 +1,17 @@
+[package]
+name = "balancify-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Service core: classifies flows, drives both schedulers from one policy snapshot, runs the tunnel lane and serves the IPC contract (sans-I/O)"
+
+[dependencies]
+balancify-core = { path = "../core" }
+balancify-tunnel = { path = "../tunnel" }
+balancify-ipc = { path = "../ipc" }
+balancify-crypto = { path = "../crypto" }
+
+[dev-dependencies]
+# The end-to-end tests drive the lane without a cipher; the shipped service
+# never sees it (ADR-0002).
+balancify-tunnel = { path = "../tunnel", features = ["lab-crypto"] }
