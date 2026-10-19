@@ -23,3 +23,7 @@ zeroize = { workspace = true }
 
 [features]
 dpapi = []
+
+[[bin]]
+name = "crypto-bench"
+path = "src/bin/bench.rs"
