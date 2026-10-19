@@ -15,3 +15,7 @@ path = "src/bin/drr-bench.rs"
 [[bin]]
 name = "pacing-bench"
 path = "src/bin/pacing-bench.rs"
+
+[[bin]]
+name = "ecn-bench"
+path = "src/bin/ecn-bench.rs"
