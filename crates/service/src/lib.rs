@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 pub mod support;
 pub mod etw;
+pub mod wintun;
 pub use balancify_ipc as ipc;
 
 use balancify_core::{
@@ -536,6 +537,8 @@ impl<C: Crypto + Clone> Service<C> {
             return vec![Action::Hold { flow: flow.clone(), data: payload.to_vec() }];
         }
         self.counters.packets_forwarded += 1;
+        // Flow-level capacity: count for estimator even without ACK clock (§6.3)
+        self.policy.on_flow_packet(uplink, payload.len() as u64, now);
         self.packets_since_rekey += 1;
         if self.last_rekey.is_none() {
             self.last_rekey = Some(now);

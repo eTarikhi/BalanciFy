@@ -120,6 +120,14 @@ impl CapacityEstimator {
     /// keepalive scheduler applies (§6.6).
     pub fn note_traffic(&mut self, now: Instant) { self.last_probe_at = Some(now); }
 
+    /// Flow-level lane (§6.2): count flow packets for capacity even without ACK clock.
+    /// Each flow packet contributes to window_bytes, so a flow-only link still learns capacity.
+    pub fn on_flow_packet(&mut self, bytes: u64, now: Instant) {
+        self.window_bytes += bytes;
+        self.roll(now);
+        self.note_traffic(now);
+    }
+
     /// Feed the result of an idle probe: capacity = bytes * 8 / rtt.
     /// A zero-byte probe carries no capacity information (an RTT-only reply
     /// must not drag the estimate towards zero).
