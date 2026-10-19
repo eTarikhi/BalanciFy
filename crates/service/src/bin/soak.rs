@@ -74,7 +74,7 @@ fn main() {
 
         // Random flap every 100 iterations: unplug uplink 1, then replug
         if i % 100 == 50 {
-            svc.remove_uplink(UplinkId(1), t);
+            svc.remove_uplink_at(UplinkId(1), t);
             svc.publish(t);
             total_flaps += 1;
             // Simulate failover convergence measurement: should continue full rate <=2s
