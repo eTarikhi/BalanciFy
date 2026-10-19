@@ -292,6 +292,7 @@ impl<C: Crypto + Clone> Service<C> {
     /// Also updates pacing rates from the capacity estimates (Sec.6.4 rule 4).
     pub fn publish(&mut self, now: Instant) -> bool {
         let before = self.snapshot.revision;
+        let prev_uplinks = self.snapshot.uplinks.clone();
         self.snapshot = self.policy.publish(now);
         self.tx.set_quanta(self.snapshot.quanta());
         // Update pacing rates from capacity estimates: 80% of estimated capacity
@@ -300,6 +301,21 @@ impl<C: Crypto + Clone> Service<C> {
             if view.eligible {
                 let rate = (view.capacity_bps as f64 * 0.8) as u64;
                 self.pacing.set_rate(view.id.0, rate.max(1_000_000)); // floor 1 Mbit/s
+            }
+        }
+        // ETW: log uplink state changes (Sec.8.2)
+        for prev in &prev_uplinks {
+            if let Some(curr) = self.snapshot.uplinks.iter().find(|u| u.id == prev.id) {
+                if prev.state != curr.state {
+                    let evt = match curr.state {
+                        balancify_core::LinkState::Up => etw::EVT_UPLINK_UP,
+                        balancify_core::LinkState::Down => etw::EVT_UPLINK_DOWN,
+                        _ => 0,
+                    };
+                    if evt != 0 {
+                        self.etw.info(evt, &format!("uplink {:?} {:?} -> {:?} rtt={:?} cap={}", curr.id, prev.state, curr.state, curr.rtt, curr.capacity_bps));
+                    }
+                }
             }
         }
         self.snapshot.revision != before
@@ -917,6 +933,10 @@ impl<C: Crypto + Clone> Service<C> {
     ) -> Vec<ipc::Event> {
         let d = self.bond.observe(class, bonded_bps, best_uplink_bps);
         if d.flipped {
+            self.etw.info(
+                etw::EVT_BOND_REVERTED,
+                &format!("bond reverted class={:?} gain={} bonded={} best={}", class, d.gain, bonded_bps, best_uplink_bps),
+            );
             vec![ipc::Event::BondReverted { class: class as u8, gain_permille: permille(d.gain) }]
         } else {
             Vec::new()
