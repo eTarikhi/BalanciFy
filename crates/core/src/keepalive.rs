@@ -1,16 +1,16 @@
-//! Per-path keepalives and path-change handling (blueprint §6.6).
+//! Per-path keepalives and path-change handling (blueprint Sec.6.6).
 //!
-//! "Per-path NAT keepalives (proposed ≤ 25 s); detect changed NAT mapping as a
+//! "Per-path NAT keepalives (proposed <= 25 s); detect changed NAT mapping as a
 //! *path change* (re-key path, keep session)."
 //!
 //! Probes are authenticated tunnel control messages, not raw ICMP, so they
-//! survive CGNAT (§6.5).
+//! survive CGNAT (Sec.6.5).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-/// Proposed NAT keepalive ceiling (§6.6).
+/// Proposed NAT keepalive ceiling (Sec.6.6).
 pub const MAX_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(25);
 /// Proposed keepalive cadence: half the ceiling, so a single lost keepalive
 /// cannot let a NAT binding expire.
@@ -26,7 +26,7 @@ pub struct KeepaliveScheduler {
 }
 
 impl KeepaliveScheduler {
-    /// `interval` is clamped to the §6.6 ceiling (25 s).
+    /// `interval` is clamped to the Sec.6.6 ceiling (25 s).
     pub fn new(interval: Duration) -> Self {
         Self { interval: interval.min(MAX_KEEPALIVE_INTERVAL), next_due: BTreeMap::new(), sent: 0 }
     }
@@ -53,7 +53,7 @@ impl KeepaliveScheduler {
 
     /// Make the listed paths due immediately. Sleep/resume and NAT re-binding
     /// invalidate the mapping, so the binding has to be re-established before
-    /// traffic is offered on it again (§6.6).
+    /// traffic is offered on it again (Sec.6.6).
     pub fn expire_all(&mut self, paths: &[u8], now: Instant) {
         for p in paths { self.next_due.insert(*p, now); }
     }
@@ -70,7 +70,7 @@ pub struct PathObservation {
 }
 
 /// A changed source address/port on a path is a *path change*: re-key the path,
-/// keep the session (§6.6). Returns `true` when the mapping changed.
+/// keep the session (Sec.6.6). Returns `true` when the mapping changed.
 pub fn path_changed(previous: Option<&SocketAddr>, observed: SocketAddr) -> bool {
     match previous {
         None => false,          // first observation establishes the mapping
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn keepalive_interval_is_capped_at_25s() {
         let s = KeepaliveScheduler::new(Duration::from_secs(600));
-        assert_eq!(s.interval(), MAX_KEEPALIVE_INTERVAL, "§6.6 ceiling");
+        assert_eq!(s.interval(), MAX_KEEPALIVE_INTERVAL, "Sec.6.6 ceiling");
         assert_eq!(KeepaliveScheduler::with_defaults().interval(), Duration::from_secs(12));
     }
 

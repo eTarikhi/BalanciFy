@@ -1,5 +1,5 @@
-//! Balancify service binary — Windows service core with UDP I/O adapters.
-//! Blueprint §4.2, §11.1 Phase 4 MVP.
+//! Balancify service binary -- Windows service core with UDP I/O adapters.
+//! Blueprint Sec.4.2, Sec.11.1 Phase 4 MVP.
 //!
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
 //! (one per uplink), with secure handshake, pacing, congestion control, rekey,
@@ -34,7 +34,7 @@ fn main() -> std::io::Result<()> {
     let keypair = store.load_or_generate().unwrap_or_else(|_| balancify_crypto::StaticKeypair::generate());
     let pinned_relays = store.load_pinned().unwrap_or_else(|_| PinnedKeys::new());
 
-    println!("Balancify service — state_dir={}, primary={}, secondary={:?}", state_dir, relay_primary, relay_secondary);
+    println!("Balancify service -- state_dir={}, primary={}, secondary={:?}", state_dir, relay_primary, relay_secondary);
     println!("  public key: {:02x?}...", &keypair.public_bytes()[..8]);
 
     let cfg = ServiceConfig {
@@ -102,7 +102,7 @@ fn main() -> std::io::Result<()> {
             Err(e) => eprintln!("  handshake init failed: {:?}", e),
         }
     } else {
-        println!("  no BALANCIFY_RELAY_PUBLIC_KEY — lab mode, opening session directly");
+        println!("  no BALANCIFY_RELAY_PUBLIC_KEY -- lab mode, opening session directly");
         svc.open_session(1, now);
     }
 

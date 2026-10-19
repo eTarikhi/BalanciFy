@@ -1,4 +1,4 @@
-//! Balancify installer — transactional environment provisioning (§4.8 rev 2.1, §8.3)
+//! Balancify installer -- transactional environment provisioning (Sec.4.8 rev 2.1, Sec.8.3)
 //! One signed offline bundle; zero user prerequisites.
 //! Each step journals, any failure rolls back in reverse order.
 
@@ -218,7 +218,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let journal_path = PathBuf::from(args.get(1).map(|s| s.as_str()).unwrap_or("/tmp/balancify_install.json"));
-    println!("Balancify installer — dry_run={} journal={}", dry_run, journal_path.display());
+    println!("Balancify installer -- dry_run={} journal={}", dry_run, journal_path.display());
     let mut installer = Installer::new(journal_path, dry_run);
     match installer.run() {
         Ok(()) => println!("Install succeeded"),

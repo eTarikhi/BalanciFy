@@ -1,4 +1,4 @@
-//! DRR benchmark — measures proportionality and throughput of DeficitRoundRobin
+//! DRR benchmark -- measures proportionality and throughput of DeficitRoundRobin
 //! No external deps.
 
 use balancify_tunnel::{Sender, Crypto};

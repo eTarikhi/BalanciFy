@@ -1,4 +1,4 @@
-//! Balancify in-binary cooperating endpoint ("server mode"), blueprint §4.7.
+//! Balancify in-binary cooperating endpoint ("server mode"), blueprint Sec.4.7.
 
 use balancify_tunnel::{Crypto, Event, Receiver, ReceiverConfig, Sender, SenderConfig};
 use std::collections::BTreeMap;
@@ -183,7 +183,7 @@ impl RelaySession {
         let mut rx = Receiver::new(recv_cipher, rx_cfg);
         rx.open_session(id, now);
         let tx = Sender::with_config(id, send_cipher, vec![(0, 2000), (1, 2000)], tx_cfg);
-        // Default limits: 100 Mbit/s, 10k pps per session (§4.4 B4 rate-limited)
+        // Default limits: 100 Mbit/s, 10k pps per session (Sec.4.4 B4 rate-limited)
         let rate_limiter = RateLimiter::new(12_500_000, 10_000, now);
         Self {
             id,
@@ -281,7 +281,7 @@ struct SecureRelay {
     replay_cache: balancify_crypto::ReplayCache,
     sessions: BTreeMap<u64, RelaySession>,
     prologue: Vec<u8>,
-    // Abuse controls (§4.4 B4, §9.1)
+    // Abuse controls (Sec.4.4 B4, Sec.9.1)
     max_sessions: usize,
     max_sessions_per_ip: usize,
     handshake_attempts: BTreeMap<std::net::IpAddr, (u64, Instant)>, // ip -> (count, window_start)
@@ -382,7 +382,7 @@ impl SecureRelay {
         // Rate limiting per session
         let session = self.sessions.get_mut(&session_id)?;
         if !session.rate_limiter.try_consume(dg.len(), now) {
-            // Drop frame if over limit — counts as abuse, but don't kill session
+            // Drop frame if over limit -- counts as abuse, but don't kill session
             return Some((Vec::new(), Vec::new()));
         }
         let (payloads, replies) = session.ingest(dg, now);
@@ -523,7 +523,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     let mut relay = SecureRelay::new(keypair, pinned);
     let mut dg = [0u8; 65535];
     let mut peers: BTreeMap<u64, std::net::SocketAddr> = BTreeMap::new();
-    // Optional upstream forwarding (§4.2 data plane: relay decrypts, reorders, forwards from stable address)
+    // Optional upstream forwarding (Sec.4.2 data plane: relay decrypts, reorders, forwards from stable address)
     // If BALANCIFY_FORWARD_ADDR is set (e.g. 127.0.0.1:8080), decrypted payloads are forwarded via UDP
     // to that address, and replies are re-encrypted back to the client session.
     // If not set, we echo payloads (lab mode).
@@ -533,7 +533,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     if let Some(fa) = forward_addr {
         eprintln!("Forwarding enabled: decrypted payloads -> {} (stable egress)", fa);
     } else {
-        eprintln!("Forwarding: echo mode (lab) — set BALANCIFY_FORWARD_ADDR to enable upstream forwarding");
+        eprintln!("Forwarding: echo mode (lab) -- set BALANCIFY_FORWARD_ADDR to enable upstream forwarding");
     }
     // Per-session forwarding sockets (one UDP socket per client session, bound to 0.0.0.0:0)
     // This gives us stable egress per session and lets us map replies back to session.

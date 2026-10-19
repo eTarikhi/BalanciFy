@@ -1,10 +1,10 @@
-//! Deterministic fuzzing of the sans-I/O core (blueprint §4.7.4: "fuzz the
+//! Deterministic fuzzing of the sans-I/O core (blueprint Sec.4.7.4: "fuzz the
 //! sans-I/O core").
 //!
 //! This is not a coverage-guided fuzzer; it is a seeded, reproducible generator
 //! that runs in CI on every push with no dependencies and no corpus. What it
 //! checks is the property that matters for a product which parses untrusted
-//! network input (§9.1): arbitrary bytes must never panic the service, must
+//! network input (Sec.9.1): arbitrary bytes must never panic the service, must
 //! never be handed to the inner stack as a payload, and must never make it
 //! allocate without bound.
 //!
@@ -208,7 +208,7 @@ fn fuzz_random_datagrams_stay_bounded_and_never_panic() {
         assert!(after.delivered >= before.delivered, "counters never go backwards");
 
         // Bounded memory: the session cap and the hold cap are the guarantees.
-        assert!(svc.sessions() <= 64, "the session cap holds (§9.1)");
+        assert!(svc.sessions() <= 64, "the session cap holds (Sec.9.1)");
         assert!(
             svc.held_packets() <= 1024,
             "the hold cap bounds reorder memory: {} held",

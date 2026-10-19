@@ -1,4 +1,4 @@
-//! Flow placement: weighted rendezvous hashing with class overrides (blueprint §6.2).
+//! Flow placement: weighted rendezvous hashing with class overrides (blueprint Sec.6.2).
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -39,7 +39,7 @@ impl FlowKey {
 
 /// Weighted rendezvous hashing: max over uplinks of weight * u(flow, uplink),
 /// u uniform in (0,1]. Property: adding/removing an uplink moves only the flows
-/// that were on it (§6.2).
+/// that were on it (Sec.6.2).
 pub fn wrh_place(flow: u64, uplinks: &[(UplinkId, f64)]) -> Option<UplinkId> {
     let mut best: Option<(f64, UplinkId)> = None;
     for (id, w) in uplinks {
@@ -56,7 +56,7 @@ pub fn wrh_place(flow: u64, uplinks: &[(UplinkId, f64)]) -> Option<UplinkId> {
     best.map(|(_, id)| id)
 }
 
-/// Classifier entry point (§6.2): pinned > latency-sensitive (lowest delay) > WRH bulk.
+/// Classifier entry point (Sec.6.2): pinned > latency-sensitive (lowest delay) > WRH bulk.
 pub fn place(
     flow: &FlowKey,
     class: FlowClass,
@@ -71,7 +71,7 @@ pub fn place(
             .map(|u| u.0),
         FlowClass::Bulk => {
             // Unhealthy uplinks carry zero weight: WRH then moves only the
-            // flows that were on a link when it leaves the healthy set (§6.2).
+            // flows that were on a link when it leaves the healthy set (Sec.6.2).
             let w: Vec<(UplinkId, f64)> = uplinks
                 .iter()
                 .map(|u| (u.0, if matches!(u.3, LinkState::Down | LinkState::Probing) { 0.0 } else { u.1 }))

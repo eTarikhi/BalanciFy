@@ -1,9 +1,9 @@
-//! Packet pacing in front of the congestion window (§6.4 rule 4, §10.3).
+//! Packet pacing in front of the congestion window (Sec.6.4 rule 4, Sec.10.3).
 //!
 //! The congestion window stops the tunnel from overrunning a path, but it does
 //! not stop it from sending a whole window as one burst at line rate. That
 //! burst can overflow the bottleneck queue and show up as added delay in the
-//! §10.3 throughput rows. Pacing spreads the window over an RTT.
+//! Sec.10.3 throughput rows. Pacing spreads the window over an RTT.
 //!
 //! This is sans-I/O: callers tell the pacer when they sent bytes and ask when
 //! they may send next. The service loop holds packets until the pacer's

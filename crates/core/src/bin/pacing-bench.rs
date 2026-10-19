@@ -1,4 +1,4 @@
-//! Pacing benchmark — measures PacingController rate and burst handling
+//! Pacing benchmark -- measures PacingController rate and burst handling
 //! No external deps.
 
 use balancify_core::pacing::PacingController;

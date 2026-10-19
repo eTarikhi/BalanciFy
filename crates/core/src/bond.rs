@@ -1,11 +1,11 @@
-//! Bond auto-disable rule (blueprint §6.4 rule 6).
+//! Bond auto-disable rule (blueprint Sec.6.4 rule 6).
 //!
 //! "If measured single-flow gain < proposed 15 % over best-uplink for a flow
 //! class on current link mix, the scheduler reverts that class to flow-level
 //! placement and records the decision (telemetry counter, opt-out)."
 //!
 //! This is the guard that keeps a 40 ms delay-gap pair (cellular vs Wi-Fi) from
-//! paying a reordering tax for nothing (§10.3 "single-flow on mismatched links"
+//! paying a reordering tax for nothing (Sec.10.3 "single-flow on mismatched links"
 //! row). The decision is measured, not assumed: it needs a full window of
 //! samples before it reverts, and it re-arms when the link mix changes.
 
@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use crate::placement::FlowClass;
 
-/// Proposed revert threshold (§6.4 rule 6).
+/// Proposed revert threshold (Sec.6.4 rule 6).
 pub const PROPOSED_GAIN_THRESHOLD: f64 = 0.15;
 /// Proposed samples required before a revert is allowed.
 pub const PROPOSED_MIN_SAMPLES: u32 = 10;
@@ -40,7 +40,7 @@ impl BondClass {
 pub struct BondDecision {
     pub class: BondClass,
     pub enabled: bool,
-    /// EWMA of (bonded goodput / best single uplink) − 1.
+    /// EWMA of (bonded goodput / best single uplink) - 1.
     pub gain: f64,
     /// True on the sample that flipped the decision (drives the telemetry event).
     pub flipped: bool,
@@ -81,7 +81,7 @@ impl BondGainTracker {
 
     pub fn threshold(&self) -> f64 { self.threshold }
     pub fn counters(&self) -> BondCounters { self.counters }
-    /// Classes default to bonded (opt-out semantics, §6.4 rule 6).
+    /// Classes default to bonded (opt-out semantics, Sec.6.4 rule 6).
     pub fn enabled(&self, class: BondClass) -> bool {
         self.classes.get(&class).map(|c| c.enabled).unwrap_or(true)
     }
@@ -91,7 +91,7 @@ impl BondGainTracker {
 
     /// Feed one measurement window: `bonded_bps` is the class's goodput while
     /// striped across uplinks; `best_uplink_bps` is the best single uplink's
-    /// goodput for the same window (§10.2 baseline B1).
+    /// goodput for the same window (Sec.10.2 baseline B1).
     pub fn observe(&mut self, class: BondClass, bonded_bps: f64, best_uplink_bps: f64) -> BondDecision {
         self.counters.samples += 1;
         let state = self.classes.entry(class).or_insert(ClassState {
@@ -134,7 +134,7 @@ impl BondGainTracker {
         self.counters.rearms += 1;
     }
 
-    /// Explicit user opt-in/opt-out overrides the measurement (§6.4 rule 6).
+    /// Explicit user opt-in/opt-out overrides the measurement (Sec.6.4 rule 6).
     pub fn set_enabled(&mut self, class: BondClass, enabled: bool) {
         self.classes.entry(class).or_insert(ClassState { gain_ewma: 0.0, samples: 0, enabled, initialised: false }).enabled = enabled;
     }
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn mismatched_pair_reverts_after_enough_samples() {
         let mut t = BondGainTracker::default();
-        // 40 ms gap pair: reordering tax eats the gain (§10.3 row 3)
+        // 40 ms gap pair: reordering tax eats the gain (Sec.10.3 row 3)
         let mut flipped_at = None;
         for i in 0..30u32 {
             let d = t.observe(BondClass::Bulk, 102_000_000.0, 100_000_000.0);

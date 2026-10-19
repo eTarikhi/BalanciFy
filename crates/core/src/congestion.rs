@@ -1,4 +1,4 @@
-//! Per-path congestion control inside the tunnel (blueprint §6.4 rule 4),
+//! Per-path congestion control inside the tunnel (blueprint Sec.6.4 rule 4),
 //! coupled across paths after RFC 6356 (Linked Increases, LIA).
 //!
 //! Why per path: each uplink has its own loss rate and its own ACK clock, so a
@@ -9,7 +9,7 @@
 //! LIA scales each increase by the number of active paths so the *aggregate*
 //! grows no faster than one single-path flow would.
 //!
-//! This is deliberately not TCP-over-TCP: the tunnel runs over UDP (§6.4
+//! This is deliberately not TCP-over-TCP: the tunnel runs over UDP (Sec.6.4
 //! rule 4) and the inner stack keeps its own loss recovery. What this module
 //! does is stop the tunnel from being the thing that overruns a path.
 //!
@@ -35,13 +35,13 @@ struct PathWindow {
     in_flight: u64,
     /// Last time the window was halved, so a loss burst counts once.
     last_halved: Option<Instant>,
-    /// ECN CE marks seen on this path (§6.4 rule 4 ECN extension).
+    /// ECN CE marks seen on this path (Sec.6.4 rule 4 ECN extension).
     ecn_ce: u64,
     /// Minimum RTT observed on this path for delay-based detection.
     rtt_min: Option<Duration>,
     /// Last RTT sample.
     rtt_last: Option<Duration>,
-    /// Delay increase counter — how many times RTT exceeded min + threshold.
+    /// Delay increase counter -- how many times RTT exceeded min + threshold.
     delay_events: u64,
 }
 
@@ -146,7 +146,7 @@ impl CongestionController {
 
     /// `bytes` were acknowledged on `path`. Grows the window: exponentially
     /// below ssthresh, otherwise by the coupled LIA increment.
-    /// `rtt` is optional RTT sample for delay-based detection (§6.4 rule 4).
+    /// `rtt` is optional RTT sample for delay-based detection (Sec.6.4 rule 4).
     pub fn on_ack(&mut self, path: u8, bytes: u64, now: Instant) {
         self.on_ack_with_rtt(path, bytes, None, now)
     }
@@ -195,7 +195,7 @@ impl CongestionController {
         }
     }
 
-    /// ECN CE mark received on `path` — treat as congestion but milder than loss (§6.4 rule 4 ECN).
+    /// ECN CE mark received on `path` -- treat as congestion but milder than loss (Sec.6.4 rule 4 ECN).
     /// Reduces cwnd to 80% (vs 50% for loss), at most once per interval.
     pub fn on_ecn(&mut self, path: u8, now: Instant) {
         let min_cwnd = self.min_cwnd;
@@ -261,7 +261,7 @@ impl CongestionController {
 
     /// Paths that cannot accept a packet of `bytes` right now. The scheduler
     /// skips these; if every path comes back blocked the caller holds the
-    /// packet instead of dropping it (§6.4 rule 4 backpressure).
+    /// packet instead of dropping it (Sec.6.4 rule 4 backpressure).
     pub fn blocked(&self, bytes: u64) -> Vec<u8> {
         self.paths
             .iter()
@@ -279,7 +279,7 @@ mod tests {
 
     fn cc() -> CongestionController { CongestionController::new(MSS) }
 
-    /// Acknowledge a whole window's worth of bytes — one round trip.
+    /// Acknowledge a whole window's worth of bytes -- one round trip.
     fn ack_one_rtt(c: &mut CongestionController, path: u8, now: Instant) {
         let bytes = c.window(path);
         c.on_send(path, bytes);
@@ -350,7 +350,7 @@ mod tests {
         }
         let other = c.window(0);
         c.on_loss(1, t0);
-        assert_eq!(c.window(0), other, "independent loss clocks (§6.4 rule 4)");
+        assert_eq!(c.window(0), other, "independent loss clocks (Sec.6.4 rule 4)");
         assert!(c.window(1) < other);
     }
 
@@ -462,7 +462,7 @@ mod tests {
         let before = c.window(0);
         c.on_ecn(0, t0);
         let after_ecn = c.window(0);
-        // ECN reduces to 80%, loss to 50% — ECN should be milder
+        // ECN reduces to 80%, loss to 50% -- ECN should be milder
         assert!(after_ecn > before / 2, "ECN 80% > loss 50%: {} -> {}", before, after_ecn);
         assert!(after_ecn < before, "ECN still reduces: {} -> {}", before, after_ecn);
         assert_eq!(c.ecn_events(), 1);
@@ -508,7 +508,7 @@ mod tests {
         // ACK with RTT 20ms
         c.on_send(0, 1000);
         c.on_ack_with_rtt(0, 1000, Some(Duration::from_millis(20)), t0);
-        // ACK with RTT 100ms — should trigger delay reduction
+        // ACK with RTT 100ms -- should trigger delay reduction
         c.on_send(0, 1000);
         c.on_ack_with_rtt(0, 1000, Some(Duration::from_millis(100)), t0 + Duration::from_millis(200));
         assert_eq!(c.delay_events(), 1, "RTT jump 20->100 should be delay event");

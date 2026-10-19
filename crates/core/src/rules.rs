@@ -1,11 +1,11 @@
-//! Flow classification rules (blueprint §6.2 step 1).
+//! Flow classification rules (blueprint Sec.6.2 step 1).
 //!
 //! Classification is 5-tuple + (where obtainable) process + port/DNS/SNI rule
 //! match. Classes: `latency-sensitive` (DNS, voice, game ports) -> lowest-delay
 //! healthy uplink; `bulk` -> hashed; `pinned` -> user rule.
 //!
 //! Rules are first-party and evaluated in priority order; the first match wins.
-//! The default set is the curated latency-sensitive list from §6.2/§6.4 rule 5.
+//! The default set is the curated latency-sensitive list from Sec.6.2/Sec.6.4 rule 5.
 
 use std::net::SocketAddr;
 
@@ -37,7 +37,7 @@ pub struct Rule {
     pub dst_port: Option<PortRange>,
     /// Suffix match on the SNI/server name learned for the flow, e.g. "meet.example".
     pub sni_suffix: Option<String>,
-    /// Eligible for duplicate mode (§6.4 rule 5: small critical packets).
+    /// Eligible for duplicate mode (Sec.6.4 rule 5: small critical packets).
     pub duplicate_eligible: bool,
 }
 
@@ -80,7 +80,7 @@ impl Rule {
 }
 
 /// Ordered rule list. `classify` returns the class of the first matching rule,
-/// or [`FlowClass::Bulk`] when nothing matches (§6.2 default).
+/// or [`FlowClass::Bulk`] when nothing matches (Sec.6.2 default).
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet {
     rules: Vec<Rule>,
@@ -90,7 +90,7 @@ pub struct RuleSet {
 impl RuleSet {
     pub fn new() -> Self { Self::default() }
 
-    /// The curated default set (§6.2 latency-sensitive list + §6.4 rule 5
+    /// The curated default set (Sec.6.2 latency-sensitive list + Sec.6.4 rule 5
     /// duplicate candidates). Ids below 1000 are reserved for built-ins.
     pub fn curated() -> Self {
         let mut s = Self::new();
@@ -153,7 +153,7 @@ impl RuleSet {
             .unwrap_or(FlowClass::Bulk)
     }
 
-    /// Whether the matched rule opts this flow into duplicate mode (§6.4 rule 5).
+    /// Whether the matched rule opts this flow into duplicate mode (Sec.6.4 rule 5).
     pub fn duplicate_eligible(&self, flow: &FlowKey, sni: Option<&str>) -> bool {
         self.rules
             .iter()

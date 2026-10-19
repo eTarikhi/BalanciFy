@@ -1,4 +1,4 @@
-//! Long-term identity keys and ephemeral keys (§9.2).
+//! Long-term identity keys and ephemeral keys (Sec.9.2).
 //!
 //! The handshake takes secrets as `[u8; 32]` arguments so it stays sans-I/O and
 //! deterministic under test. This module is the place where those bytes come

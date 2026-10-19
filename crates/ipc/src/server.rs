@@ -1,4 +1,4 @@
-//! IPC server stub — named pipe on Windows, TCP loopback for CI (§7.1, §8.1)
+//! IPC server stub -- named pipe on Windows, TCP loopback for CI (Sec.7.1, Sec.8.1)
 //!
 //! The real product uses an ACL-protected named pipe with caller identity check.
 //! For CI on Linux, we use a TCP loopback socket on 127.0.0.1:0 with same framing.
@@ -9,7 +9,7 @@ use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 /// Length-prefixed framing: 4-byte BE length + JSON payload (for simplicity in stub)
-/// Real product uses binary messages (§7.1).
+/// Real product uses binary messages (Sec.7.1).
 pub struct IpcServer {
     listener: TcpListener,
     addr: std::net::SocketAddr,

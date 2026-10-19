@@ -1,4 +1,4 @@
-//! ECN bench — measures cwnd reduction on ECN CE vs loss
+//! ECN bench -- measures cwnd reduction on ECN CE vs loss
 //! Simulates 200Mbps path, 10ms RTT, triggers ECN and loss, measures cwnd, throughput
 
 use balancify_core::congestion::CongestionController;
@@ -45,5 +45,5 @@ fn main() {
     println!("After delay 10ms->50ms: cwnd={} bytes, delay_events={}", cc.window(0), cc.delay_events());
     println!("Per-path ECN: {}, delay: {}, rtt_min: {:?}, rtt_last: {:?}", cc.ecn_ce(0), cc.delay_events_path(0), cc.rtt_min(0), cc.rtt_last(0));
 
-    println!("ECN bench done — ECN 80% vs loss 50% verified, delay 10% reduction");
+    println!("ECN bench done -- ECN 80% vs loss 50% verified, delay 10% reduction");
 }

@@ -1,6 +1,6 @@
-//! Path-health state machine with deliberate hysteresis (blueprint §6.5).
+//! Path-health state machine with deliberate hysteresis (blueprint Sec.6.5).
 //!
-//! Design intent: **fast drop, slow return** — a flapping cellular link must
+//! Design intent: **fast drop, slow return** -- a flapping cellular link must
 //! not oscillate flows between uplinks.
 
 use std::time::Duration;
@@ -14,7 +14,7 @@ pub enum LinkState {
     Recovering,
 }
 
-/// Proposed defaults (§6.5); tunable per uplink.
+/// Proposed defaults (Sec.6.5); tunable per uplink.
 #[derive(Debug, Clone)]
 pub struct HealthConfig {
     pub up_streak: u32,                 // Probing -> Up            (proposed 5)
@@ -37,7 +37,7 @@ impl Default for HealthConfig {
 }
 
 /// Fast drop, slow return: failures move state immediately on streak expiry,
-/// recovery ramps (§6.5 design intent).
+/// recovery ramps (Sec.6.5 design intent).
 #[derive(Debug, Clone)]
 pub struct HealthMachine {
     cfg: HealthConfig,
@@ -95,7 +95,7 @@ impl HealthMachine {
     pub fn adapter_removed(&mut self) { self.state = LinkState::Down; self.ok_streak = 0; self.ramp = 0; }
     pub fn resume_from_sleep(&mut self) { self.state = LinkState::Probing; self.ok_streak = 0; self.miss_streak = 0; }
 
-    /// Weight multiplier used by the scheduler (§6.3/§6.5): Down/Probing carry no traffic,
+    /// Weight multiplier used by the scheduler (Sec.6.3/Sec.6.5): Down/Probing carry no traffic,
     /// Recovering ramps, Degraded is discounted.
     pub fn weight_factor(&self) -> f64 {
         match self.state {

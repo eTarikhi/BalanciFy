@@ -1,11 +1,11 @@
-//! Key storage abstraction (§9.2).
+//! Key storage abstraction (Sec.9.2).
 //!
 //! Secrets must live in a DPAPI-protected store, TPM-backed where available,
 //! and never in the JSON settings. This module defines the trait and provides
 //! two implementations:
 //!
-//! * `MemoryKeyStore` — for tests and for the deterministic rig.
-//! * `FileKeyStore` — for lab use, storing keys as raw bytes in a file with
+//! * `MemoryKeyStore` -- for tests and for the deterministic rig.
+//! * `FileKeyStore` -- for lab use, storing keys as raw bytes in a file with
 //!   restrictive permissions (0600 on Unix). On Windows, when the `dpapi`
 //!   feature is enabled, the file contents are protected via
 //!   `CryptProtectData` (DPAPI). The DPAPI implementation is Windows-only and
@@ -242,7 +242,7 @@ impl KeyStore for FileKeyStore {
 // First-party DPAPI wrapper, no third-party crate: calls CryptProtectData /
 // CryptUnprotectData from crypt32.dll directly via FFI. Behind `dpapi` feature
 // and Windows only, so the crate stays cross-platform and the audit stays clean.
-// This satisfies §9.2: secrets in DPAPI-protected store, TPM-backed where
+// This satisfies Sec.9.2: secrets in DPAPI-protected store, TPM-backed where
 // available (DPAPI uses TPM if present), never in JSON settings.
 
 #[cfg(all(windows, feature = "dpapi"))]

@@ -1,4 +1,4 @@
-//! Replay protection for handshake first flights (§9.2, §11.4).
+//! Replay protection for handshake first flights (Sec.9.2, Sec.11.4).
 //!
 //! A captured first flight (`e || EncryptAndHash(s) || ...`) could be replayed
 //! at a new responder session. The handshake itself is fresh because of the

@@ -1,19 +1,19 @@
-//! Balancify IPC contract **v1** — service ⇄ desktop shell (blueprint §9.2,
+//! Balancify IPC contract **v1** -- service ⇄ desktop shell (blueprint Sec.9.2,
 //! roadmap Phase 3 milestone M6).
 //!
 //! Rules this contract exists to satisfy:
-//! - *Authenticated IPC … message schema versioned and length-checked* (§9.2):
+//! - *Authenticated IPC ... message schema versioned and length-checked* (Sec.9.2):
 //!   every frame carries a schema version and an explicit payload length, and a
 //!   truncated or over-long frame is rejected, never parsed partially.
-//! - *The shell never opens sockets or touches the driver* (§8.1): the shell can
+//! - *The shell never opens sockets or touches the driver* (Sec.8.1): the shell can
 //!   only express itself through [`Request`]; everything it renders comes back
 //!   as [`Response`] or [`Event`].
 //! - *Minimal dependencies* (ADR-0002): the encoding is first-party. No
-//!   serialisation crate, no schema generator — see ADR-0004 for why that beats
+//!   serialisation crate, no schema generator -- see ADR-0004 for why that beats
 //!   JSON here.
 //!
 //! # Transport
-//! Named pipe with an explicit SDDL on Windows (§9.2); the framing below is
+//! Named pipe with an explicit SDDL on Windows (Sec.9.2); the framing below is
 //! transport-independent, so the same contract runs over a socket pair in the
 //! lab and in CI on Linux.
 //!
@@ -32,7 +32,7 @@ pub mod server;
 pub const SCHEMA_VERSION: u8 = 1;
 pub const FRAME_HEADER_LEN: usize = 6;
 /// Hard ceiling on one message. Status snapshots are a few hundred bytes; a
-/// multi-megabyte frame on a control pipe is an attack, not a use case (§9.1a).
+/// multi-megabyte frame on a control pipe is an attack, not a use case (Sec.9.1a).
 pub const MAX_PAYLOAD: usize = 1 << 20;
 
 // ------------------------------------------------------------------- framing
@@ -96,7 +96,7 @@ impl Default for Writer {
 }
 
 /// Decode with explicit length checks. Every accessor returns `None` past the
-/// end of the buffer — there is no partial-parse state to get wrong.
+/// end of the buffer -- there is no partial-parse state to get wrong.
 pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -142,7 +142,7 @@ impl<'a> Reader<'a> {
 ///
 /// Returns `(kind, payload, consumed)`. `Ok(None)` means "need more bytes",
 /// which is what a pipe reader does with a partial write. `Err` means the
-/// stream is corrupt and the connection must be dropped (§9.2 length-checked).
+/// stream is corrupt and the connection must be dropped (Sec.9.2 length-checked).
 pub fn decode_frame(buf: &[u8]) -> Result<Option<(FrameKind, &[u8], usize)>, FrameError> {
     if buf.len() < FRAME_HEADER_LEN { return Ok(None); }
     if buf[0] != SCHEMA_VERSION { return Err(FrameError::UnsupportedVersion(buf[0])); }
@@ -307,7 +307,7 @@ pub enum Request {
     SubscribeEvents { interval_hz: u8 },
 }
 
-/// One row of the Rules screen (§8.2), and the wire form of a core rule.
+/// One row of the Rules screen (Sec.8.2), and the wire form of a core rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlowRule {
     pub id: u32,
@@ -343,7 +343,7 @@ pub struct UplinkInfo {
     pub eligible: bool,
 }
 
-/// Everything the Home screen and tray flyout render (§8.2).
+/// Everything the Home screen and tray flyout render (Sec.8.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusSnapshot {
     pub service_version: String,
@@ -359,7 +359,7 @@ pub struct StatusSnapshot {
     pub counters: Counters,
 }
 
-/// Counters only — never destinations or content (§9.2 privacy telemetry).
+/// Counters only -- never destinations or content (Sec.9.2 privacy telemetry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Counters {
     pub packets_stripped: u64,
@@ -390,15 +390,15 @@ pub enum Event {
     /// The policy snapshot changed; the shell should re-fetch or use `uplinks`.
     PolicyChanged { revision: u64 },
     UplinkStateChanged { id: u8, state: u8 },
-    /// §6.4 rule 6: a flow class was reverted to flow-level placement.
+    /// Sec.6.4 rule 6: a flow class was reverted to flow-level placement.
     BondReverted { class: u8, gain_permille: i16 },
-    /// Counters for the Diagnostics view (§8.2), pushed at the subscribed rate.
+    /// Counters for the Diagnostics view (Sec.8.2), pushed at the subscribed rate.
     Stats(Counters),
-    /// A condition the user should see (§4.5 failure modes).
+    /// A condition the user should see (Sec.4.5 failure modes).
     Warning { code: u8 },
 }
 
-/// Warning codes surfaced to the user (§4.5). Kept numeric on the wire so new
+/// Warning codes surfaced to the user (Sec.4.5). Kept numeric on the wire so new
 /// codes never break an older shell.
 pub const WARN_ALL_PATHS_DOWN: u8 = 1;
 pub const WARN_RELAY_UNREACHABLE: u8 = 2;
@@ -531,7 +531,7 @@ fn decode_counters(r: &mut Reader<'_>) -> Option<Counters> {
     let out_of_order = r.u64()?;
     let refused = r.u64()?;
     let auth_failed = r.u64()?;
-    // v1 extension: ECN + delay counters, backward compat — missing = 0
+    // v1 extension: ECN + delay counters, backward compat -- missing = 0
     let ecn_ce = r.u64().unwrap_or(0);
     let delay_events = r.u64().unwrap_or(0);
     Some(Counters {

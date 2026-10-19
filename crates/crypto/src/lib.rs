@@ -2,10 +2,10 @@
 //!
 //! This crate owns no cryptography. The primitive is ChaCha20-Poly1305
 //! (RFC 8439) from a vetted, audited crate at an exact pin: the blueprint is
-//! explicit that we never roll our own primitives (§4.8 policy rule c, and the
-//! §4.8 table row "Crypto primitives … Policy exception: never roll our own
+//! explicit that we never roll our own primitives (Sec.4.8 policy rule c, and the
+//! Sec.4.8 table row "Crypto primitives ... Policy exception: never roll our own
 //! primitives"; see ADR-0006). What lives here is the part that *is* ours, and
-//! the part that is easy to get wrong — how one key becomes a per-packet nonce,
+//! the part that is easy to get wrong -- how one key becomes a per-packet nonce,
 //! and what is authenticated but not encrypted.
 //!
 //! # Nonce discipline
@@ -16,13 +16,13 @@
 //! counter that could be lost or reset:
 //!
 //! ```text
-//! nonce = salt[3] || path[1] || seq_be[8]          (12 bytes, RFC 8439 §4)
+//! nonce = salt[3] || path[1] || seq_be[8]          (12 bytes, RFC 8439 Sec.4)
 //! ```
 //!
 //! * `seq` is the tunnel's per-session sequence number. The sender increments it
 //!   once per frame and never resets it, so two frames of one session cannot
 //!   collide. Reinjections and duplicate-mode copies reuse the *same* sequence
-//!   number — which is exactly right, because they carry the same plaintext and
+//!   number -- which is exactly right, because they carry the same plaintext and
 //!   must produce the same ciphertext.
 //! * `path` separates the uplinks of one session. It is redundant for uniqueness
 //!   (the sequence space is shared) but it means a frame copied onto another
@@ -34,8 +34,8 @@
 //! # What the AAD binds
 //!
 //! The tunnel passes the raw 20-byte frame header as additional authenticated
-//! data. The header is not encrypted — the receiver must read version, kind,
-//! session, path, sequence and flags before it can decrypt — but it *is*
+//! data. The header is not encrypted -- the receiver must read version, kind,
+//! session, path, sequence and flags before it can decrypt -- but it *is*
 //! covered by the tag, so none of those fields can be rewritten in flight.
 
 pub mod handshake;
@@ -54,11 +54,11 @@ use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit, Nonce,
 };
 
-/// ChaCha20-Poly1305 key length (RFC 8439 §2.3).
+/// ChaCha20-Poly1305 key length (RFC 8439 Sec.2.3).
 pub const KEY_LEN: usize = 32;
 /// Bytes of the nonce that identify the session.
 pub const SALT_LEN: usize = 3;
-/// RFC 8439 §4 nonce length.
+/// RFC 8439 Sec.4 nonce length.
 pub const NONCE_LEN: usize = 12;
 /// Poly1305 tag length, i.e. the per-frame overhead this cipher adds.
 pub const TAG_LEN: usize = 16;
@@ -129,7 +129,7 @@ impl TunnelCipher {
     ///
     /// This is a convenience, not a key-derivation function: folding 8 bytes
     /// into 3 can collide. The Phase-4 handshake derives a fresh key per
-    /// session (§9.2), at which point the salt is belt-and-braces rather than
+    /// session (Sec.9.2), at which point the salt is belt-and-braces rather than
     /// the only thing separating two sessions.
     pub fn salt_for_session(session: u64) -> [u8; SALT_LEN] {
         let mut salt = [0u8; SALT_LEN];
@@ -140,7 +140,7 @@ impl TunnelCipher {
     }
 
     /// Rekey: derive a new key from the current one, for forward secrecy of
-    /// older messages (§11.3). One-way: old key cannot be derived from new.
+    /// older messages (Sec.11.3). One-way: old key cannot be derived from new.
     /// Matches Noise's `REKEY(k)` in spirit (encrypt zeros with max nonce) but
     /// uses HKDF-BLAKE2s for consistency with the handshake's KDF.
     pub fn rekey(&self) -> Option<Self> { Self::rekey_from(&self.key, self.salt) }

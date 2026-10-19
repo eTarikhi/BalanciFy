@@ -2,13 +2,13 @@
 //! real IPC contract, driven over a **simulated** multi-path network.
 //!
 //! What this file is: a deterministic, repeatable regression gate for the
-//! behaviours §6 promises — in-order delivery across a delay gap, reinjection
+//! behaviours Sec.6 promises -- in-order delivery across a delay gap, reinjection
 //! after loss, failover when an uplink disappears, and the shell protocol.
 //!
 //! What this file is **not**: a measurement. Simulated delays are not netem,
-//! and a passing test here says nothing about throughput on Rig B. The §10.3
+//! and a passing test here says nothing about throughput on Rig B. The Sec.10.3
 //! acceptance numbers still have to be produced on the real rig; until then
-//! they stay *proposed* (blueprint §10.3).
+//! they stay *proposed* (blueprint Sec.10.3).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -69,7 +69,7 @@ impl SimNet {
         }
     }
 
-    /// Client→server frames the rig handed to this uplink: the load it carried.
+    /// Client->server frames the rig handed to this uplink: the load it carried.
     fn uplink_load(&self, uplink: UplinkId) -> u64 {
         self.load.get(&uplink.0).copied().unwrap_or(0)
     }
@@ -118,7 +118,7 @@ impl SimNet {
 }
 
 /// The far end: the first-party receiver, standing in for the in-binary
-/// cooperating endpoint (§4.7 T1).
+/// cooperating endpoint (Sec.4.7 T1).
 struct Server {
     rx: Receiver<PassThrough>,
     delivered: Vec<Vec<u8>>,
@@ -134,7 +134,7 @@ impl Server {
     fn ingest(&mut self, dg: &[u8], now: Instant) -> Vec<Vec<u8>> {
         let mut replies = Vec::new();
         let mut events = self.rx.ingest(dg, now);
-        events.extend(self.rx.drain(now)); // hold-cap tick (§6.4 rule 3)
+        events.extend(self.rx.drain(now)); // hold-cap tick (Sec.6.4 rule 3)
         for ev in events {
             match ev {
                 balancify_tunnel::Event::Payload { data, .. } => self.delivered.push(data),
@@ -162,7 +162,7 @@ fn pkt(i: usize) -> Vec<u8> {
     v
 }
 
-/// Small payload for the duplicate-mode scenario: §6.4 rule 5 only ever
+/// Small payload for the duplicate-mode scenario: Sec.6.4 rule 5 only ever
 /// duplicates packets at or under 256 bytes.
 fn small_pkt(i: usize) -> Vec<u8> {
     let mut v = format!("query-{i:04}").into_bytes();
@@ -181,7 +181,7 @@ fn assert_stream(got: &[Vec<u8>], count: usize, small: bool) {
 }
 
 /// True when the tunnel would not take the packet because every eligible path
-/// is inside its congestion window (§6.4 rule 4). The rig then waits a step and
+/// is inside its congestion window (Sec.6.4 rule 4). The rig then waits a step and
 /// offers the packet again, which is what the miniport's queue does.
 fn is_held(actions: &[Action]) -> bool {
     actions.iter().any(|a| matches!(a, Action::Hold { .. }))
@@ -236,7 +236,7 @@ fn step(net: &mut SimNet, client: &mut Service<PassThrough>, server: &mut Server
 
 // --------------------------------------------------------------- scenarios
 
-/// §6.4 rules 1–3: packets of one flow striped over a 40 ms delay gap must
+/// Sec.6.4 rules 1-3: packets of one flow striped over a 40 ms delay gap must
 /// still be released in order, because the reorder hold cap (80 ms) is larger
 /// than the gap.
 #[test]
@@ -279,13 +279,13 @@ fn striped_flow_is_reordered_back_across_a_40ms_delay_gap() {
 
     assert_eq!(paths_used.len(), 2, "bond mode must stripe over both uplinks: {paths_used:?}");
     assert_stream(&server.delivered, PACKETS, false);
-    assert_eq!(server.out_of_order(), 0, "an 80 ms hold cap absorbs a 40 ms gap (§6.4 rule 3)");
+    assert_eq!(server.out_of_order(), 0, "an 80 ms hold cap absorbs a 40 ms gap (Sec.6.4 rule 3)");
     assert_eq!(net.lost(), 0);
     assert_eq!(client.counters().refused, 0);
     assert!(client.counters().packets_stripped as usize >= PACKETS);
 }
 
-/// §6.4 rule 5: packets lost on one path are reinjected on another and the
+/// Sec.6.4 rule 5: packets lost on one path are reinjected on another and the
 /// stream still arrives complete and in order, with no cap expiry.
 #[test]
 fn reinjection_recovers_lost_packets_inside_the_hold_cap() {
@@ -329,7 +329,7 @@ fn reinjection_recovers_lost_packets_inside_the_hold_cap() {
     assert_eq!(server.out_of_order(), 0, "recovery happened inside the hold cap");
 }
 
-/// §4.5 / §10.3 failover: unplugging an uplink mid-transfer must not lose the
+/// Sec.4.5 / Sec.10.3 failover: unplugging an uplink mid-transfer must not lose the
 /// transfer. In-flight packets on the dead path are reinjected on the survivor.
 #[test]
 fn unplugging_an_uplink_mid_transfer_keeps_the_stream_alive() {
@@ -370,8 +370,8 @@ fn unplugging_an_uplink_mid_transfer_keeps_the_stream_alive() {
             dispatch(&mut net, actions);
             sent += 1;
             // Kill the moment a packet is on the slow path, once both paths are
-            // in use. That packet is provably still in flight — its 30 ms delay
-            // is six rig steps — so the failure has something to lose and only
+            // in use. That packet is provably still in flight -- its 30 ms delay
+            // is six rig steps -- so the failure has something to lose and only
             // reinjection can recover it. Choosing the moment this way keeps
             // the scenario independent of the exact DRR burst schedule.
             if on_slow && !killed && paths_before.contains(&UplinkId(0)) {
@@ -393,8 +393,8 @@ fn unplugging_an_uplink_mid_transfer_keeps_the_stream_alive() {
     assert_eq!(client.counters().refused, 0);
 }
 
-/// §6.2 vs §6.4: with bonding off, a flow rides one uplink and is never held up
-/// by the other path's delay — the flow-level lane must not reorder.
+/// Sec.6.2 vs Sec.6.4: with bonding off, a flow rides one uplink and is never held up
+/// by the other path's delay -- the flow-level lane must not reorder.
 #[test]
 fn flow_level_mode_is_not_held_up_by_the_other_path() {
     const PACKETS: usize = 40;
@@ -438,7 +438,7 @@ fn flow_level_mode_is_not_held_up_by_the_other_path() {
     assert_eq!(server.duplicates(), 0);
 }
 
-/// Duplicate mode (§6.4 rule 5) must cost bandwidth, never correctness: the
+/// Duplicate mode (Sec.6.4 rule 5) must cost bandwidth, never correctness: the
 /// inner stream still sees each packet exactly once, in order.
 #[test]
 fn duplicate_mode_delivers_each_packet_once() {
@@ -497,7 +497,7 @@ fn shell_and_service_speak_contract_v1_over_a_stream() {
     let actions = client.send_app_packet(&flow, None, b"hello", now);
     dispatch(&mut sink, actions);
 
-    // One stream, three requests back to back — the last one cut short.
+    // One stream, three requests back to back -- the last one cut short.
     let mut stream = Vec::new();
     stream.extend(ipc::frame_request(&ipc::Request::Ping));
     stream.extend(ipc::frame_request(&ipc::Request::GetStatus));
@@ -551,7 +551,7 @@ fn unparseable_datagrams_are_dropped_at_the_door() {
     assert_eq!(client.counters().delivered, 0);
 
     // Lab form auto-accepts a session it has never seen. That is a documented
-    // property of the lab rig, not a security claim (§9.2).
+    // property of the lab rig, not a security claim (Sec.9.2).
     let mut frame = Vec::new();
     Header::new(FrameKind::Data, 0, 999, 0).encode(&mut frame);
     frame.extend_from_slice(b"lab-form");
@@ -563,7 +563,7 @@ fn unparseable_datagrams_are_dropped_at_the_door() {
     assert_eq!(client.counters().delivered, 1);
 }
 
-/// §6.4 rule 4: a path that keeps losing packets shrinks its window, so the
+/// Sec.6.4 rule 4: a path that keeps losing packets shrinks its window, so the
 /// scheduler shifts the flow to the clean path. Nothing is lost, because the
 /// losses are reinjected elsewhere, and congestion produces backpressure
 /// rather than drops.

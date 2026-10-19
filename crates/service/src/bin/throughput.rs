@@ -1,4 +1,4 @@
-//! Throughput measurement harness — §10.3 aggregate/single-flow/failover
+//! Throughput measurement harness -- Sec.10.3 aggregate/single-flow/failover
 //! Simulates bonded vs single-path throughput with pacing + congestion control
 //! enabled, records median/p95/spread over 10 reps, no external dependencies.
 
@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 fn main() {
-    println!("=== Balancify throughput harness §10.3 ===");
+    println!("=== Balancify throughput harness Sec.10.3 ===");
     let reps = 10;
     let packets_per_rep = 1000;
     let payload = vec![0u8; 1200]; // ~MTU
@@ -176,5 +176,5 @@ fn main() {
     svc2.cc.on_rtt(0, Duration::from_millis(50), now + Duration::from_millis(200));
     println!("RTT 50ms (delay event), cwnd={} delay_events={}", svc2.cc.window(0), svc2.cc.delay_events());
 
-    println!("\nThroughput harness done — see docs/phase2/lab-progress.md for S2c checklist");
+    println!("\nThroughput harness done -- see docs/phase2/lab-progress.md for S2c checklist");
 }

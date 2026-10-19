@@ -1,4 +1,4 @@
-//! Crypto benchmark — measures ChaCha20Poly1305 seal/open throughput and rekey
+//! Crypto benchmark -- measures ChaCha20Poly1305 seal/open throughput and rekey
 //! No external deps, uses std time.
 
 use balancify_crypto::TunnelCipher;
@@ -46,5 +46,5 @@ fn main() {
     let elapsed = start.elapsed();
     println!("Rekey: 1000 iters, {:.3}s, {:.1}us/op", elapsed.as_secs_f64(), elapsed.as_micros() as f64 / 1000.0);
 
-    println!("Benchmark done — CPU per Gbit/s can be derived from MB/s");
+    println!("Benchmark done -- CPU per Gbit/s can be derived from MB/s");
 }

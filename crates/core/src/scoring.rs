@@ -1,11 +1,11 @@
-//! Link scoring and capacity estimation (blueprint §6.3).
+//! Link scoring and capacity estimation (blueprint Sec.6.3).
 //!
 //! Score = capacity x penalty(loss) x penalty(excess RTT), penalties monotonic.
-//! The score feeds WRH weights (§6.2) and the striping quanta (§6.4 rule 2).
+//! The score feeds WRH weights (Sec.6.2) and the striping quanta (Sec.6.4 rule 2).
 //!
-//! Capacity comes from two sources, per §6.3:
+//! Capacity comes from two sources, per Sec.6.3:
 //! (a) tunnel ACK pacing while the link is loaded, and
-//! (b) bounded packet-pair/train probes while it is idle — bounded because
+//! (b) bounded packet-pair/train probes while it is idle -- bounded because
 //!     probes cost the user's bytes (proposed cap: 64 KiB/min).
 
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ impl LinkScore {
     pub fn new(rtt: Duration, loss: f64, capacity_bps: u64) -> Self {
         Self { rtt_ewma: rtt, loss_ewma: loss, capacity_bps: capacity_bps }
     }
-    /// EWMA update, alpha = 0.2 (proposed §6.3).
+    /// EWMA update, alpha = 0.2 (proposed Sec.6.3).
     pub fn observe(&mut self, rtt: Duration, lost: bool, alpha: f64) {
         self.rtt_ewma = self.rtt_ewma.mul_f64(1.0 - alpha) + rtt.mul_f64(alpha);
         self.loss_ewma = self.loss_ewma * (1.0 - alpha) + (if lost { 1.0 } else { 0.0 }) * alpha;
@@ -35,7 +35,7 @@ impl LinkScore {
     }
 }
 
-/// Capacity estimator (§6.3). Sans-I/O: the caller supplies `now`.
+/// Capacity estimator (Sec.6.3). Sans-I/O: the caller supplies `now`.
 #[derive(Debug, Clone)]
 pub struct CapacityEstimator {
     capacity_bps: u64,
@@ -49,11 +49,11 @@ pub struct CapacityEstimator {
     probe_minute_start: Instant,
     /// When this link was last probed *or* last carried traffic.
     last_probe_at: Option<Instant>,
-    /// Proposed budget: <= 64 KiB/min of probe traffic (§6.3).
+    /// Proposed budget: <= 64 KiB/min of probe traffic (Sec.6.3).
     pub probe_budget_bytes_per_min: u64,
     /// Minimum spacing between idle probes (proposed 5 s). Without it a
     /// service ticking at 1 Hz probes every tick and spends the whole byte
-    /// budget in a minute (§6.3b).
+    /// budget in a minute (Sec.6.3b).
     pub probe_interval: Duration,
 }
 
@@ -83,10 +83,10 @@ impl CapacityEstimator {
     }
 
     /// (b) Idle probe request. Returns the granted probe size, or `None` when
-    /// the per-minute probe budget is exhausted (§6.3 bounded probing).
+    /// the per-minute probe budget is exhausted (Sec.6.3 bounded probing).
     pub fn request_idle_probe(&mut self, want_bytes: u64, now: Instant) -> Option<u64> {
         // Cadence first: a probe is for a link nothing else is measuring, and
-        // it must not be re-issued on every tick (§6.3b).
+        // it must not be re-issued on every tick (Sec.6.3b).
         if let Some(prev) = self.last_probe_at {
             if now.duration_since(prev) < self.probe_interval { return None; }
         }
@@ -115,17 +115,23 @@ impl CapacityEstimator {
         self.last_probe_at = None;
     }
 
-    /// Traffic on this link means ACK pacing is already measuring it (§6.3a),
-    /// so the next idle probe is pushed out by one interval — the same rule the
-    /// keepalive scheduler applies (§6.6).
+    /// Traffic on this link means ACK pacing is already measuring it (Sec.6.3a),
+    /// so the next idle probe is pushed out by one interval -- the same rule the
+    /// keepalive scheduler applies (Sec.6.6).
     pub fn note_traffic(&mut self, now: Instant) { self.last_probe_at = Some(now); }
 
-    /// Flow-level lane (§6.2): count flow packets for capacity even without ACK clock.
+    /// Flow-level lane (Sec.6.2): count flow packets for capacity even without ACK clock.
     /// Each flow packet contributes to window_bytes, so a flow-only link still learns capacity.
     pub fn on_flow_packet(&mut self, bytes: u64, now: Instant) {
         self.window_bytes += bytes;
         self.roll(now);
         self.note_traffic(now);
+    }
+
+    /// Explicit FlowData ACK (Sec.6.3): when flow-level lane gets ACK, count for capacity.
+    pub fn on_flow_ack(&mut self, bytes: u64, now: Instant) {
+        self.window_bytes += bytes;
+        self.roll(now);
     }
 
     /// Feed the result of an idle probe: capacity = bytes * 8 / rtt.
@@ -221,7 +227,7 @@ mod tests {
     #[test]
     fn traffic_suppresses_the_idle_probe() {
         // A link that is carrying data is already measured by ACK pacing
-        // (§6.3a); probing it would spend budget and perturb the estimate.
+        // (Sec.6.3a); probing it would spend budget and perturb the estimate.
         let t0 = Instant::now();
         let mut e = CapacityEstimator::new(1_000_000, t0);
         let interval = e.probe_interval;

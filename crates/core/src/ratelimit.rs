@@ -1,4 +1,4 @@
-//! Per-uplink rate limiting — token bucket for service side (§4.5 abuse controls)
+//! Per-uplink rate limiting -- token bucket for service side (Sec.4.5 abuse controls)
 //!
 //! The relay already has RateLimiter (global cap, per-IP, handshake rate, per-session token bucket).
 //! This module adds a per-uplink rate limiter for the service egress path, to prevent

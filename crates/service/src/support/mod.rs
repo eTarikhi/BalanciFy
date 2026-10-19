@@ -1,12 +1,12 @@
-//! Support bundle generation (§8.2 Diagnostics, §9.2 redaction)
+//! Support bundle generation (Sec.8.2 Diagnostics, Sec.9.2 redaction)
 //!
 //! One-click bundle: logs (ETW export), route table, adapter state, version/signing info, redaction applied.
-//! Redaction: no destinations, no content (§9.2) — only counters, error codes, and hashed flow keys.
+//! Redaction: no destinations, no content (Sec.9.2) -- only counters, error codes, and hashed flow keys.
 
 use crate::{Service, Counters};
 use std::time::Instant;
 
-/// Redacted flow key for diagnostics — hash of 5-tuple, not the tuple itself.
+/// Redacted flow key for diagnostics -- hash of 5-tuple, not the tuple itself.
 #[derive(Debug, Clone)]
 pub struct RedactedFlow {
     pub hash: u64,

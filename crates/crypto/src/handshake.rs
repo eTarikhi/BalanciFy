@@ -1,8 +1,8 @@
 //! Session establishment: a first-party implementation of the `Noise_IK`
 //! handshake pattern over X25519, ChaCha20-Poly1305 and BLAKE2s.
 //!
-//! Why this pattern (§9.2): the client pins the relay's identity key at
-//! provisioning, which is exactly `IK`'s pre-message — the initiator knows the
+//! Why this pattern (Sec.9.2): the client pins the relay's identity key at
+//! provisioning, which is exactly `IK`'s pre-message -- the initiator knows the
 //! responder's static key before the first flight. That buys, in two messages:
 //!
 //! * **responder authentication** from the pinned key (a man-in-the-middle
@@ -15,8 +15,8 @@
 //!   nonce salt is taken from.
 //!
 //! The implementation follows the Noise specification's `SymmetricState`
-//! definitions directly (§5.2: `MixKey`, `MixHash`, `EncryptAndHash`,
-//! `DecryptAndHash`, `Split`) and the `IK` message patterns (§7.4). Note that
+//! definitions directly (Sec.5.2: `MixKey`, `MixHash`, `EncryptAndHash`,
+//! `DecryptAndHash`, `Split`) and the `IK` message patterns (Sec.7.4). Note that
 //! `MixKeyAndHash` is *not* used here: the specification reserves it for the
 //! `psk` modifier, and this is the plain `IK` pattern.
 //!
@@ -25,7 +25,7 @@
 //! * **Key storage and generation.** Secrets arrive as `[u8; 32]` arguments,
 //!   including the ephemeral. That keeps this module sans-I/O and deterministic
 //!   under test; the service sources ephemeral bytes from the platform CSPRNG
-//!   and static keys from the DPAPI/TPM store (§9.2).
+//!   and static keys from the DPAPI/TPM store (Sec.9.2).
 //! * **A replay cache.** Freshness comes from the ephemerals; nothing here
 //!   rejects a captured first flight being replayed at a *new* responder
 //!   session, which is a session-management concern, not a key-agreement one.
@@ -40,14 +40,14 @@ use chacha20poly1305::{
 use crate::{TunnelCipher, KEY_LEN, SALT_LEN};
 
 /// `Noise_IK_25519_ChaChaPoly_BLAKE2s`. Longer than BLAKE2s's 32-byte output,
-/// so `InitializeSymmetric` hashes it rather than padding it (§5.2).
+/// so `InitializeSymmetric` hashes it rather than padding it (Sec.5.2).
 pub const PROTOCOL_NAME: &[u8] = b"Noise_IK_25519_ChaChaPoly_BLAKE2s";
 
 const HASH_LEN: usize = 32;
 const DH_LEN: usize = 32;
 const TAG_LEN: usize = 16;
 /// Handshake messages use nonce zero: the key changes after every `MixKey`, so
-/// the counter never advances past zero (§5.1).
+/// the counter never advances past zero (Sec.5.1).
 const ZERO_NONCE: [u8; 12] = [0u8; 12];
 
 /// The first flight is `e || EncryptAndHash(s) || EncryptAndHash(payload)`.
@@ -73,7 +73,7 @@ pub struct TransportKeys {
     pub send: [u8; KEY_LEN],
     /// Key for frames this side receives.
     pub recv: [u8; KEY_LEN],
-    /// The handshake hash, for channel binding (§11.2).
+    /// The handshake hash, for channel binding (Sec.11.2).
     pub handshake_hash: [u8; HASH_LEN],
 }
 
@@ -93,7 +93,7 @@ impl TransportKeys {
     /// A [`TunnelCipher`] for the receiving direction.
     pub fn recv_cipher(&self) -> Option<TunnelCipher> { TunnelCipher::new(&self.recv, self.salt()) }
 
-    /// Rekey both directions, for forward secrecy (§11.3). Returns new
+    /// Rekey both directions, for forward secrecy (Sec.11.3). Returns new
     /// `TransportKeys` with fresh send/recv keys but same handshake hash (so
     /// salt stays bound to the original transcript). Old keys should be
     /// zeroized by the caller.
@@ -116,7 +116,7 @@ impl TransportKeys {
     }
 }
 
-/// `SymmetricState` (spec §5.2): a chaining key, a transcript hash, and an
+/// `SymmetricState` (spec Sec.5.2): a chaining key, a transcript hash, and an
 /// optional AEAD key that is reset to empty by every `MixKey`.
 struct SymmetricState {
     ck: [u8; HASH_LEN],
@@ -194,7 +194,7 @@ impl SymmetricState {
 
     fn keys(&self, initiator: bool) -> TransportKeys {
         let (k1, k2) = self.split();
-        // c1 encrypts initiator-to-responder, c2 the other way (§5.2).
+        // c1 encrypts initiator-to-responder, c2 the other way (Sec.5.2).
         let (send, recv) = if initiator { (k1, k2) } else { (k2, k1) };
         TransportKeys { send, recv, handshake_hash: self.h }
     }
@@ -205,7 +205,7 @@ fn dh(secret: &x25519_dalek::StaticSecret, public: &x25519_dalek::PublicKey) -> 
 }
 
 /// The handshake nonce. Handshake keys are replaced by every `MixKey`, so the
-/// CipherState counter never advances (§5.1) and the nonce is always zero.
+/// CipherState counter never advances (Sec.5.1) and the nonce is always zero.
 fn zero_nonce() -> Option<chacha20poly1305::Nonce> {
     chacha20poly1305::Nonce::try_from(&ZERO_NONCE[..]).ok()
 }
@@ -225,7 +225,7 @@ fn open(key: &[u8; KEY_LEN], ciphertext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
 // ------------------------------------------------------------------ initiator
 
 /// The client side: it knows the responder's static key in advance (pinned at
-/// provisioning, §9.2) and proves its own identity in the first flight.
+/// provisioning, Sec.9.2) and proves its own identity in the first flight.
 pub struct Initiator {
     state: SymmetricState,
     s: x25519_dalek::StaticSecret,

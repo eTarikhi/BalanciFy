@@ -1,10 +1,10 @@
-//! MTU / MSS handling (blueprint §6.6).
+//! MTU / MSS handling (blueprint Sec.6.6).
 //!
-//! "Virtual adapter MTU = min(path MTU) − tunnel header; clamp TCP MSS
+//! "Virtual adapter MTU = min(path MTU) - tunnel header; clamp TCP MSS
 //! accordingly; pass ICMP (incl. PTB) so PMTUD works end-to-end."
 //!
 //! The adapter MTU must be derived from the *narrowest live path*, and it has
-//! to be recomputed when a path drops out — otherwise every packet to the
+//! to be recomputed when a path drops out -- otherwise every packet to the
 //! narrow path is fragmented or black-holed.
 
 /// RFC 791 minimum IPv4 MTU: below this, IPv4 cannot be served without
@@ -12,7 +12,7 @@
 pub const IPV4_MIN_MTU: u16 = 576;
 /// IPv4 header + TCP header.
 pub const MSS_OVERHEAD_V4: u16 = 40;
-/// IPv6 header + TCP header (the conservative clamp for dual-stack §6.6).
+/// IPv6 header + TCP header (the conservative clamp for dual-stack Sec.6.6).
 pub const MSS_OVERHEAD_V6: u16 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,10 +31,10 @@ impl MtuPolicy {
         Some(min.saturating_sub(self.tunnel_overhead))
     }
 
-    /// True when the adapter MTU can carry IPv4 at all (§6.6).
+    /// True when the adapter MTU can carry IPv4 at all (Sec.6.6).
     pub fn is_viable(adapter_mtu: u16) -> bool { adapter_mtu >= IPV4_MIN_MTU }
 
-    /// Dual-stack safe MSS clamp (§6.6): the smaller IPv6-based value.
+    /// Dual-stack safe MSS clamp (Sec.6.6): the smaller IPv6-based value.
     pub fn mss_clamp(adapter_mtu: u16) -> u16 { adapter_mtu.saturating_sub(MSS_OVERHEAD_V6) }
     pub fn mss_clamp_v4(adapter_mtu: u16) -> u16 { adapter_mtu.saturating_sub(MSS_OVERHEAD_V4) }
 }

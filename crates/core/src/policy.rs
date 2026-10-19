@@ -1,12 +1,12 @@
-//! Control-plane policy source (blueprint §6.1).
+//! Control-plane policy source (blueprint Sec.6.1).
 //!
 //! One immutable [`PolicySnapshot`] feeds **both** schedulers: the flow
-//! scheduler (§6.2) and the striping scheduler (§6.4). Nothing else in the
-//! product reads link state directly — that is what keeps the two schedulers
+//! scheduler (Sec.6.2) and the striping scheduler (Sec.6.4). Nothing else in the
+//! product reads link state directly -- that is what keeps the two schedulers
 //! from disagreeing during a flap.
 //!
-//! The engine owns, per uplink: the health state machine (§6.5), the link score
-//! (§6.3) and the capacity estimator (§6.3). It is sans-I/O: probes, ACKs and
+//! The engine owns, per uplink: the health state machine (Sec.6.5), the link score
+//! (Sec.6.3) and the capacity estimator (Sec.6.3). It is sans-I/O: probes, ACKs and
 //! clock values are pushed in by the caller.
 
 use std::collections::BTreeMap;
@@ -16,12 +16,12 @@ use crate::health::{HealthConfig, HealthMachine, LinkState};
 use crate::placement::{place, FlowClass, FlowKey, UplinkId};
 use crate::scoring::{CapacityEstimator, LinkScore};
 
-/// EWMA alpha for probe RTT/loss (§6.3 proposed value).
+/// EWMA alpha for probe RTT/loss (Sec.6.3 proposed value).
 pub const EWMA_ALPHA: f64 = 0.2;
 /// Striping quantum window: bytes per millisecond of estimated capacity
-/// (§6.4 rule 2, proposed), floored at one tunnel MTU.
+/// (Sec.6.4 rule 2, proposed), floored at one tunnel MTU.
 pub const QUANTUM_WINDOW: Duration = Duration::from_millis(1);
-/// Proposed tunnel MTU used as the DRR quantum floor (§6.6).
+/// Proposed tunnel MTU used as the DRR quantum floor (Sec.6.6).
 pub const TUNNEL_MTU: u64 = 1400;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,15 +34,15 @@ pub struct UplinkView {
     pub loss: f64,
     pub capacity_bps: u64,
     pub metered: bool,
-    /// False when excluded (Down/Probing, or metered and not user-approved §6.6).
+    /// False when excluded (Down/Probing, or metered and not user-approved Sec.6.6).
     pub eligible: bool,
 }
 
-/// Immutable, revisioned snapshot published by the control plane (§6.1).
+/// Immutable, revisioned snapshot published by the control plane (Sec.6.1).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PolicySnapshot {
     pub revision: u64,
-    /// Per-boot hash seed (§6.2 rule 4) — logged in the support bundle.
+    /// Per-boot hash seed (Sec.6.2 rule 4) -- logged in the support bundle.
     pub seed: u64,
     pub best_rtt: Duration,
     pub uplinks: Vec<UplinkView>,
@@ -60,8 +60,8 @@ impl PolicySnapshot {
     ///
     /// An excluded uplink is reported as `Down` here whatever its health state
     /// says, so *every* placement class (bulk, latency-sensitive, pinned)
-    /// refuses it — zeroing the weight alone would only stop the WRH path and
-    /// a metered link would still win the lowest-delay contest (§6.6). The
+    /// refuses it -- zeroing the weight alone would only stop the WRH path and
+    /// a metered link would still win the lowest-delay contest (Sec.6.6). The
     /// truthful state stays on [`UplinkView`] for the GUI.
     pub fn rows(&self) -> Vec<(UplinkId, f64, Duration, LinkState)> {
         self.uplinks
@@ -77,7 +77,7 @@ impl PolicySnapshot {
         place(flow, class, &self.rows())
     }
 
-    /// Striping-scheduler view: DRR quanta proportional to capacity (§6.4 rule 2).
+    /// Striping-scheduler view: DRR quanta proportional to capacity (Sec.6.4 rule 2).
     pub fn quanta(&self) -> Vec<(u8, u64)> {
         self.eligible()
             .map(|u| {
@@ -91,7 +91,7 @@ impl PolicySnapshot {
 #[derive(Debug, Clone)]
 pub struct PolicyConfig {
     pub health: HealthConfig,
-    /// §6.6: metered links are excluded unless the user allows bonding over them.
+    /// Sec.6.6: metered links are excluded unless the user allows bonding over them.
     pub allow_metered: bool,
 }
 
@@ -130,7 +130,7 @@ pub struct PolicyEngine {
 }
 
 impl PolicyEngine {
-    /// `seed` is the per-boot hash seed (§6.2 rule 4); pass a fresh random
+    /// `seed` is the per-boot hash seed (Sec.6.2 rule 4); pass a fresh random
     /// value at service start and log it in the support bundle.
     pub fn new(cfg: PolicyConfig, seed: u64) -> Self {
         Self { cfg, uplinks: BTreeMap::new(), seed, revision: 0, published: PolicySnapshot { seed, ..Default::default() } }
@@ -154,7 +154,7 @@ impl PolicyEngine {
         );
     }
 
-    /// Adapter removal (§4.5): immediate Down, flows rehash on the next publish.
+    /// Adapter removal (Sec.4.5): immediate Down, flows rehash on the next publish.
     pub fn remove_uplink(&mut self, id: UplinkId) {
         if let Some(u) = self.uplinks.get_mut(&id) { u.health.adapter_removed(); }
     }
@@ -164,7 +164,7 @@ impl PolicyEngine {
         if let Some(u) = self.uplinks.get_mut(&id) { u.metered = metered; }
     }
 
-    /// Sleep/resume (§4.5): every uplink re-probes before carrying traffic.
+    /// Sleep/resume (Sec.4.5): every uplink re-probes before carrying traffic.
     pub fn resume_from_sleep(&mut self) {
         for u in self.uplinks.values_mut() { u.health.resume_from_sleep(); }
     }
@@ -182,12 +182,12 @@ impl PolicyEngine {
         u.score.observe(u.score.rtt_ewma, true, EWMA_ALPHA);
     }
 
-    /// Passive learning from tunnel ACKs (§6.3a, §6.5 "passive ACK learning").
+    /// Passive learning from tunnel ACKs (Sec.6.3a, Sec.6.5 "passive ACK learning").
     pub fn on_ack(&mut self, id: UplinkId, bytes: u64, now: Instant) {
         if let Some(u) = self.uplinks.get_mut(&id) { u.capacity.on_ack(bytes, now); }
     }
 
-    /// Bounded idle probe result (§6.3b).
+    /// Bounded idle probe result (Sec.6.3b).
     pub fn on_idle_probe(&mut self, id: UplinkId, bytes: u64, rtt: Duration, now: Instant) {
         if let Some(u) = self.uplinks.get_mut(&id) {
             u.capacity.on_probe_result(bytes, rtt, now);
@@ -195,24 +195,24 @@ impl PolicyEngine {
         }
     }
 
-    /// Restart every uplink's ACK-pacing window at `now` (§4.5 sleep/resume,
-    /// §6.6 re-binding). See [`CapacityEstimator::restart_window`].
+    /// Restart every uplink's ACK-pacing window at `now` (Sec.4.5 sleep/resume,
+    /// Sec.6.6 re-binding). See [`CapacityEstimator::restart_window`].
     pub fn restart_measurements(&mut self, now: Instant) {
         for u in self.uplinks.values_mut() { u.capacity.restart_window(now); }
     }
 
     /// Record that this uplink carried traffic, so it is measured by ACK
-    /// pacing instead of being probed (§6.3a/b).
+    /// pacing instead of being probed (Sec.6.3a/b).
     pub fn note_traffic(&mut self, id: UplinkId, now: Instant) {
         if let Some(u) = self.uplinks.get_mut(&id) { u.capacity.note_traffic(now); }
     }
 
-    /// Flow-level lane (§6.2): count flow packets for capacity even without ACK clock.
+    /// Flow-level lane (Sec.6.2): count flow packets for capacity even without ACK clock.
     pub fn on_flow_packet(&mut self, id: UplinkId, bytes: u64, now: Instant) {
         if let Some(u) = self.uplinks.get_mut(&id) { u.capacity.on_flow_packet(bytes, now); }
     }
 
-    /// Ask whether an idle capacity probe may be sent, and how large (§6.3
+    /// Ask whether an idle capacity probe may be sent, and how large (Sec.6.3
     /// bounded probing). Returns `Some((uplink, bytes))`.
     pub fn request_idle_probe(&mut self, want_bytes: u64, now: Instant) -> Option<(UplinkId, u64)> {
         let ids: Vec<UplinkId> = self.uplinks.keys().copied().collect();
@@ -235,7 +235,7 @@ impl PolicyEngine {
                 let factor = u.health.weight_factor();
                 // Score against the *live* capacity estimate, not the last value
                 // a probe happened to copy in: ACK pacing moves capacity between
-                // probes (§6.3a) and that must reach the weights immediately.
+                // probes (Sec.6.3a) and that must reach the weights immediately.
                 let mut scored = u.score.clone();
                 scored.capacity_bps = u.capacity.capacity_bps();
                 let score = scored.score(best_rtt);
@@ -264,7 +264,7 @@ impl PolicyEngine {
         published
     }
 
-    /// Quality-driven degradation needs the current best RTT (§6.5 threshold is
+    /// Quality-driven degradation needs the current best RTT (Sec.6.5 threshold is
     /// "excess over best link"); call after probing a round.
     pub fn apply_quality(&mut self, best_rtt: Duration) {
         for u in self.uplinks.values_mut() {
@@ -309,7 +309,7 @@ mod tests {
     fn nothing_is_eligible_until_probes_succeed() {
         let mut e = engine();
         let s = e.publish(Instant::now());
-        assert!(!s.has_capacity(), "Probing uplinks carry no traffic (§6.5)");
+        assert!(!s.has_capacity(), "Probing uplinks carry no traffic (Sec.6.5)");
         assert!(s.place(&FlowKey::new(6, sa(1), sa(443)), FlowClass::Bulk).is_none());
     }
 
@@ -352,7 +352,7 @@ mod tests {
         let before: Vec<Option<UplinkId>> = flows.iter().map(|f| s0.place(f, FlowClass::Bulk)).collect();
         assert!(before.iter().any(|p| *p == Some(UplinkId(1))), "both links should be used");
 
-        // uplink 1 fails: one miss degrades, three misses drop it (§6.5)
+        // uplink 1 fails: one miss degrades, three misses drop it (Sec.6.5)
         for _ in 0..3 { e.on_probe_miss(UplinkId(1)); }
         let s1 = e.publish(Instant::now());
         assert_eq!(s1.view(UplinkId(1)).unwrap().state, LinkState::Down);
@@ -371,7 +371,7 @@ mod tests {
         bring_up(&mut e, UplinkId(0), Duration::from_millis(30));
         bring_up(&mut e, UplinkId(1), Duration::from_millis(12));
         let s = e.publish(Instant::now());
-        assert!(!s.is_healthy(UplinkId(1)), "metered excluded by default (§6.6)");
+        assert!(!s.is_healthy(UplinkId(1)), "metered excluded by default (Sec.6.6)");
         let dns = FlowKey::new(17, sa(1), sa(53));
         assert_eq!(s.place(&dns, FlowClass::LatencySensitive), Some(UplinkId(0)), "the excluded link must not win on delay");
         assert_eq!(s.place(&dns, FlowClass::Pinned(UplinkId(1))), None, "pinned to an excluded link => no placement");
@@ -421,7 +421,7 @@ mod tests {
         assert!(e.publish(Instant::now()).has_capacity());
         e.resume_from_sleep();
         let s = e.publish(Instant::now());
-        assert!(!s.has_capacity(), "no traffic until probes complete (§4.5)");
+        assert!(!s.has_capacity(), "no traffic until probes complete (Sec.4.5)");
     }
 
     #[test]

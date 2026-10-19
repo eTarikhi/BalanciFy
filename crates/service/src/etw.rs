@@ -1,4 +1,4 @@
-//! ETW logging stub — Windows Event Tracing for Windows (§8.2 Diagnostics)
+//! ETW logging stub -- Windows Event Tracing for Windows (Sec.8.2 Diagnostics)
 //! On Windows, logs to ETW provider; on non-Windows, falls back to eprintln.
 //! Minimal dependencies, no external crate, to keep policy clean.
 
@@ -90,7 +90,7 @@ impl EtwProvider {
     }
 }
 
-// Well-known event IDs (§8.2)
+// Well-known event IDs (Sec.8.2)
 pub const EVT_SERVICE_START: u16 = 100;
 pub const EVT_SERVICE_STOP: u16 = 101;
 pub const EVT_UPLINK_UP: u16 = 200;

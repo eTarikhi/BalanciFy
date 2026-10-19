@@ -1,5 +1,5 @@
-//! Balancify client binary — thin CLI that performs secure handshake and
-//! demonstrates encrypted tunnel flow. Blueprint §4.2, §8.3, §11.1 Phase 4.
+//! Balancify client binary -- thin CLI that performs secure handshake and
+//! demonstrates encrypted tunnel flow. Blueprint Sec.4.2, Sec.8.3, Sec.11.1 Phase 4.
 //!
 //! This binary is intentionally simple: it loads or generates a static keypair
 //! via FileKeyStore (DPAPI-protected on Windows), initiates Noise_IK handshake
@@ -62,7 +62,7 @@ fn main() -> std::io::Result<()> {
                 [0u8; 32]
             }
         } else {
-            eprintln!("No pinned relay and no BALANCIFY_RELAY_PUBLIC_KEY — using lab mode (no pinning)");
+            eprintln!("No pinned relay and no BALANCIFY_RELAY_PUBLIC_KEY -- using lab mode (no pinning)");
             [0u8; 32]
         }
     } else {
@@ -79,7 +79,7 @@ fn main() -> std::io::Result<()> {
         arr
     };
 
-    println!("Balancify client — state_dir={}, relay={}, count={}", state_dir, relay_addr, count);
+    println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir, relay_addr, count);
     println!("  client public: {:02x?}...", &keypair.public_bytes()[..8]);
 
     // Create service core with dummy TunnelCipher, will be replaced after handshake
@@ -152,7 +152,7 @@ fn main() -> std::io::Result<()> {
         svc.open_session(1, now);
     }
 
-    // Optional per-flow sessions (§4.7.4)
+    // Optional per-flow sessions (Sec.4.7.4)
     if std::env::var("BALANCIFY_PER_FLOW").map(|v| v == "1").unwrap_or(false) {
         svc.set_per_flow_sessions(true);
         println!("  per-flow sessions enabled");

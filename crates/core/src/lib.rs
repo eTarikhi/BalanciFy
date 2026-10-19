@@ -1,23 +1,23 @@
-//! Balancify control-plane core (first-party, per blueprint §4.8 / §6).
+//! Balancify control-plane core (first-party, per blueprint Sec.4.8 / Sec.6).
 //!
 //! Implements, sans-I/O and platform-independent:
-//! - the path-health state machine with deliberate hysteresis (§6.5),
-//! - link scoring and capacity estimation (§6.3),
-//! - per-path congestion windows, coupled across paths (§6.4 rule 4),
-//! - flow placement by weighted rendezvous hashing and latency-class override (§6.2),
-//! - classification rules (§6.2 step 1) and the flow table with affinity (§6.2 rule 3),
-//! - the policy source that both schedulers read (§6.1),
-//! - the bond auto-disable rule (§6.4 rule 6),
-//! - MTU/MSS derivation and per-path keepalives (§6.6).
+//! - the path-health state machine with deliberate hysteresis (Sec.6.5),
+//! - link scoring and capacity estimation (Sec.6.3),
+//! - per-path congestion windows, coupled across paths (Sec.6.4 rule 4),
+//! - flow placement by weighted rendezvous hashing and latency-class override (Sec.6.2),
+//! - classification rules (Sec.6.2 step 1) and the flow table with affinity (Sec.6.2 rule 3),
+//! - the policy source that both schedulers read (Sec.6.1),
+//! - the bond auto-disable rule (Sec.6.4 rule 6),
+//! - MTU/MSS derivation and per-path keepalives (Sec.6.6).
 //!
-//! All numeric constants are the blueprint's *proposed* starting values (§6
-//! preamble) — they are lab-tunable, not measurements.
+//! All numeric constants are the blueprint's *proposed* starting values (Sec.6
+//! preamble) -- they are lab-tunable, not measurements.
 //!
 //! # Sans-I/O
 //! Nothing in this crate opens a socket, reads a clock of its own accord, or
-//! spawns a task. Callers push observations (`on_probe_ok`, `on_ack`, …) and a
+//! spawns a task. Callers push observations (`on_probe_ok`, `on_ack`, ...) and a
 //! monotonic `now`; the crate returns decisions. That keeps the whole control
-//! plane unit-testable off Windows and fuzzable in CI (§4.7.4).
+//! plane unit-testable off Windows and fuzzable in CI (Sec.4.7.4).
 
 pub mod bond;
 pub mod congestion;
@@ -52,7 +52,7 @@ pub use policy::{
 pub use rules::{PortRange, Rule, RuleSet};
 pub use scoring::{CapacityEstimator, LinkScore};
 
-/// Crate version surfaced through the IPC contract (§9.2: schema versioned).
+/// Crate version surfaced through the IPC contract (Sec.9.2: schema versioned).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]

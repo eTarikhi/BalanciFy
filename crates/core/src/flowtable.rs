@@ -1,7 +1,7 @@
-//! Flow table with affinity (blueprint §6.2 rule 3).
+//! Flow table with affinity (blueprint Sec.6.2 rule 3).
 //!
 //! A flow stays on its uplink until it idles out (proposed 120 s) or its
-//! uplink leaves the healthy set. **No opportunistic migration** — that is what
+//! uplink leaves the healthy set. **No opportunistic migration** -- that is what
 //! prevents oscillation and server-side session confusion. Latency-sensitive
 //! flows are the documented exception: they follow the lowest-delay healthy
 //! uplink, because that is the property the class was created for.
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crate::placement::{FlowClass, FlowKey, UplinkId};
 use crate::policy::PolicySnapshot;
 
-/// Proposed idle-out (§6.2 rule 3).
+/// Proposed idle-out (Sec.6.2 rule 3).
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -51,8 +51,8 @@ impl FlowTable {
     pub fn uplink_of(&self, flow: &FlowKey) -> Option<UplinkId> { self.entries.get(flow).map(|e| e.uplink) }
 
     /// Place a flow, honouring affinity. Returns `None` when no uplink can carry
-    /// it (all down / excluded) — the caller then applies the fail-open or
-    /// fail-closed default (§9.2, decision D3).
+    /// it (all down / excluded) -- the caller then applies the fail-open or
+    /// fail-closed default (Sec.9.2, decision D3).
     pub fn place(
         &mut self,
         flow: &FlowKey,
@@ -93,7 +93,7 @@ impl FlowTable {
         Some(uplink)
     }
 
-    /// Idle-out sweep (§6.2 rule 3); returns how many entries were dropped.
+    /// Idle-out sweep (Sec.6.2 rule 3); returns how many entries were dropped.
     pub fn sweep(&mut self, now: Instant) -> usize {
         let timeout = self.idle_timeout;
         let before = self.entries.len();
@@ -167,7 +167,7 @@ mod tests {
         ]);
         let second: Vec<Option<UplinkId>> =
             flows.iter().map(|f| t.place(f, FlowClass::Bulk, &s2, now)).collect();
-        assert_eq!(first, second, "no opportunistic migration (§6.2 rule 3)");
+        assert_eq!(first, second, "no opportunistic migration (Sec.6.2 rule 3)");
         assert_eq!(t.stats().affinity_hits, 50);
         assert_eq!(t.stats().rehashes, 0);
     }

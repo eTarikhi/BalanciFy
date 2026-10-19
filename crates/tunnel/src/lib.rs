@@ -1,58 +1,58 @@
-//! Balancify first-party datagram lane (blueprint §6.4, §4.8 rev 2).
+//! Balancify first-party datagram lane (blueprint Sec.6.4, Sec.4.8 rev 2).
 //!
-//! Carriage: UDP datagrams, never TCP (§6.4 rule 4 — no TCP-over-TCP).
+//! Carriage: UDP datagrams, never TCP (Sec.6.4 rule 4 -- no TCP-over-TCP).
 //! Every tunnel packet carries (version, kind, path, flags, session, seq). The
-//! receiving endpoint (in-binary server mode, §4.7 T1) releases payloads in
+//! receiving endpoint (in-binary server mode, Sec.4.7 T1) releases payloads in
 //! order through a reorder buffer whose hold time is capped so one slow path
-//! cannot stall a flow (§6.4 rule 3).
+//! cannot stall a flow (Sec.6.4 rule 3).
 //!
-//! Frame kinds cover the control traffic §6.5/§6.6 require *inside* the tunnel:
+//! Frame kinds cover the control traffic Sec.6.5/Sec.6.6 require *inside* the tunnel:
 //! authenticated health probes (not raw ICMP, so they survive CGNAT), per-path
-//! NAT keepalives (≤ 25 s) and cumulative ACKs that drive capacity estimation
-//! (§6.3) and reinjection (§6.4 rule 5).
+//! NAT keepalives (<= 25 s) and cumulative ACKs that drive capacity estimation
+//! (Sec.6.3) and reinjection (Sec.6.4 rule 5).
 //!
 //! Crypto: the [`Crypto`] trait isolates the AEAD. Phase 2/3 tests use
 //! [`PassThrough`], which is compiled **only** under `cfg(test)` or the
 //! `lab-crypto` feature and is rejected by the CI policy audit in shipped
 //! builds (ADR-0002). Phase 4 swaps in ChaCha20-Poly1305 under the Noise-style
-//! handshake via a vetted vendored crate (§4.8 policy rule c).
+//! handshake via a vetted vendored crate (Sec.4.8 policy rule c).
 //!
 //! # Sans-I/O
 //! [`Sender`] and [`Receiver`] never touch a socket: they take datagrams and a
 //! monotonic `now`, and return what to send. The I/O adapter (bound per-uplink
-//! sockets now, our miniport in Phase 3) is a separate, thin layer (§4.7.4).
+//! sockets now, our miniport in Phase 3) is a separate, thin layer (Sec.4.7.4).
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 /// Wire format revision. Both ends must agree; a mismatch is dropped, not
-/// guessed at (§9.2 "message schema versioned and length-checked").
+/// guessed at (Sec.9.2 "message schema versioned and length-checked").
 pub const WIRE_VERSION: u8 = 0;
 /// version u8 + kind u8 + path u8 + flags u8 + session u64 + seq u64
 pub const HEADER_LEN: usize = 20;
 
-/// §6.4 rule 5 duplicate mode: this frame is a copy sent on a second uplink.
+/// Sec.6.4 rule 5 duplicate mode: this frame is a copy sent on a second uplink.
 pub const FLAG_DUPLICATE: u8 = 0x01;
 /// Re-sent on another path after the reinjection RTO expired.
 pub const FLAG_REINJECTED: u8 = 0x02;
-/// ECN CE mark seen on outer packet (§6.4 rule 4 ECN extension).
+/// ECN CE mark seen on outer packet (Sec.6.4 rule 4 ECN extension).
 pub const FLAG_ECN_CE: u8 = 0x04;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameKind {
     /// Tunnel payload for the inner stack.
     Data,
-    /// NAT keepalive (§6.6); carries no payload.
+    /// NAT keepalive (Sec.6.6); carries no payload.
     Keepalive,
-    /// Health/capacity probe (§6.5, §6.3b); payload is probe padding.
+    /// Health/capacity probe (Sec.6.5, Sec.6.3b); payload is probe padding.
     Probe,
     /// Echo of a probe, used for RTT.
     ProbeReply,
     /// Cumulative acknowledgement: `seq` is the highest contiguous seq seen.
     Ack,
     /// Flow-level lane: one packet of a flow that is *not* striped. Delivered
-    /// immediately, without sequencing or reordering — the flow lives on a
-    /// single path, so order is already preserved by that path (§6.2 vs §6.4).
+    /// immediately, without sequencing or reordering -- the flow lives on a
+    /// single path, so order is already preserved by that path (Sec.6.2 vs Sec.6.4).
     /// Payload is the inner packet, forwarded as-is.
     FlowData,
 }
@@ -123,7 +123,7 @@ impl Header {
 pub trait Crypto: Send + Sync {
     fn seal(&self, path: u8, seq: u64, aad: &[u8], plain: &[u8], out: &mut Vec<u8>);
     fn open(&self, path: u8, seq: u64, aad: &[u8], cipher: &[u8]) -> Option<Vec<u8>>;
-    /// Optional rekey for forward secrecy (§11.3). Default returns None (not rekeyable).
+    /// Optional rekey for forward secrecy (Sec.11.3). Default returns None (not rekeyable).
     /// Implementations that support rekey should return Some(new_cipher).
     fn rekey(&self) -> Option<Self>
     where
@@ -151,7 +151,7 @@ impl Crypto for PassThrough {
 #[derive(Debug, Clone)]
 pub struct SenderConfig {
     /// Time after which an unacknowledged packet is reinjected on another path.
-    /// Proposed 120 ms (tune against the measured delay gap, §6.4 rule 3).
+    /// Proposed 120 ms (tune against the measured delay gap, Sec.6.4 rule 3).
     pub rto: Duration,
     /// Retransmission window memory ceiling (proposed 4 MiB).
     pub max_retx_bytes: usize,
@@ -220,8 +220,8 @@ struct RetxEntry {
     reinjections: u8,
 }
 
-/// Sender: numbers packets, selects the egress path per packet (§6.4 rule 2),
-/// keeps a bounded retransmission window and reinjects on loss (§6.4 rule 5).
+/// Sender: numbers packets, selects the egress path per packet (Sec.6.4 rule 2),
+/// keeps a bounded retransmission window and reinjects on loss (Sec.6.4 rule 5).
 pub struct Sender<C: Crypto> {
     pub session: u64,
     next_seq: u64,
@@ -231,7 +231,7 @@ pub struct Sender<C: Crypto> {
     drr: DeficitRoundRobin,
     retx: BTreeMap<u64, RetxEntry>,
     retx_bytes: usize,
-    /// Per-session sequence counters for per-flow sessions (§4.7.4)
+    /// Per-session sequence counters for per-flow sessions (Sec.4.7.4)
     session_seqs: BTreeMap<u64, u64>,
     /// Paths that just lost a packet, drained by the control plane.
     losses: Vec<u8>,
@@ -275,19 +275,19 @@ impl<C: Crypto> Sender<C> {
         global
     }
 
-    /// Update path quanta when the control plane republishes weights (§6.1).
+    /// Update path quanta when the control plane republishes weights (Sec.6.1).
     pub fn set_quanta(&mut self, paths: Vec<(u8, u64)>) { self.drr = DeficitRoundRobin::new(paths); }
     pub fn paths(&self) -> Vec<u8> { self.drr.paths() }
     pub fn counters(&self) -> SenderCounters { self.counters }
     pub fn retx_bytes(&self) -> usize { self.retx_bytes }
     /// Paths on which a packet was just declared lost, drained. The control
-    /// plane feeds these to the per-path congestion controller (§6.4 rule 4).
+    /// plane feeds these to the per-path congestion controller (Sec.6.4 rule 4).
     pub fn drain_losses(&mut self) -> Vec<u8> { std::mem::take(&mut self.losses) }
 
     /// Drop the retransmit state for one path and forget its statistics. Used
     /// when a NAT mapping moves: frames in flight through the old mapping are
     /// unreachable, and their RTO timers would only reinject into the void
-    /// (§6.6 "re-key path, keep session"). Returns the packets dropped.
+    /// (Sec.6.6 "re-key path, keep session"). Returns the packets dropped.
     pub fn forget_path(&mut self, path: u8) -> u64 {
         let stale: Vec<u64> =
             self.retx.iter().filter(|(_, e)| e.path == path).map(|(k, _)| *k).collect();
@@ -301,7 +301,7 @@ impl<C: Crypto> Sender<C> {
     }
 
     /// Drop the whole retransmission window. Sleep/resume invalidates every
-    /// mapping at once (§4.5); returning the count lets the caller report it.
+    /// mapping at once (Sec.4.5); returning the count lets the caller report it.
     pub fn drop_retx(&mut self) -> u64 {
         let n = self.retx.len() as u64;
         self.retx.clear();
@@ -314,7 +314,7 @@ impl<C: Crypto> Sender<C> {
     pub fn config(&self) -> &SenderConfig { &self.cfg }
     pub fn crypto(&self) -> &C { &self.crypto }
 
-    /// Emit one Data frame for `plain`. `None` when no path can carry it —
+    /// Emit one Data frame for `plain`. `None` when no path can carry it --
     /// the caller then applies the fail-open/fail-closed default (D3).
     pub fn send(&mut self, plain: &[u8], now: Instant) -> Option<Sent> {
         self.send_excluding(plain, now, &[])
@@ -322,7 +322,7 @@ impl<C: Crypto> Sender<C> {
 
     /// Like [`Sender::send`], but never picks a path the caller has blocked.
     /// The service blocks paths whose congestion window is full, so a congested
-    /// uplink sheds load to the others instead of being overrun (§6.4 rule 4).
+    /// uplink sheds load to the others instead of being overrun (Sec.6.4 rule 4).
     /// `None` when no path can carry the packet; the caller then holds it.
     pub fn send_excluding(&mut self, plain: &[u8], now: Instant, blocked: &[u8]) -> Option<Sent> {
         let path = self.drr.next_filtered(plain.len().max(1) as u64, blocked)?;
@@ -336,7 +336,7 @@ impl<C: Crypto> Sender<C> {
         Some(Sent { path, seq, kind: FrameKind::Data, bytes })
     }
 
-    /// §6.4 rule 5 duplicate mode: the same payload and seq on a second path.
+    /// Sec.6.4 rule 5 duplicate mode: the same payload and seq on a second path.
     /// The receiver deduplicates by seq, so the copy is free at the inner stack
     /// and buys tail latency for small critical packets.
     pub fn duplicate(&mut self, plain: &[u8], seq: u64, path: u8) -> Option<Sent> {
@@ -348,7 +348,7 @@ impl<C: Crypto> Sender<C> {
         Some(Sent { path, seq, kind: FrameKind::Data, bytes })
     }
 
-    /// Flow-level lane (§6.2): send one packet of a non-striped flow on a
+    /// Flow-level lane (Sec.6.2): send one packet of a non-striped flow on a
     /// specific uplink. Not sequenced and not retransmitted: the flow stays on
     /// one path, so that path's own ordering is enough, and cross-path
     /// reordering must not be able to delay it.
@@ -377,20 +377,20 @@ impl<C: Crypto> Sender<C> {
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
         // For per-flow sessions, seq is per-session; retx still keyed by seq+session? For now keep global retx keyed by seq only for simplicity
-        // but store with session in mind — we store seq as global unique per session map
+        // but store with session in mind -- we store seq as global unique per session map
         self.remember(seq, plain, path, now);
         Some(Sent { path, seq, kind: FrameKind::Data, bytes })
     }
 
-    /// Per-path NAT keepalive (§6.6). Consumes no sequence number.
+    /// Per-path NAT keepalive (Sec.6.6). Consumes no sequence number.
     pub fn keepalive(&mut self, path: u8) -> Sent {
         let bytes = self.frame(FrameKind::Keepalive, path, 0, 0, &[]);
         self.counters.keepalives += 1;
         Sent { path, seq: 0, kind: FrameKind::Keepalive, bytes }
     }
 
-    /// Health / capacity probe (§6.5 probes are tunnel control messages;
-    /// §6.3b bounded idle probes). `pad` is the probe size the control plane
+    /// Health / capacity probe (Sec.6.5 probes are tunnel control messages;
+    /// Sec.6.3b bounded idle probes). `pad` is the probe size the control plane
     /// granted from the probe budget.
     pub fn probe(&mut self, path: u8, pad: usize) -> Sent {
         let id = self.next_probe_id;
@@ -421,7 +421,7 @@ impl<C: Crypto> Sender<C> {
         self.ack_with_flags(path, up_to, FLAG_ECN_CE)
     }
 
-    /// Record a probe reply: RTT sample for this path (§6.3).
+    /// Record a probe reply: RTT sample for this path (Sec.6.3).
     pub fn on_probe_reply(&mut self, path: u8, rtt: Duration, alpha: f64) {
         let s = self.stat(path);
         let next = rtt.as_secs_f64();
@@ -436,11 +436,11 @@ impl<C: Crypto> Sender<C> {
     ///
     /// A connection-level cumulative ACK frees the send buffer no matter which
     /// path delivered it, but a capacity sample belongs to the path that
-    /// carried the data — RFC 8684 §3.3 keeps subflow-level and
+    /// carried the data -- RFC 8684 Sec.3.3 keeps subflow-level and
     /// connection-level acknowledgement separate for exactly this reason.
     /// Attributing the whole range to the path the ACK arrived on would inflate
     /// that path's estimate and starve the others of samples, which corrupts
-    /// the DRR quanta (§6.3a, §6.4 rule 2).
+    /// the DRR quanta (Sec.6.3a, Sec.6.4 rule 2).
     pub fn on_ack(&mut self, up_to: u64, _now: Instant) -> Vec<(u8, u64)> {
         let keys: Vec<u64> = self.retx.range(..=up_to).map(|(k, _)| *k).collect();
         let mut per_path: Vec<(u8, u64)> = Vec::new();
@@ -457,7 +457,7 @@ impl<C: Crypto> Sender<C> {
         per_path
     }
 
-    /// Reinjection timer (§6.4 rule 5): packets unacknowledged past the RTO are
+    /// Reinjection timer (Sec.6.4 rule 5): packets unacknowledged past the RTO are
     /// re-sent on a *different* path. Returns the frames to emit.
     pub fn reinjections_due(&mut self, now: Instant) -> Vec<Sent> {
         let rto = self.cfg.rto;
@@ -525,7 +525,7 @@ impl<C: Crypto> Sender<C> {
 
 // --------------------------------------------------------------------- DRR
 
-/// Deficit round robin with quanta proportional to estimated capacity (§6.4 rule 2).
+/// Deficit round robin with quanta proportional to estimated capacity (Sec.6.4 rule 2).
 #[derive(Debug, Clone)]
 pub struct DeficitRoundRobin {
     paths: Vec<(u8, u64)>, // (path id, quantum bytes/round)
@@ -552,8 +552,8 @@ impl DeficitRoundRobin {
     pub fn next_excluding(&mut self, exclude: u8, cost: u64) -> Option<u8> {
         self.pick(cost, &[exclude])
     }
-    /// Skip every path the caller has blocked — e.g. the ones whose congestion
-    /// window is full (§6.4 rule 4).
+    /// Skip every path the caller has blocked -- e.g. the ones whose congestion
+    /// window is full (Sec.6.4 rule 4).
     pub fn next_filtered(&mut self, cost: u64, blocked: &[u8]) -> Option<u8> {
         self.pick(cost, blocked)
     }
@@ -562,9 +562,9 @@ impl DeficitRoundRobin {
         let n = self.paths.len();
         if n == 0 { return None; }
         let c = cost as i64;
-        // Deficit round robin (blueprint §6.4 rule 2): the quantum is credited
+        // Deficit round robin (blueprint Sec.6.4 rule 2): the quantum is credited
         // once per visit, and a path keeps its turn (and its credit) while that
-        // credit can still pay for a packet — so bytes sent stay proportional
+        // credit can still pay for a packet -- so bytes sent stay proportional
         // to the quanta. Credit carries over, so a path whose quantum is
         // smaller than one packet is served once it has saved up; the cap at
         // quantum + one packet stops a path that has been idle from banking a
@@ -589,8 +589,8 @@ impl DeficitRoundRobin {
 
 // ----------------------------------------------------------- reorder buffer
 
-/// Receiver reorder buffer (§6.4 rule 3): releases in order; on hold-cap expiry
-/// releases out-of-order and advances (inner TCP recovers; measured trade-off §10.3).
+/// Receiver reorder buffer (Sec.6.4 rule 3): releases in order; on hold-cap expiry
+/// releases out-of-order and advances (inner TCP recovers; measured trade-off Sec.10.3).
 pub struct ReorderBuffer {
     next_seq: u64,
     hold: BTreeMap<u64, Vec<u8>>,
@@ -639,7 +639,7 @@ impl ReorderBuffer {
     }
 }
 
-/// Speculative duplication policy (§6.4 rule 5): duplicate small critical packets.
+/// Speculative duplication policy (Sec.6.4 rule 5): duplicate small critical packets.
 pub fn should_duplicate(plain_len: usize, critical: bool, duplicate_mode: bool) -> bool {
     duplicate_mode && critical && plain_len <= 256
 }
@@ -669,7 +669,7 @@ pub enum Event {
 
 #[derive(Debug, Clone)]
 pub struct ReceiverConfig {
-    /// Reorder hold cap (§6.4 rule 3: gap + 10 ms, hard cap proposed 80 ms).
+    /// Reorder hold cap (Sec.6.4 rule 3: gap + 10 ms, hard cap proposed 80 ms).
     pub hold_cap: Duration,
     pub max_sessions: usize,
     pub idle_timeout: Duration,
@@ -694,7 +694,7 @@ pub struct ReceiverCounters {
     pub frames: u64,
     pub delivered: u64,
     pub out_of_order: u64,
-    /// Redundant frames discarded: duplicate-mode copies (§6.4 rule 5) and
+    /// Redundant frames discarded: duplicate-mode copies (Sec.6.4 rule 5) and
     /// reinjected copies that lost the race with the original.
     pub duplicates: u64,
     pub auth_failed: u64,
@@ -731,7 +731,7 @@ impl<C: Crypto> Receiver<C> {
     pub fn sessions(&self) -> usize { self.sessions.len() }
 
     /// Payloads held for reordering across every session. Exposed because it
-    /// is the memory a peer can make us occupy (§9.1 adversary (b)); the hold
+    /// is the memory a peer can make us occupy (Sec.9.1 adversary (b)); the hold
     /// cap is what bounds it.
     pub fn held_packets(&self) -> usize { self.sessions.values().map(|s| s.buf.held()).sum() }
     pub fn config(&self) -> &ReceiverConfig { &self.cfg }
@@ -781,7 +781,7 @@ impl<C: Crypto> Receiver<C> {
         }
     }
 
-    /// Timer tick (§6.4 rule 3): release anything the hold cap has now let
+    /// Timer tick (Sec.6.4 rule 3): release anything the hold cap has now let
     /// through, even if no new datagram arrived. Without this, a flow whose
     /// missing packet never comes back would stall until the peer sends again.
     pub fn drain(&mut self, now: Instant) -> Vec<Event> {
@@ -831,7 +831,7 @@ impl<C: Crypto> Receiver<C> {
             self.open_session(hdr.session, now);
         }
         // Verified before anything is buffered: an unauthentic frame must not
-        // be able to occupy reorder-buffer memory (§9.1 adversary (b)).
+        // be able to occupy reorder-buffer memory (Sec.9.1 adversary (b)).
         let Some(plain) = self.crypto.open(hdr.path, hdr.seq, header_bytes, body) else {
             self.counters.auth_failed += 1;
             self.counters.dropped += 1;
@@ -842,8 +842,8 @@ impl<C: Crypto> Receiver<C> {
             let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
             state.last_activity = now;
             state.last_path = hdr.path;
-            // A redundant copy is one whose seq we have already seen — either
-            // the duplicate-mode copy (§6.4 rule 5) or a reinjected copy that
+            // A redundant copy is one whose seq we have already seen -- either
+            // the duplicate-mode copy (Sec.6.4 rule 5) or a reinjected copy that
             // lost the race with the original. Count it once, when it is
             // discarded, so the counter means "redundant frames absorbed".
             // (Counting the flag as well would report every duplicate-mode
@@ -1005,8 +1005,8 @@ mod tests {
         let mut seqs = Vec::new();
         // MTU-scale payloads. DRR credits one quantum per visit and charges the
         // packet, so the split is only proportional when a quantum is at least
-        // one packet wide — which is what placement guarantees by flooring
-        // quanta at TUNNEL_MTU (§6.3).
+        // one packet wide -- which is what placement guarantees by flooring
+        // quanta at TUNNEL_MTU (Sec.6.3).
         let payload = vec![7u8; 1400];
         for i in 0..20 {
             let sent = s.send(&payload, t0).expect("paths available");
@@ -1089,7 +1089,7 @@ mod tests {
         // Striping means one cumulative ACK covers packets that left on
         // several paths. Crediting the whole range to the path the ACK arrived
         // on would inflate that path's capacity estimate and starve the others
-        // of samples (§6.3a, RFC 8684 §3.3), so the accounting is per path.
+        // of samples (Sec.6.3a, RFC 8684 Sec.3.3), so the accounting is per path.
         let mut s = Sender::new(9, PassThrough, vec![(0, 250), (1, 150)]);
         let t0 = Instant::now();
         let mut carried = [0u64; 2];

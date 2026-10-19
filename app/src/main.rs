@@ -1,5 +1,5 @@
-//! Balancify desktop shell — IPC client that renders service status
-//! This is a lab CLI that mimics the WinUI shell's behavior over IPC v1 (§8.2).
+//! Balancify desktop shell -- IPC client that renders service status
+//! This is a lab CLI that mimics the WinUI shell's behavior over IPC v1 (Sec.8.2).
 //! The real WinUI 3 / .NET 10 shell would use the same IPC contract over a named pipe.
 //! This CLI connects via TCP loopback (for CI/Linux) and renders Home, Rules, Diagnostics.
 
@@ -13,7 +13,7 @@ fn main() -> std::io::Result<()> {
     let addr: SocketAddr = args.get(1).and_then(|s| s.parse().ok()).unwrap_or_else(|| "127.0.0.1:5000".parse().unwrap());
     let mode = args.get(2).map(|s| s.as_str()).unwrap_or("home");
 
-    println!("Balancify shell — connecting to {} mode={}", addr, mode);
+    println!("Balancify shell -- connecting to {} mode={}", addr, mode);
     let mut stream = TcpStream::connect(addr)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;

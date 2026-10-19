@@ -1,4 +1,4 @@
-//! Wintun fallback exception — §11.2, ADR-0009
+//! Wintun fallback exception -- Sec.11.2, ADR-0009
 //! Flow-level only, feature-gated, single allowed third-party runtime artifact (Wintun.dll)
 //! Only compiled when `wintun-fallback` feature enabled and exception file exists.
 
@@ -77,11 +77,11 @@ pub mod fallback {
 
 #[cfg(not(feature = "wintun-fallback"))]
 pub mod fallback {
-    // No-op when feature disabled — no third-party code linked
+    // No-op when feature disabled -- no third-party code linked
     pub struct WintunAdapter;
     impl WintunAdapter {
         pub fn load(_: std::path::PathBuf) -> Result<Self, String> {
-            Err("Wintun fallback disabled — enable feature wintun-fallback and create exception file per ADR-0009".to_string())
+            Err("Wintun fallback disabled -- enable feature wintun-fallback and create exception file per ADR-0009".to_string())
         }
     }
 }
