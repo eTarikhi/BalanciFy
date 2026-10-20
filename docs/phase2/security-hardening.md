@@ -26,7 +26,7 @@ Status: continuous; latest CI green on Ubuntu and Windows
 
 - **Driver packaging**: bundle self-contained .NET 10 + WinAppSDK runtimes, transactional installer with atomic rollback, clean-machine offline test per `clean-machine-test.md`, SBOM sidecar
 - **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (S15)
-- **SBOM/VEX SPDX 3.0**: generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13 — stub exists, real generation needs cargo cyclonedx
+- **SBOM/VEX S13**: CI now generates an SPDX 2.3 inventory from `cargo metadata --locked`; the prior handwritten SPDX-3-shaped file and fake CVE placeholders were removed. Standards-valid SPDX 3.0 serialization and reviewed VEX statements are still pending; the current generator makes no vulnerability-status claims.
 - **Cargo.lock**: committed and checked by `tools/ci/audit-deps.sh`; regenerate only when the pinned dependency set intentionally changes.
 - **Real netem S2c**: replace simulated rig with `tools/lab/netem-rig.sh` profiles, record 10 reps median/p95/spread per Sec.10.1 — harness exists, real Rig B pending
 - **Throughput rows on Rig B**: re-run Sec.10.3 aggregate/single-flow/failover with pacing enabled and secure mode, measure added delay and CPU/Gbit/s via crypto-bench + ETW — the local synthetic benchmark is not network evidence; real Rig B results pending

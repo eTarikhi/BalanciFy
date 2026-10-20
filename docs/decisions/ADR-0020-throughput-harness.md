@@ -4,6 +4,8 @@ Date: 2026-10-19
 Status: accepted (measurement interpretation corrected 2026-10-20)
 
 > Correction: early software-loop output was mislabeled as network throughput, added delay, and loss penalty. `throughput.rs` measures only local service processing work; no network acceptance row was established. See `docs/phase2/throughput-rows.md` for current scope and real Rig B procedure.
+>
+> SBOM correction (2026-10-20): the handwritten SPDX 3.0/VEX placeholder below was not standards-valid and included fabricated vulnerability identifiers. It has been superseded by an SPDX 2.3 inventory from `cargo metadata --locked`; reviewed VEX remains pending (see ADR-0031).
 
 ## Context
 
@@ -24,7 +26,7 @@ Need deterministic simulated harness + benches for DRR, pacing, crypto, plus rea
 - `crates/crypto/src/bin/bench.rs`: seal/open/rekey MB/s, us/op, Gbit/s for CPU/Gbit/s metric
 - `docs/phase2/throughput-rows.md`: honest synthetic benchmark scope and pending Rig B procedure (wired 1 Gbps, Wi-Fi 6 300 Mbit/s, secure mode, pacing 80% capacity, per-flow off/on, 10 reps, iperf3)
 - `docs/phase2/clean-machine-test.md`: offline bundle, journaled rollback, HVCI trio, 10 reps checklist, Hyper-V automation
-- `tools/ci/sbom.sh`: SPDX 3.0 stub lists 6 vetted crates + first-party, no external deps
+- Historical only: `tools/ci/sbom.sh` was a handwritten SPDX 3.0 stub. The replacement emits SPDX 2.3 from the locked Cargo graph and no VEX claims.
 
 ## Consequences
 

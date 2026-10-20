@@ -365,14 +365,12 @@ fn render_hvci(resp: Response) {
 fn render_sbom(resp: Response) {
     match resp {
         Response::Status(s) => {
-            println!("=== SBOM/VEX SPDX 3.0 (S13, March 2027) ===");
-            println!("Tool: tools/ci/sbom.sh v2 generates SPDX 3.0 JSON with creationInfo timestamp, packages first-party + vetted + transitive, relationships DEPENDS_ON, annotations C2/HVCI/installer, vulnerabilities VEX not_affected/fixed");
-            println!("Packages: balancify-core/tunnel/crypto/service/relay/ipc/client/app/installer/driver + chacha20poly1305 0.11.0 x25519-dalek 2.0.1 blake2 0.10.6 hkdf 0.12.4 getrandom 0.2.15 zeroize 1.8.1 + transitive aead/chacha20/cipher/poly1305/curve25519-dalek/subtle/generic-array/typenum/etc.");
-            println!("VEX: CVE-2024-XXXX-chacha20poly1305 not_affected cargo audit clean, CVE-2024-XXXX-x25519-dalek not_affected, RUSTSEC-2023-XXXX-generic fixed pinned exact");
-            println!("Installer: copies SBOM sidecar to ProgramData\\Balancify\\sbom.spdx.json, support bundle includes");
-            println!("Real generation when toolchain available: cargo cyclonedx --format json --spec-version 1.5 + cargo audit --json + sbom-tool generate -b . -bc . -pn Balancify -pv version -ps Balancify -nsb https://balancify.io/sbom");
+            println!("=== SBOM status (S13) ===");
+            println!("Generate the current SPDX 2.3 inventory with: sh tools/ci/sbom.sh [version] [output]");
+            println!("The inventory comes from cargo metadata --locked and includes declared license metadata, source checksums, and dependency relationships.");
+            println!("No VEX statements or vulnerability-status claims are generated; SPDX 3.0 and reviewed VEX remain pending.");
+            println!("The installer copies the generated sidecar and fails if it is missing; packaging/clean-machine validation remains pending.");
             render_counters(&s.counters);
-            println!("Cargo.lock: {} packages, vetted only, audit passes with lock file (5491758)", s.active_flows); // placeholder
         }
         _ => println!("Unexpected: {:?}", resp),
     }

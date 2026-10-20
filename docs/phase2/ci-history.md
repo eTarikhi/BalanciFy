@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Active continuation: `arena/6b225b20-balancify`; latest green run 39476560004 on Ubuntu and Windows, including FlowAck wire-v2 tests, lab analysis/safety, release build, and dependency/crypto audit. See `continuous-development-log.md` for current commits and hardware gates.
+Active continuation: `arena/6b225b20-balancify`; at this document's update, latest green run 39481350433 on Ubuntu and Windows. It includes FlowAck wire-v2 tests, lab analysis/safety, release build, and dependency/crypto audit. The SBOM/VEX described in the historical progression below was a handwritten placeholder with fake vulnerability IDs, not a valid deliverable. Current follow-on work replaces it with an SPDX 2.3 locked-graph inventory, validates the generated document with `spdx-tools`, and removes fabricated installer fallback content; SPDX 3.0/VEX remain pending until the follow-on CI run confirms the change. See `continuous-development-log.md` for current commits and hardware gates.
 
 ## Progression
 

@@ -26,7 +26,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 3. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on wired 1 Gbps and Wi-Fi 6 300 Mbit/s, secure mode, pacing at 80% capacity, per-flow off/on; measure aggregate/single-flow/failover/added delay (target <=3ms) and CPU/Gbit/s. Local service-path benchmarks are not network evidence.
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
 5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
-6. **SBOM/VEX SPDX 3.0**: replace the current handwritten inventory/VEX placeholder with standards-valid generation from the locked dependency graph and audited vulnerability data, then publish the sidecar (S13).
+6. **SBOM/VEX S13**: the previous handwritten placeholder is removed; CI now generates an SPDX 2.3 inventory from the exact Cargo metadata graph. Still required: standards-valid SPDX 3.0 serialization, reviewed VEX statements from current advisory data, and installer sidecar verification.
 7. **Client binary + GUI IPC**: move from the lab CLI/loopback adapter to the planned WinUI 3 shell and production IPC transport/authentication.
 8. **FlowData reliability**: FlowAck now supports capacity estimation; selective retransmission/repair remains a possible future requirement if acceptance criteria require recovery on the non-striped lane.
 9. **More ETW events**: wire bond revert and uplink up/down events into PolicyEngine publication.

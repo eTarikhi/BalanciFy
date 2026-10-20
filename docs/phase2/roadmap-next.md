@@ -22,7 +22,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
 - ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
 - Software benchmark + benches (throughput.rs local work rate/per-call latency only; drr-bench, pacing-bench, crypto-bench). Real network performance and G3/G4 acceptance remain pending.
-- SBOM + clean-machine test docs (sbom.sh SPDX 3.0, clean-machine-test.md offline bundle, rollback, HVCI trio)
+- SBOM + clean-machine test docs exist; current `sbom.py` emits SPDX 2.3 from the locked Cargo graph. SPDX 3.0/VEX and clean-machine/installer validation remain pending.
 - ADRs: 0009 Wintun fallback, 0010 rate limiting+flow capacity, 0011 per-session sequencing, 0012 ETW+support bundle, 0013 per-class sessions, 0014 throughput harness, 0015 continuous development
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
@@ -36,7 +36,7 @@ Status: in progress; software work continues, hardware gates remain pending
 1. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on real hardware (wired 1 Gbps, Wi-Fi 6 300 Mbit/s), secure mode, pacing 80% capacity, per-flow off/on, measure aggregate/single-flow/failover/added delay (target ≤3ms) + CPU/Gbit/s via crypto-bench + ETW.
 2. **Driver packaging**: bundle self-contained .NET 10 + WinAppSDK runtimes, transactional installer with atomic rollback, clean-machine offline test per `clean-machine-test.md`.
 3. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (S15).
-4. **SBOM/VEX SPDX 3.0**: generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13.
+4. **SBOM/VEX S13**: the current CI output is SPDX 2.3 from the locked Cargo graph. Add standards-valid SPDX 3.0 serialization, reviewed VEX from current advisory data, publish the sidecar, and validate installer copy.
 
 ## Next for Phase 4 (secure + GUI)
 

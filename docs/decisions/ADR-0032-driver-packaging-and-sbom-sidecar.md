@@ -2,6 +2,14 @@
 
 Date: 2026-10-20
 Status: accepted
+
+> **SBOM implementation correction (2026-10-20):** the historical `sbom.sh v2`
+> listed below emitted handwritten SPDX-3-shaped JSON and placeholder CVE IDs;
+> those were not valid SPDX/VEX claims. Current `tools/ci/sbom.py` generates an
+> SPDX 2.3 inventory from `cargo metadata --locked` and emits no VEX assertions.
+> SPDX 3.0 and reviewed VEX remain pending; the previous stub must not be treated
+> as satisfying S13.
+
 Commits: 9115e4f vcxproj, a527d6d INF, 6c9a52f sbom.sh v2, 8ab9501 installer SBOM sidecar, 78cd32b lab-progress, 36d65eb throughput-rows
 
 ## Context
@@ -47,7 +55,7 @@ Previously:
 
 ### SBOM/VEX
 
-**sbom.sh v2** (6c9a52f):
+**Historical `sbom.sh v2` placeholder (6c9a52f; superseded, not standards-valid):
 - SPDX 3.0 JSON: spdxVersion SPDX-3.0, dataLicense CC0-1.0, SPDXID DOCUMENT, name Balancify, documentNamespace https://balancify.io/sbom, creationInfo timestamp tool sbom.sh v2
 - Packages: 10 first-party (core/tunnel/crypto/service/relay/ipc/client/app/installer/driver) + 6 vetted direct (chacha20poly1305 0.11.0 x25519-dalek 2.0.1 blake2 0.10.6 hkdf 0.12.4 getrandom 0.2.15 zeroize 1.8.1) + transitive (aead, chacha20, cipher, poly1305, curve25519-dalek, subtle, generic-array, typenum, block-buffer, version_check, zeroize_derive, cpufeatures, quote, curve25519-dalek-derive, cmov, rustc_version, semver, unicode-ident, proc-macro2, serde_core/derive, ctutils, serde, syn, etc.) = 24 packages total
 - Relationships: DEPENDS_ON first-party -> vetted, annotations C2 no third-party kernel, HVCI trio S15, installer full env
@@ -72,7 +80,7 @@ Previously:
 ## Consequences
 
 - Driver packaging ready for WDK build, test-signed load, Verifier, HLK, VBS/MI VM — code ready, real VM run pending (requires WDK 10.0.22621+, Hyper-V VM, test-signing)
-- SBOM/VEX SPDX 3.0 ready, installer copies sidecar, support bundle includes, real generation pending toolchain
+- Historical installer sidecar wiring exists, but the previous SPDX/VEX file was a placeholder. The current SPDX 2.3 generator is build-graph based; SPDX 3.0/VEX and end-to-end installer sidecar validation remain pending.
 - Cargo.lock vetted-only, audit passes with lock file, CI green
 - CI still only Rust workspace (no WDK), future add WDK build job Phase 4 (a) in ci.yml
 - Throughput harness enhanced 9 profiles, app shell 9 modes, report 5 visualizations — all CI green

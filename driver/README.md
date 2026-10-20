@@ -14,7 +14,7 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 - Partner Center enrolment + EV cert ordered in Phase 1 (G1).
 - Attestation signing first, HLK only if Server support added (Sec.9.3).
 - HVCI readiness trio: Driver Verifier with code-integrity checks, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (Sec.9.5, S15).
-- SBOM/VEX SPDX 3.0 from March 2027 (S13) -- generated in CI.
+- Current CI interim SBOM is SPDX 2.3 from `cargo metadata --locked`; standards-valid SPDX 3.0 and reviewed VEX remain pending (S13).
 
 **Performance targets (G3):**
 - Added median delay <= 3 ms wired lab (Sec.10.3)

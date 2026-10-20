@@ -152,18 +152,16 @@ impl Installer {
     }
 
     pub fn install_sbom_sidecar(&mut self, src: PathBuf, dst: PathBuf) -> Result<(), String> {
-        println!("[sbom] copying sidecar {} -> {} (S13)", src.display(), dst.display());
+        println!("[sbom] copying SPDX sidecar {} -> {}", src.display(), dst.display());
         if !self.dry_run {
+            if !src.is_file() {
+                return Err(format!("required SPDX SBOM is missing: {}", src.display()));
+            }
             if let Some(parent) = dst.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create SBOM directory failed: {e}"))?;
             }
-            if src.exists() {
-                let _ = std::fs::copy(&src, &dst).map_err(|e| format!("copy sbom failed: {}", e));
-            } else {
-                // Generate minimal SBOM if src missing (lab)
-                let minimal = r#"{"spdxVersion":"SPDX-3.0","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"Balancify","documentNamespace":"https://balancify.io/sbom"}"#;
-                let _ = std::fs::write(&dst, minimal);
-            }
+            std::fs::copy(&src, &dst).map_err(|e| format!("copy SBOM failed: {e}"))?;
         }
         self.journal.push(
             InstallStep::Gui { exe_path: dst.clone() }, // reuse Gui for rollback tracking, SBOM is sidecar
@@ -274,5 +272,33 @@ mod tests {
         let mut inst = Installer::new(PathBuf::from("/tmp/test_journal.json"), true);
         assert!(inst.run().is_ok());
         assert_eq!(inst.journal.entries.len(), 8); // preflight, driver, service, adapter, runtimes, gui, sbom, self-test
+    }
+
+    #[test]
+    fn sbom_sidecar_requires_and_copies_the_generated_inventory() {
+        let root = std::env::temp_dir().join(format!("balancify-sbom-{}", std::process::id()));
+        let src = root.join("source.spdx.json");
+        let dst = root.join("install").join("sbom.spdx.json");
+        std::fs::create_dir_all(&root).unwrap();
+        let expected = r#"{"spdxVersion":"SPDX-2.3"}"#;
+        std::fs::write(&src, expected).unwrap();
+
+        let mut installer = Installer::new(root.join("journal.json"), false);
+        installer.install_sbom_sidecar(src.clone(), dst.clone()).unwrap();
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), expected);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sbom_sidecar_does_not_fabricate_a_missing_inventory() {
+        let root = std::env::temp_dir().join(format!("balancify-sbom-missing-{}", std::process::id()));
+        let dst = root.join("install").join("sbom.spdx.json");
+        let mut installer = Installer::new(root.join("journal.json"), false);
+        let error = installer
+            .install_sbom_sidecar(root.join("missing.spdx.json"), dst.clone())
+            .unwrap_err();
+        assert!(error.contains("required SPDX SBOM is missing"));
+        assert!(!dst.exists());
     }
 }

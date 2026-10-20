@@ -50,9 +50,9 @@ The latest CI also includes Ubuntu/Windows workspace tests, release build, lab s
 - Throughput rows on Rig B — run `throughput.rs` + iperf3 on real hardware, secure mode, pacing 80% capacity, per-flow off/on, measure aggregate/single-flow/failover/added delay (target <=3ms) + CPU/Gbit/s via crypto-bench + ETW
 - Driver packaging — bundle self-contained .NET 10 + WinAppSDK runtimes, transactional installer with atomic rollback, clean-machine offline test
 - HVCI readiness trio — Driver Verifier with code-integrity, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (S15)
-- SBOM/VEX SPDX 3.0 — generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13
+- SPDX 3.0 serialization and reviewed VEX for S13 — current build graph SBOM is valid SPDX 2.3 from `cargo metadata --locked`; do not treat the removed handwritten JSON or placeholder CVEs as a valid SBOM/VEX.
 - Client binary + GUI IPC — wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10
-- Per-flow session demux retx keyed by (session, seq) — currently global unique seq for retx simplicity, future per-session seq spaces
+- FlowAck now uses per-session sequence spaces and authenticated selective receipts; retransmission state is keyed by `(session, seq)`. FlowData repair/retransmission remains a possible future extension.
 - FlowData retransmission/repair remains a possible extension; wire v2 selective FlowAck currently feeds capacity estimation but does not resend a lost non-striped packet.
 - ETW wiring already done, but could add more events (bond revert, uplink up/down)
 
