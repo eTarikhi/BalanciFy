@@ -19,7 +19,7 @@ Status: continuous; latest CI green on Ubuntu and Windows
 - **Tampered input refused** (Sec.9.1b): under real AEAD, flipping any bit of frame's body or tag is refused and counted, nothing reaches inner stack (tunnel + service tests)
 - **Fuzz gate over untrusted-input paths** (Sec.4.7.4): 6 seeded, dependency-free generators (20k rounds each for datagram and IPC-frame loops): no panic, no invented payload, session and hold caps bound memory, length checks hold, replay cannot manufacture delivery
 - **Wintun fallback exception** (Sec.11.2): feature wintun-fallback, exception file check, raw FFI placeholder, flow-level only, must be retired next minor release, audit allows only when exception file exists (ADR-0009)
-- **ETW logging + support bundle redacted** (Sec.8.2, Sec.9.2): EtwProvider stub, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths+per_path. Support-bundle JSON escapes strings and includes counters, uplink and per-path diagnostics, but never the configured relay endpoint; it reports only `relay_configured` plus aggregate failover counts.
+- **ETW logging + support bundle redacted** (Sec.8.2, Sec.9.2): EtwProvider stub, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths+per_path. Support-bundle JSON escapes strings, includes counters/uplink/per-path diagnostics, and is exported through IPC v1 opcode 11; it never includes the configured relay endpoint, reporting only `relay_configured` plus aggregate failover counts.
 
 ## Remaining for Phase 4 / G3
 
@@ -38,4 +38,4 @@ Status: continuous; latest CI green on Ubuntu and Windows
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio, C2/C4
 - ADRs 0003-0026
-- CI: 39434898635 success on Ubuntu and Windows, lab safety tests, release build, and dependency/crypto audit
+- CI: 39436081009 success on Ubuntu and Windows, lab safety tests, release build, and dependency/crypto audit

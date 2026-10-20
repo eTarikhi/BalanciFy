@@ -18,6 +18,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `8b61140 write key files through private unique temporaries` — replace predictable `.tmp` writes with collision-resistant sibling files opened using `create_new`, set mode 0600 at creation on Unix, sync before rename, and cover pre-created symlink behavior. CI 39433158496 passed.
 - `bd5ccec enable DPAPI for Windows key storage by default` — activate the first-party DPAPI wrapper in normal Windows builds, add raw-key migration coverage, and extend the policy audit. CI 39433909156 passed, including Windows tests.
 - `6749a0a zeroize plaintext key-store temporaries` and `5c23d1d zeroize temporary copies of stored secrets` — wipe DPAPI plaintext allocations, migration buffers, and temporary secret copies; audit the source guard. CI 39434291882 and 39434898635 passed.
+- `81a37e5 expose redacted support bundles over IPC` — add request opcode 11 and a u32-length response field so full JSON does not truncate at the contract's u8 string limit; wire service dispatch and the CLI bundle mode. Service/IPC tests cover large response round-trip and relay-endpoint redaction. CI 39436081009 passed.
 
 The latest CI also includes Ubuntu/Windows workspace tests, release build, lab safety tests, and dependency-policy audit. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
