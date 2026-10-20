@@ -101,24 +101,35 @@ fn choose_state_dir(
     is_windows: bool,
 ) -> Result<std::path::PathBuf, std::io::Error> {
     if let Some(path) = override_dir {
-        if path.as_os_str().is_empty() {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "BALANCIFY_STATE_DIR cannot be empty"));
+        if !path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "BALANCIFY_STATE_DIR must be an absolute path",
+            ));
         }
         return Ok(path);
     }
     if is_windows {
-        if let Some(path) = windows_local_app_data {
+        if let Some(path) = windows_local_app_data.filter(|path| path.is_absolute()) {
             return Ok(path.join("Balancify"));
         }
         return home
+            .filter(|path| path.is_absolute())
             .map(|path| path.join("AppData").join("Local").join("Balancify"))
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA or USERPROFILE is required"));
+            .ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "absolute LOCALAPPDATA or USERPROFILE is required",
+            ));
     }
     if let Some(path) = xdg_state_home.filter(|path| path.is_absolute()) {
         return Ok(path.join("balancify"));
     }
-    home.map(|path| path.join(".local").join("state").join("balancify"))
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "XDG_STATE_HOME or HOME is required"))
+    home.filter(|path| path.is_absolute())
+        .map(|path| path.join(".local").join("state").join("balancify"))
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "absolute XDG_STATE_HOME or HOME is required",
+        ))
 }
 
 fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
@@ -416,38 +427,41 @@ mod tests {
 
     #[test]
     fn state_dir_override_has_highest_precedence() {
+        let override_path = std::env::temp_dir().join("custom").join("state");
         let chosen = choose_state_dir(
-            Some("/custom/state".into()),
-            Some("/local/app".into()),
-            Some("/xdg".into()),
-            Some("/home/user".into()),
+            Some(override_path.clone()),
+            Some(std::env::temp_dir().join("local")),
+            Some(std::env::temp_dir().join("xdg")),
+            Some(std::env::temp_dir().join("home")),
             false,
         ).unwrap();
-        assert_eq!(chosen, std::path::PathBuf::from("/custom/state"));
+        assert_eq!(chosen, override_path);
     }
 
     #[test]
     fn windows_state_prefers_per_user_local_app_data() {
+        let local_app_data = std::env::temp_dir().join("local-app-data");
         let chosen = choose_state_dir(
             None,
-            Some("C:/Users/test/AppData/Local".into()),
+            Some(local_app_data.clone()),
             None,
-            Some("C:/Users/test".into()),
+            Some(std::env::temp_dir().join("user-profile")),
             true,
         ).unwrap();
-        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+        assert_eq!(chosen, local_app_data.join("Balancify"));
     }
 
     #[test]
     fn windows_state_falls_back_to_user_profile_not_program_data() {
+        let user_profile = std::env::temp_dir().join("user-profile");
         let chosen = choose_state_dir(
             None,
             None,
             None,
-            Some("C:/Users/test".into()),
+            Some(user_profile.clone()),
             true,
         ).unwrap();
-        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+        assert_eq!(chosen, user_profile.join("AppData").join("Local").join("Balancify"));
     }
 
     #[cfg(not(windows))]
@@ -468,6 +482,18 @@ mod tests {
         assert_eq!(
             choose_state_dir(Some(std::path::PathBuf::new()), None, None, None, false).unwrap_err().kind(),
             std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            choose_state_dir(Some("relative".into()), None, None, None, false).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            choose_state_dir(None, Some("relative".into()), None, Some("relative".into()), true).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            choose_state_dir(None, None, None, Some("relative".into()), false).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
         );
         assert_eq!(
             choose_state_dir(None, None, None, None, false).unwrap_err().kind(),
