@@ -81,15 +81,26 @@ where
     E: FnMut() -> Vec<Event>,
 {
     const EVENT_READ_POLL: Duration = Duration::from_millis(100);
+    const UNSUBSCRIBED_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
     if events_enabled {
         stream.set_read_timeout(Some(EVENT_READ_POLL))?;
     }
     let mut event_interval = None;
     let mut next_event = Instant::now();
+    let mut last_activity = Instant::now();
 
     loop {
         let mut frame = vec![0u8; FRAME_HEADER_LEN];
-        if !read_header(&mut stream, &mut frame, events_enabled, event_interval, &mut next_event, &mut poll_events)? {
+        if !read_header(
+            &mut stream,
+            &mut frame,
+            events_enabled,
+            event_interval,
+            UNSUBSCRIBED_IDLE_TIMEOUT,
+            last_activity,
+            &mut next_event,
+            &mut poll_events,
+        )? {
             return Ok(());
         }
 
@@ -123,6 +134,7 @@ where
         encode_frame(FrameKind::Response, &response.encode(), &mut out)
             .map_err(frame_error)?;
         stream.write_all(&out)?;
+        last_activity = Instant::now();
 
         if let Some(interval_hz) = requested_interval {
             event_interval = if response == Response::Ack && (1..=10).contains(&interval_hz) {
@@ -140,6 +152,8 @@ fn read_header<E>(
     header: &mut [u8],
     events_enabled: bool,
     event_interval: Option<Duration>,
+    idle_timeout: Duration,
+    last_activity: Instant,
     next_event: &mut Instant,
     poll_events: &mut E,
 ) -> io::Result<bool>
@@ -158,8 +172,14 @@ where
                     && (error.kind() == io::ErrorKind::WouldBlock
                         || error.kind() == io::ErrorKind::TimedOut) =>
             {
+                let now = Instant::now();
+                if idle_subscription_expired(last_activity, now, event_interval, idle_timeout) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "IPC client idle without an event subscription",
+                    ));
+                }
                 if let Some(interval) = event_interval {
-                    let now = Instant::now();
                     if now >= *next_event {
                         for event in poll_events() {
                             stream.write_all(&frame_event(&event))?;
@@ -172,6 +192,15 @@ where
         }
     }
     Ok(true)
+}
+
+fn idle_subscription_expired(
+    last_activity: Instant,
+    now: Instant,
+    event_interval: Option<Duration>,
+    idle_timeout: Duration,
+) -> bool {
+    event_interval.is_none() && now.duration_since(last_activity) >= idle_timeout
 }
 
 fn frame_error(error: FrameError) -> io::Error {
@@ -206,6 +235,20 @@ mod tests {
         let addr = "0.0.0.0:5000".parse().unwrap();
         let result = IpcServer::bind_loopback_at(addr);
         assert!(matches!(result, Err(ref error) if error.kind() == io::ErrorKind::InvalidInput));
+    }
+
+    #[test]
+    fn idle_timeout_only_closes_unsubscribed_clients() {
+        let last_activity = Instant::now();
+        let now = last_activity + Duration::from_secs(61);
+        let timeout = Duration::from_secs(60);
+        assert!(idle_subscription_expired(last_activity, now, None, timeout));
+        assert!(!idle_subscription_expired(
+            last_activity,
+            now,
+            Some(Duration::from_secs(1)),
+            timeout,
+        ));
     }
 
     #[test]
