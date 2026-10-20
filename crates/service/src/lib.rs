@@ -619,12 +619,12 @@ impl<C: Crypto + Clone> Service<C> {
             return vec![Action::Refused { flow: flow.clone(), class }];
         };
         if !self.rate_limiter.try_send(sent.path, sent.bytes.len() as u64, now) {
+            self.tx.forget_flow_ack_for_session(sent.session, sent.seq);
             self.counters.held += 1;
             return vec![Action::Hold { flow: flow.clone(), data: payload.to_vec() }];
         }
         self.counters.packets_forwarded += 1;
-        // Flow-level capacity: count for estimator even without ACK clock (Sec.6.3)
-        self.policy.on_flow_packet(uplink, payload.len() as u64, now);
+        // Flow-level capacity is sampled when the authenticated FlowAck arrives.
         self.packets_since_rekey += 1;
         if self.last_rekey.is_none() {
             self.last_rekey = Some(now);
@@ -636,53 +636,74 @@ impl<C: Crypto + Clone> Service<C> {
 
     /// One datagram received on an uplink's socket.
     pub fn ingest_path(&mut self, uplink: UplinkId, dg: &[u8], now: Instant) -> Vec<Action> {
-        let mut is_flow_data = false;
-        if let Some((hdr, _)) = Header::decode(dg) {
-            // ECN CE mark on any frame (Sec.6.4 rule 4)
-            if hdr.flags & balancify_tunnel::FLAG_ECN_CE != 0 {
-                let before = self.cc.ecn_events();
-                self.cc.on_ecn(hdr.path, now);
-                if self.cc.ecn_events() > before {
-                    self.counters.ecn_ce += 1;
-                    self.etw.info(
-                        etw::EVT_ECN_CE,
-                        &format!("ECN CE on path {} uplink {:?} cwnd={}", hdr.path, uplink, self.cc.window(hdr.path)),
-                    );
-                }
-            }
-            is_flow_data = hdr.kind == FrameKind::FlowData;
+        let hdr = Header::decode(dg).map(|(hdr, _)| hdr);
+        if let Some(hdr) = hdr {
             match hdr.kind {
-                FrameKind::Ack => {
-                    for (path, bytes) in self.tx.on_ack_for_session(hdr.session, hdr.seq, now) {
-                        if bytes == 0 { continue; }
-                        self.policy.on_ack(UplinkId(path), bytes, now);
-                        let before_delay = self.cc.delay_events();
-                        self.cc.on_ack_with_rtt(path, bytes, None, now);
-                        if self.cc.delay_events() > before_delay {
-                            self.counters.delay_events += 1;
-                            self.etw.info(
-                                etw::EVT_DELAY_CONGESTION,
-                                &format!("delay congestion on path {} uplink {:?}", path, uplink),
-                            );
+                FrameKind::FlowAck => {
+                    match self.rx.verify_control_frame(dg, now) {
+                        Ok(true) => {}
+                        Ok(false) => return Vec::new(),
+                        Err(reason) => {
+                            if matches!(reason, balancify_tunnel::DropReason::AuthFailed) {
+                                self.counters.auth_failed += 1;
+                                self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
+                            }
+                            return Vec::new();
                         }
+                    }
+                    self.record_ecn_ce(hdr.path, hdr.flags, uplink, now);
+                    for (path, bytes) in self.tx.on_flow_ack_for_session(hdr.session, hdr.seq) {
+                        if bytes == 0 { continue; }
+                        self.policy.on_flow_ack(UplinkId(path), bytes, now);
                     }
                     self.on_relay_ack(now);
                     return Vec::new();
                 }
-                FrameKind::ProbeReply => {
-                    if let Some((sent_at, size)) = self.probes.remove(&(hdr.path, hdr.seq)) {
-                        let rtt = now.duration_since(sent_at);
-                        self.tx.on_probe_reply(hdr.path, rtt, EWMA_ALPHA);
-                        self.policy.on_idle_probe(uplink, size, rtt, now);
-                        let before = self.cc.delay_events();
-                        self.cc.on_rtt(hdr.path, rtt, now);
-                        if self.cc.delay_events() > before {
-                            self.counters.delay_events += 1;
-                            self.etw.info(
-                                etw::EVT_DELAY_CONGESTION,
-                                &format!("delay congestion via probe path {} rtt={:?}", hdr.path, rtt),
-                            );
+                FrameKind::Ack | FrameKind::ProbeReply => {
+                    match self.rx.verify_control_frame(dg, now) {
+                        Ok(true) => {}
+                        Ok(false) => return Vec::new(),
+                        Err(reason) => {
+                            if matches!(reason, balancify_tunnel::DropReason::AuthFailed) {
+                                self.counters.auth_failed += 1;
+                                self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
+                            }
+                            return Vec::new();
                         }
+                    }
+                    self.record_ecn_ce(hdr.path, hdr.flags, uplink, now);
+                    if hdr.kind == FrameKind::Ack {
+                        for (path, bytes) in self.tx.on_ack_for_session(hdr.session, hdr.seq, now) {
+                            if bytes == 0 { continue; }
+                            self.policy.on_ack(UplinkId(path), bytes, now);
+                            let before_delay = self.cc.delay_events();
+                            self.cc.on_ack_with_rtt(path, bytes, None, now);
+                            if self.cc.delay_events() > before_delay {
+                                self.counters.delay_events += 1;
+                                self.etw.info(
+                                    etw::EVT_DELAY_CONGESTION,
+                                    &format!("delay congestion on path {} uplink {:?}", path, uplink),
+                                );
+                            }
+                        }
+                        self.on_relay_ack(now);
+                        return Vec::new();
+                    }
+
+                    let Some((sent_at, size)) = self.probes.remove(&(hdr.path, hdr.seq)) else {
+                        return Vec::new();
+                    };
+                    let rtt = now.duration_since(sent_at);
+                    self.tx.on_probe_reply(hdr.path, rtt, EWMA_ALPHA);
+                    self.policy.on_idle_probe(uplink, size, rtt, now);
+                    let before_delay = self.cc.delay_events();
+                    self.cc.on_rtt(hdr.path, rtt, now);
+                    if self.cc.delay_events() > before_delay {
+                        self.counters.delay_events += 1;
+                        self.etw.info(
+                            etw::EVT_DELAY_CONGESTION,
+                            &format!("delay congestion via probe path {} rtt={:?}", hdr.path, rtt),
+                        );
                     }
                     self.on_relay_ack(now);
                     return Vec::new();
@@ -690,16 +711,15 @@ impl<C: Crypto + Clone> Service<C> {
                 _ => {}
             }
         }
+        let events = self.rx.ingest(dg, now);
+        if !events.iter().any(|ev| matches!(ev, Event::Dropped { .. })) {
+            if let Some(hdr) = hdr { self.record_ecn_ce(hdr.path, hdr.flags, uplink, now); }
+        }
         let mut out = Vec::new();
-        for ev in self.rx.ingest(dg, now) {
+        for ev in events {
             match &ev {
                 Event::Dropped { reason } if matches!(reason, balancify_tunnel::DropReason::AuthFailed) => {
                     self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
-                }
-                Event::Payload { data, .. } if is_flow_data => {
-                    // Explicit flow-level ACK (Sec.6.3): flow lane ACK clock
-                    self.policy.on_flow_ack(uplink, data.len() as u64, now);
-                    self.policy.on_ack(uplink, data.len() as u64, now);
                 }
                 _ => {}
             }
@@ -1056,7 +1076,12 @@ impl<C: Crypto + Clone> Service<C> {
                 Err(message) => Response::Error { status: ipc::Status::BadRequest, message },
             },
             Request::RemoveFlowRule { id } => {
-                if self.rules.remove(id) {
+                if id < balancify_core::FIRST_CUSTOM_RULE_ID {
+                    Response::Error {
+                        status: ipc::Status::BadRequest,
+                        message: format!("rule id {id} is reserved for built-in rules"),
+                    }
+                } else if self.rules.remove(id) {
                     Response::Ack
                 } else {
                     Response::Error { status: ipc::Status::BadRequest, message: format!("no rule {id}") }
@@ -1074,6 +1099,10 @@ impl<C: Crypto + Clone> Service<C> {
                 self.cfg.allow_metered = allowed;
                 self.policy.set_allow_metered(allowed);
                 Response::Ack
+            }
+            Request::GetSupportBundle => {
+                let bundle = support::SupportBundle::collect(self, now);
+                Response::SupportBundle(bundle.to_json())
             }
             Request::SubscribeEvents { interval_hz } => {
                 if interval_hz == 0 || interval_hz > 10 {
@@ -1111,7 +1140,29 @@ impl<C: Crypto + Clone> Service<C> {
 
     pub fn event_interval_hz(&self) -> u8 { self.event_interval_hz }
 
+    /// Snapshot the current warning conditions and counters for a subscribed
+    /// IPC client. The transport controls cadence; this method is side-effect
+    /// free and suitable for caller-driven polling.
+    pub fn telemetry_events(&self) -> Vec<ipc::Event> {
+        let mut events = self.poll_events();
+        events.push(ipc::Event::Stats(self.counters().into()));
+        events
+    }
+
     // -------------------------------------------------------------- internals
+
+    fn record_ecn_ce(&mut self, path: u8, flags: u8, uplink: UplinkId, now: Instant) {
+        if flags & balancify_tunnel::FLAG_ECN_CE == 0 { return; }
+        let before = self.cc.ecn_events();
+        self.cc.on_ecn(path, now);
+        if self.cc.ecn_events() > before {
+            self.counters.ecn_ce += 1;
+            self.etw.info(
+                etw::EVT_ECN_CE,
+                &format!("ECN CE on path {} uplink {:?} cwnd={}", path, uplink, self.cc.window(path)),
+            );
+        }
+    }
 
     fn receiver_action(&mut self, ev: Event) -> Vec<Action> {
         match ev {
@@ -1119,9 +1170,13 @@ impl<C: Crypto + Clone> Service<C> {
                 self.counters.delivered += 1;
                 vec![Action::Deliver { data }]
             }
-            Event::Ack { path, seq, .. } => {
-                let sent = self.tx.ack(path, seq);
+            Event::Ack { session, path, seq } => {
+                let sent = self.tx.ack_for_session(session, path, seq, 0);
                 vec![Action::Send { uplink: UplinkId(sent.path), bytes: sent.bytes }]
+            }
+            Event::FlowAck { session, path, seq } => {
+                let sent = self.tx.flow_ack_for_session(session, path, seq);
+                vec![Action::Send { uplink: UplinkId(path), bytes: sent.bytes }]
             }
             Event::ProbeEcho { path, seq, .. } => {
                 let sent = self.tx.probe_reply(path, seq);
@@ -1193,6 +1248,12 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     fn apply_rule(&mut self, rule: ipc::FlowRule) -> Result<(), String> {
+        if rule.id < balancify_core::FIRST_CUSTOM_RULE_ID {
+            return Err(format!(
+                "rule id {} is reserved for built-in rules",
+                rule.id
+            ));
+        }
         let class = match rule.class {
             ipc::CLASS_BULK => FlowClass::Bulk,
             ipc::CLASS_LATENCY_SENSITIVE => FlowClass::LatencySensitive,
@@ -1482,6 +1543,31 @@ mod tests {
     }
 
     #[test]
+    fn flow_level_capacity_uses_peer_acknowledgements() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        s.handle(ipc::Request::SetBondMode { enabled: false }, now);
+        let flow = FlowKey::new(6, sa(5099), peer(443));
+        let actions = s.send_app_packet(&flow, None, &[7u8; 1200], now);
+        let sent_bytes = actions.iter().find_map(|action| match action {
+            Action::Send { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        }).expect("flow-level packet is sent");
+        let (header, _) = Header::decode(&sent_bytes).expect("flow frame header");
+        assert_eq!(header.kind, FrameKind::FlowData);
+        assert_eq!(s.tx.flow_pending_bytes(), 1200);
+        let before = s.snapshot().view(UplinkId(header.path)).unwrap().capacity_bps;
+
+        let later = now + Duration::from_secs(2);
+        let ack = s.tx.flow_ack_for_session(header.session, header.path, header.seq);
+        assert!(s.ingest_path(UplinkId(header.path), &ack.bytes, later).is_empty());
+        assert_eq!(s.tx.flow_pending_bytes(), 0, "authenticated peer ACK releases bounded accounting");
+        s.publish(later);
+        let after = s.snapshot().view(UplinkId(header.path)).unwrap().capacity_bps;
+        assert_ne!(after, before, "flow capacity changes only after the peer ACK is accounted");
+    }
+
+    #[test]
     fn duplicate_mode_sends_critical_packets_twice() {
         let now = Instant::now();
         let mut s = ready_service(now);
@@ -1753,6 +1839,55 @@ mod tests {
     }
 
     #[test]
+    fn forged_ack_does_not_refresh_relay_liveness() {
+        #[derive(Clone)]
+        struct RejectAll;
+        impl balancify_tunnel::Crypto for RejectAll {
+            fn seal(&self, _path: u8, _seq: u64, _aad: &[u8], plain: &[u8], out: &mut Vec<u8>) {
+                out.extend_from_slice(plain);
+            }
+            fn open(&self, _path: u8, _seq: u64, _aad: &[u8], _cipher: &[u8]) -> Option<Vec<u8>> { None }
+        }
+
+        let now = Instant::now();
+        let mut svc = Service::new(ServiceConfig::default(), RejectAll, RejectAll);
+        svc.set_relays("10.0.0.1:4430".parse().unwrap(), None);
+        svc.on_relay_ack(now);
+        let mut forged = Vec::new();
+        Header::new(FrameKind::Ack, 0, svc.config().session, 0)
+            .with_flags(balancify_tunnel::FLAG_ECN_CE)
+            .encode(&mut forged);
+
+        let later = now + Duration::from_secs(9);
+        assert!(svc.ingest_path(UplinkId(0), &forged, later).is_empty());
+        assert_eq!(svc.relay_last_ack, Some(now), "unauthenticated ACK cannot keep a relay alive");
+        assert_eq!(svc.counters().auth_failed, 1);
+    }
+
+    #[test]
+    fn ipc_support_bundle_returns_complete_redacted_json_over_the_contract() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        s.set_relays("198.51.100.77:9443".parse().unwrap(), None);
+
+        let response = s.handle(ipc::Request::GetSupportBundle, now);
+        let ipc::Response::SupportBundle(json) = &response else {
+            panic!("expected a support bundle response");
+        };
+        assert!(json.contains("\"counters\":{"));
+        assert!(json.contains("\"uplinks\":[{"));
+        assert!(json.contains("\"per_path\":["));
+        assert!(json.contains("\"relay_configured\":true"));
+        assert!(!json.contains("198.51.100.77"));
+        assert!(!json.contains("9443"));
+
+        let frame = balancify_ipc::frame_response(&response);
+        let (kind, payload, _) = balancify_ipc::decode_frame(&frame).unwrap().unwrap();
+        assert_eq!(kind, balancify_ipc::FrameKind::Response);
+        assert_eq!(balancify_ipc::Response::decode(payload), Some(response));
+    }
+
+    #[test]
     fn ipc_status_reflects_the_live_system() {
         let now = Instant::now();
         let mut s = ready_service(now);
@@ -1790,6 +1925,36 @@ mod tests {
     }
 
     #[test]
+    fn ipc_cannot_mutate_reserved_builtin_rule_ids() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        let dns_flow = FlowKey::new(17, sa(53000), peer(53));
+        assert_eq!(s.rules().classify(&dns_flow, None), FlowClass::LatencySensitive);
+
+        let attempted_override = ipc::FlowRule {
+            id: 1,
+            name: "replace-built-in-dns".to_string(),
+            class: ipc::CLASS_BULK,
+            pinned_uplink: 0,
+            priority: 1,
+            proto: 17,
+            port_start: 53,
+            port_end: 53,
+            duplicate: false,
+        };
+        assert!(matches!(
+            s.handle(ipc::Request::SetFlowRule(attempted_override), now),
+            ipc::Response::Error { status: ipc::Status::BadRequest, .. }
+        ));
+        assert!(matches!(
+            s.handle(ipc::Request::RemoveFlowRule { id: 1 }, now),
+            ipc::Response::Error { status: ipc::Status::BadRequest, .. }
+        ));
+        assert_eq!(s.rules().classify(&dns_flow, None), FlowClass::LatencySensitive);
+        assert!(s.rules().rules().iter().any(|rule| rule.id == 1 && rule.name == "dns"));
+    }
+
+    #[test]
     fn ipc_rule_edits_reach_the_classifier() {
         let now = Instant::now();
         let mut s = ready_service(now);
@@ -1797,7 +1962,7 @@ mod tests {
         assert_eq!(s.rules().classify(&flow, None), FlowClass::Bulk);
 
         let rule = ipc::FlowRule {
-            id: 900,
+            id: balancify_core::FIRST_CUSTOM_RULE_ID,
             name: "pin-8443".to_string(),
             class: ipc::CLASS_PINNED,
             pinned_uplink: 1,
@@ -1812,23 +1977,37 @@ mod tests {
         let actions = s.send_app_packet(&flow, None, b"data", now);
         assert_eq!(sends(&actions), vec![UplinkId(1)], "a pin is a placement, not a hint");
 
+        // SetFlowRule is an upsert: editing the same stable id replaces the
+        // prior rule instead of leaving an unreachable duplicate in the list.
+        let updated = ipc::FlowRule {
+            name: "pin-8443-updated".to_string(),
+            pinned_uplink: 0,
+            ..rule.clone()
+        };
+        assert_eq!(s.handle(ipc::Request::SetFlowRule(updated), now), ipc::Response::Ack);
+        assert_eq!(s.rules().rules().iter().filter(|r| r.id == balancify_core::FIRST_CUSTOM_RULE_ID).count(), 1);
+        assert_eq!(s.rules().rules().iter().find(|r| r.id == balancify_core::FIRST_CUSTOM_RULE_ID).unwrap().name, "pin-8443-updated");
+        assert_eq!(s.rules().classify(&flow, None), FlowClass::Pinned(UplinkId(0)));
+        let actions = s.send_app_packet(&flow, None, b"updated", now);
+        assert_eq!(sends(&actions), vec![UplinkId(0)]);
+
         // invalid input is rejected, not half-applied
-        let inverted = ipc::FlowRule { id: 901, port_start: 100, port_end: 10, ..rule.clone() };
+        let inverted = ipc::FlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID + 1, port_start: 100, port_end: 10, ..rule.clone() };
         assert!(matches!(
             s.handle(ipc::Request::SetFlowRule(inverted), now),
             ipc::Response::Error { status: ipc::Status::BadRequest, .. }
         ));
-        let unknown = ipc::FlowRule { id: 902, class: 77, ..rule.clone() };
+        let unknown = ipc::FlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID + 2, class: 77, ..rule.clone() };
         assert!(matches!(
             s.handle(ipc::Request::SetFlowRule(unknown), now),
             ipc::Response::Error { status: ipc::Status::BadRequest, .. }
         ));
-        assert!(!s.rules().rules().iter().any(|r| r.id == 901 || r.id == 902));
+        assert!(!s.rules().rules().iter().any(|r| r.id == balancify_core::FIRST_CUSTOM_RULE_ID + 1 || r.id == balancify_core::FIRST_CUSTOM_RULE_ID + 2));
 
-        assert_eq!(s.handle(ipc::Request::RemoveFlowRule { id: 900 }, now), ipc::Response::Ack);
+        assert_eq!(s.handle(ipc::Request::RemoveFlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID }, now), ipc::Response::Ack);
         assert_eq!(s.rules().classify(&flow, None), FlowClass::Bulk);
         assert!(matches!(
-            s.handle(ipc::Request::RemoveFlowRule { id: 900 }, now),
+            s.handle(ipc::Request::RemoveFlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID }, now),
             ipc::Response::Error { .. }
         ));
     }
@@ -1847,6 +2026,21 @@ mod tests {
         ));
         assert_eq!(s.handle(ipc::Request::SubscribeEvents { interval_hz: 1 }, now), ipc::Response::Ack);
         assert_eq!(s.event_interval_hz(), 1);
+    }
+
+    #[test]
+    fn ipc_telemetry_snapshot_contains_warnings_and_counter_values() {
+        let now = Instant::now();
+        let mut s = Service::new(ServiceConfig::default(), PassThrough, PassThrough);
+        s.add_uplink(UplinkId(0), 100_000_000, false, 1500, now);
+        s.counters.packets_forwarded = 17;
+
+        let events = s.telemetry_events();
+        assert!(events.contains(&ipc::Event::Warning { code: ipc::WARN_ALL_PATHS_DOWN }));
+        assert_eq!(
+            events.last(),
+            Some(&ipc::Event::Stats(ipc::Counters { packets_forwarded: 17, ..Default::default() }))
+        );
     }
 
     #[test]
@@ -2232,6 +2426,11 @@ mod tests {
         // Second packet immediately should be held (rate limited)
         let actions2 = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
         assert!(actions2.iter().any(|a| matches!(a, Action::Hold { .. })), "second should be held due to rate limit");
+
+        svc.handle(ipc::Request::SetBondMode { enabled: false }, now);
+        let flow_actions = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
+        assert!(flow_actions.iter().any(|a| matches!(a, Action::Hold { .. })), "flow-lane packet should be held too");
+        assert_eq!(svc.tx.flow_pending_bytes(), 0, "a held FlowData frame must not remain pending for an ACK");
     }
 
     #[test]

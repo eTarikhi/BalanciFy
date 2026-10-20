@@ -1,7 +1,7 @@
 # ADR-0006 — a vetted, pinned AEAD crate behind the `Crypto` trait
 
 Status: accepted · Date: 2026-10-18 · Supersedes: the "no third-party runtime
-dependency at all" reading of ADR-0002 · Related: ADR-0003 (wire v0), §4.8,
+dependency at all" reading of ADR-0002 · Related: ADR-0003 (wire v0/v1), §4.8,
 §9.2
 
 ## Context
@@ -40,21 +40,22 @@ choose a nonce.
 **3. The nonce is derived, never random and never a resettable counter.**
 
 ```text
-nonce = salt[3] || path[1] || seq_be[8]        (12 bytes)
+nonce = (salt[0] XOR frame_kind) || salt[1..3] || path[1] || seq_be[8]
 ```
 
 Reuse of a key/nonce pair under ChaCha20-Poly1305 leaks the XOR of the two
 plaintexts and permits tag forgery, so this is the load-bearing decision:
 
-- `seq` is the sender's per-session sequence number — incremented once per
-  frame, never reset. Reinjections and duplicate-mode copies deliberately reuse
-  it, because they carry the same plaintext and must produce the same
-  ciphertext.
-- `path` is redundant for uniqueness (one sequence space is shared across
-  uplinks) but it means a frame copied onto another path fails to open, so
-  path-swapping is detected rather than absorbed.
+- `seq` is unique within a frame-kind lane and session. Reinjections and
+  duplicate-mode copies deliberately reuse it, because they carry the same
+  plaintext and must produce the same ciphertext.
+- `frame_kind` domain-separates independent sequence spaces by XORing its byte
+  into the first salt byte. Thus equal sequence values in Data, FlowData, and
+  control lanes cannot reuse a nonce; the authenticated header binds the kind.
+- `path` is included so a frame copied onto another path fails to open.
 - `salt` separates sessions, so two sessions under one key cannot collide even
-  if their counters start equal.
+  if their counters start equal. The initial wire-v0 formula did not include a
+  frame-kind domain; wire v1 is required for this corrected construction.
 
 **4. The frame header is authenticated as AAD.**
 `Crypto::seal`/`open` gained an `aad: &[u8]` parameter, and the tunnel always

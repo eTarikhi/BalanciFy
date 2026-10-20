@@ -22,6 +22,9 @@ zeroize = { workspace = true }
 # path dependency above is already in scope for them.
 
 [features]
+# Enabled by default so Windows consumers protect file-backed keys with DPAPI.
+# The implementation is cfg-gated; non-Windows builds retain the portable lab store.
+default = ["dpapi"]
 dpapi = []
 
 [[bin]]

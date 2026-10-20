@@ -3,14 +3,20 @@
 //!
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
 //! (one per uplink), with secure handshake, pacing, congestion control, rekey,
-//! and dual-relay failover. In production, the packet source would be the
-//! NDIS miniport; here we use a simple echo of stdin or a TUN-like loop.
+//! and dual-relay failover. It also serves IPC v1 request/response and
+//! subscribed event frames on a loopback-only TCP adapter for the lab; production uses an ACL-protected
+//! Windows named pipe. In production, packets come from the NDIS miniport.
 
 use balancify_core::{UplinkId, FlowKey};
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
+use balancify_service::ipc::server::IpcServer;
+use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
 use std::collections::BTreeMap;
 use std::net::{UdpSocket, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {
@@ -66,8 +72,10 @@ fn main() -> std::io::Result<()> {
     // Simulate two uplinks with bound sockets
     let sock0 = UdpSocket::bind("0.0.0.0:0")?;
     let sock1 = UdpSocket::bind("0.0.0.0:0")?;
-    sock0.set_read_timeout(Some(Duration::from_millis(100)))?;
-    sock1.set_read_timeout(Some(Duration::from_millis(100)))?;
+    // Keep the single-threaded service/IPC dispatcher responsive: blocking
+    // reads on both sockets could otherwise stall it for 200 ms per loop.
+    sock0.set_nonblocking(true)?;
+    sock1.set_nonblocking(true)?;
     let addrs = [sock0.local_addr()?, sock1.local_addr()?];
     println!("  uplink sockets: {:?} (simulating Ethernet + Wi-Fi)", addrs);
 
@@ -79,6 +87,9 @@ fn main() -> std::io::Result<()> {
         svc.on_probe_ok(UplinkId(1), Duration::from_millis(35), now);
     }
     svc.publish(now);
+
+    let (ipc_calls, ipc_addr) = start_ipc_listener()?;
+    println!("  IPC v1 loopback listener: {}", ipc_addr);
 
     // Handshake
     let relay_public = std::env::var("BALANCIFY_RELAY_PUBLIC_KEY").ok().and_then(|hex| {
@@ -113,6 +124,21 @@ fn main() -> std::io::Result<()> {
 
     loop {
         let now = Instant::now();
+
+        // Keep service state on this thread; the socket workers only decode
+        // frames and forward requests through the channel.
+        while let Ok(call) = ipc_calls.try_recv() {
+            match call {
+                IpcCall::Request(request, reply) => {
+                    let response = svc.handle(request, now);
+                    let _ = reply.send(response);
+                }
+                IpcCall::PollEvents(reply) => {
+                    let _ = reply.send(svc.telemetry_events());
+                }
+            }
+        }
+
         // Tick every 100ms
         if now.duration_since(last_tick) >= Duration::from_millis(100) {
             let actions = svc.tick(now);
@@ -196,6 +222,113 @@ fn main() -> std::io::Result<()> {
     }
 }
 
+const MAX_IPC_CLIENTS: usize = 16;
+
+enum IpcCall {
+    Request(Request, Sender<Response>),
+    PollEvents(Sender<Vec<IpcEvent>>),
+}
+
+struct ActiveIpcClient(Arc<AtomicUsize>);
+
+impl Drop for ActiveIpcClient {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn reserve_ipc_client_slot(active: &AtomicUsize) -> bool {
+    let mut count = active.load(Ordering::Acquire);
+    loop {
+        if count >= MAX_IPC_CLIENTS {
+            return false;
+        }
+        match active.compare_exchange_weak(
+            count,
+            count + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => count = observed,
+        }
+    }
+}
+
+/// Start the lab TCP adapter on loopback. The actual product transport is an
+/// ACL-protected Windows named pipe; keeping this adapter local-only prevents
+/// accidental exposure of control operations to the LAN.
+fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
+    let port_value = match std::env::var("BALANCIFY_IPC_PORT") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => "5000".to_string(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "BALANCIFY_IPC_PORT must be valid UTF-8",
+            ));
+        }
+    };
+    let port = port_value.parse::<u16>().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "BALANCIFY_IPC_PORT must be an integer in 0..=65535",
+        )
+    })?;
+    let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let server = IpcServer::bind_loopback_at(bind_addr)?;
+    let local_addr = server.addr();
+    let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
+    let active_clients = Arc::new(AtomicUsize::new(0));
+
+    std::thread::Builder::new()
+        .name("balancify-ipc-accept".to_string())
+        .spawn(move || loop {
+            if let Some(stream) = server.accept() {
+                if !reserve_ipc_client_slot(&active_clients) {
+                    eprintln!("IPC client limit reached ({MAX_IPC_CLIENTS}); rejecting local connection");
+                    drop(stream);
+                    continue;
+                }
+                let slot = ActiveIpcClient(Arc::clone(&active_clients));
+                let requests = request_tx.clone();
+                let event_requests = request_tx.clone();
+                let _ = std::thread::Builder::new()
+                    .name("balancify-ipc-client".to_string())
+                    .spawn(move || {
+                        let _slot = slot;
+                        let _ = balancify_service::ipc::server::handle_stream_with_events(
+                            stream,
+                            move |request| {
+                                let (reply_tx, reply_rx) = mpsc::channel();
+                                if requests.send(IpcCall::Request(request, reply_tx)).is_err() {
+                                    return Response::Error {
+                                        status: Status::Unavailable,
+                                        message: "service IPC dispatcher stopped".to_string(),
+                                    };
+                                }
+                                reply_rx.recv().unwrap_or_else(|_| Response::Error {
+                                    status: Status::Unavailable,
+                                    message: "service did not return an IPC response".to_string(),
+                                })
+                            },
+                            move || {
+                                let (reply_tx, reply_rx) = mpsc::channel();
+                                if event_requests.send(IpcCall::PollEvents(reply_tx)).is_err() {
+                                    return Vec::new();
+                                }
+                                reply_rx.recv().unwrap_or_default()
+                            },
+                        );
+                    });
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })?;
+
+    Ok((request_rx, local_addr))
+}
+
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
     if s.len() % 2 != 0 { return None; }
@@ -205,4 +338,24 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
         out.push(byte);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod ipc_capacity_tests {
+    use super::*;
+
+    #[test]
+    fn local_ipc_worker_slots_are_bounded_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        for _ in 0..MAX_IPC_CLIENTS {
+            assert!(reserve_ipc_client_slot(&active));
+        }
+        assert_eq!(active.load(Ordering::Acquire), MAX_IPC_CLIENTS);
+        assert!(!reserve_ipc_client_slot(&active));
+
+        drop(ActiveIpcClient(Arc::clone(&active)));
+        assert_eq!(active.load(Ordering::Acquire), MAX_IPC_CLIENTS - 1);
+        assert!(reserve_ipc_client_slot(&active));
+        assert_eq!(active.load(Ordering::Acquire), MAX_IPC_CLIENTS);
+    }
 }

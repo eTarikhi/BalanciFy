@@ -32,11 +32,21 @@ fn main() -> std::io::Result<()> {
             }
             // Subscribe to events at 1 Hz
             send_request(&mut stream, &Request::SubscribeEvents { interval_hz: 1 })?;
-            println!("Subscribed to events at 1 Hz, listening for 5 events...");
-            for _ in 0..5 {
-                if let Some(ev) = recv_event(&mut stream)? {
-                    render_event(ev);
+            match recv_response(&mut stream)? {
+                Some(Response::Ack) => {
+                    println!("Subscribed to events at 1 Hz, listening for 5 events...");
+                    for _ in 0..5 {
+                        match recv_event(&mut stream)? {
+                            Some(ev) => render_event(ev),
+                            None => {
+                                println!("No event arrived before the IPC read timeout; the event stream may be idle or disconnected.");
+                                break;
+                            }
+                        }
+                    }
                 }
+                Some(response) => println!("Event subscription was not accepted: {:?}", response),
+                None => println!("Service closed the IPC connection before acknowledging the event subscription."),
             }
         }
         "rules" => {
@@ -74,8 +84,8 @@ fn main() -> std::io::Result<()> {
             }
         }
         "bundle" => {
-            // Support bundle (Sec.8.2) — redacted, per-path ECN/delay, cwnd, etc.
-            send_request(&mut stream, &Request::GetStatus)?;
+            // Export the service's redacted support diagnostics over IPC v1.
+            send_request(&mut stream, &Request::GetSupportBundle)?;
             if let Some(resp) = recv_response(&mut stream)? {
                 render_bundle(resp);
             }
@@ -174,7 +184,17 @@ fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
 }
 
 fn recv_event(stream: &mut TcpStream) -> std::io::Result<Option<Event>> {
-    match read_frame(stream)? {
+    let frame = match read_frame(stream) {
+        Ok(frame) => frame,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock
+                || error.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    match frame {
         None => Ok(None),
         Some((FrameKind::Event, payload)) => Event::decode(&payload)
             .map(Some)
@@ -289,18 +309,11 @@ fn render_relay(resp: Response) {
 
 fn render_bundle(resp: Response) {
     match resp {
-        Response::Status(s) => {
-            println!("=== Support Bundle (redacted, Sec.8.2, Sec.9.2) ===");
-            println!("Version: {} policy_rev={} rules_rev={} active_flows={}", s.service_version, s.policy_revision, s.rules_revision, s.active_flows);
-            render_counters(&s.counters);
-            println!("Uplinks: {} total, {} eligible", s.uplinks.len(), s.uplinks.iter().filter(|u| u.eligible).count());
-            for u in &s.uplinks {
-                println!("  id={} state={} rtt={}ms loss={} per mille cap={}bps — cwnd/in_flight from support bundle", u.id, u.state, u.rtt_ms, u.loss_permille, u.capacity_bps);
-            }
-            println!("Bundle JSON includes: cwnd/in_flight per uplink, congestion diag loss/ecn/delay+paths, per_path Vec<PathCongestionDiag> cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, rekey diag, relay stats, ETW export, route table, adapter state, version/signing info, redaction (no destinations/content)");
-            println!("Redaction: no destinations, no content, only counters, error codes, hashed flow keys (Sec.9.2)");
+        Response::SupportBundle(json) => {
+            println!("=== Redacted Support Bundle (Sec.8.2, Sec.9.2) ===");
+            println!("{json}");
         }
-        _ => println!("Unexpected: {:?}", resp),
+        _ => println!("Unexpected support-bundle response: {:?}", resp),
     }
 }
 
@@ -352,14 +365,12 @@ fn render_hvci(resp: Response) {
 fn render_sbom(resp: Response) {
     match resp {
         Response::Status(s) => {
-            println!("=== SBOM/VEX SPDX 3.0 (S13, March 2027) ===");
-            println!("Tool: tools/ci/sbom.sh v2 generates SPDX 3.0 JSON with creationInfo timestamp, packages first-party + vetted + transitive, relationships DEPENDS_ON, annotations C2/HVCI/installer, vulnerabilities VEX not_affected/fixed");
-            println!("Packages: balancify-core/tunnel/crypto/service/relay/ipc/client/app/installer/driver + chacha20poly1305 0.11.0 x25519-dalek 2.0.1 blake2 0.10.6 hkdf 0.12.4 getrandom 0.2.15 zeroize 1.8.1 + transitive aead/chacha20/cipher/poly1305/curve25519-dalek/subtle/generic-array/typenum/etc.");
-            println!("VEX: CVE-2024-XXXX-chacha20poly1305 not_affected cargo audit clean, CVE-2024-XXXX-x25519-dalek not_affected, RUSTSEC-2023-XXXX-generic fixed pinned exact");
-            println!("Installer: copies SBOM sidecar to ProgramData\\Balancify\\sbom.spdx.json, support bundle includes");
-            println!("Real generation when toolchain available: cargo cyclonedx --format json --spec-version 1.5 + cargo audit --json + sbom-tool generate -b . -bc . -pn Balancify -pv version -ps Balancify -nsb https://balancify.io/sbom");
+            println!("=== SBOM status (S13) ===");
+            println!("Generate the current SPDX 2.3 inventory with: sh tools/ci/sbom.sh [version] [output]");
+            println!("The inventory comes from cargo metadata --locked and includes declared license metadata, source checksums, and dependency relationships.");
+            println!("No VEX statements or vulnerability-status claims are generated; SPDX 3.0 and reviewed VEX remain pending.");
+            println!("The installer copies the generated sidecar and fails if it is missing; packaging/clean-machine validation remains pending.");
             render_counters(&s.counters);
-            println!("Cargo.lock: {} packages, vetted only, audit passes with lock file (5491758)", s.active_flows); // placeholder
         }
         _ => println!("Unexpected: {:?}", resp),
     }

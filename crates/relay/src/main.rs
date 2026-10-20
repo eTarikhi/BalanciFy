@@ -223,21 +223,20 @@ impl RelaySession {
     }
 
     fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        self.last_activity = now;
+        let before = self.rx.counters();
         let mut payloads = Vec::new();
         let mut replies = Vec::new();
         let simulate_ecn = std::env::var("BALANCIFY_SIMULATE_ECN").map(|v| v == "1").unwrap_or(false);
         for ev in self.rx.ingest(dg, now) {
             match ev {
                 Event::Payload { data, .. } => payloads.push(data),
-                Event::Ack { path, seq, .. } => {
-                    let sent = if simulate_ecn {
-                        self.ecn_echoed += 1;
-                        self.tx.ack_with_ecn(path, seq)
-                    } else {
-                        self.tx.ack(path, seq)
-                    };
-                    replies.push(sent.bytes);
+                Event::Ack { session, path, seq } => {
+                    if simulate_ecn { self.ecn_echoed += 1; }
+                    let flags = if simulate_ecn { balancify_tunnel::FLAG_ECN_CE } else { 0 };
+                    replies.push(self.tx.ack_for_session(session, path, seq, flags).bytes);
+                }
+                Event::FlowAck { session, path, seq } => {
+                    replies.push(self.tx.flow_ack_for_session(session, path, seq).bytes);
                 }
                 Event::ProbeEcho { path, seq, .. } => {
                     let sent = self.tx.probe_reply(path, seq);
@@ -245,6 +244,10 @@ impl RelaySession {
                 }
                 _ => {}
             }
+        }
+        let after = self.rx.counters();
+        if after.frames > before.frames && after.dropped == before.dropped && after.duplicates == before.duplicates {
+            self.last_activity = now;
         }
         (payloads, replies)
     }
@@ -255,14 +258,13 @@ impl RelaySession {
         for ev in self.rx.drain(now) {
             match ev {
                 Event::Payload { data, .. } => payloads.push(data),
-                Event::Ack { path, seq, .. } => {
-                    let sent = if simulate_ecn {
-                        self.ecn_echoed += 1;
-                        self.tx.ack_with_ecn(path, seq)
-                    } else {
-                        self.tx.ack(path, seq)
-                    };
-                    replies.push(sent.bytes);
+                Event::Ack { session, path, seq } => {
+                    if simulate_ecn { self.ecn_echoed += 1; }
+                    let flags = if simulate_ecn { balancify_tunnel::FLAG_ECN_CE } else { 0 };
+                    replies.push(self.tx.ack_for_session(session, path, seq, flags).bytes);
+                }
+                Event::FlowAck { session, path, seq } => {
+                    replies.push(self.tx.flow_ack_for_session(session, path, seq).bytes);
                 }
                 Event::ProbeEcho { path, seq, .. } => {
                     let sent = self.tx.probe_reply(path, seq);
@@ -665,7 +667,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use balancify_tunnel::{PassThrough, Sender, Sent};
+    use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
 
     #[test]
     fn two_paths_with_delay_gap_reassemble_in_order() {
@@ -717,6 +719,32 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert!(second.is_empty());
         assert_eq!(ep2.duplicates_seen(), 1);
+    }
+
+    #[test]
+    fn relay_session_idle_timer_ignores_unauthenticated_datagrams() {
+        let now = Instant::now();
+        let key = [7u8; 32];
+        let salt = [3u8; 3];
+        let recv = balancify_crypto::TunnelCipher::new(&key, salt).unwrap();
+        let send = balancify_crypto::TunnelCipher::new(&key, salt).unwrap();
+        let addr = "127.0.0.1:9000".parse().unwrap();
+        let mut session = RelaySession::new(12, [0u8; 32], addr, recv, send, now);
+        let mut client = Sender::new(
+            12,
+            balancify_crypto::TunnelCipher::new(&key, salt).unwrap(),
+            vec![(0, 1000)],
+        );
+        let valid_time = now + Duration::from_secs(1);
+        let valid = client.send(b"accepted", valid_time).unwrap();
+        session.ingest(&valid.bytes, valid_time);
+        assert_eq!(session.last_activity, valid_time);
+
+        let replay_time = valid_time + Duration::from_secs(100);
+        let mut forged = Vec::new();
+        Header::new(FrameKind::Keepalive, 0, 12, 7).encode(&mut forged);
+        session.ingest(&forged, replay_time);
+        assert_eq!(session.last_activity, valid_time, "an invalid tag cannot keep the relay session alive");
     }
 
     #[test]

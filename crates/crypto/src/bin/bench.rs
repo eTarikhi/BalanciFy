@@ -1,6 +1,6 @@
 //! Crypto benchmark -- measures ChaCha20Poly1305 seal/open throughput and rekey
 //! No external deps, uses std time, CPU/Gbit estimation for Sec.10.3
-//! ChaCha20Poly1305 0.11.0, 16B tag overhead, header bound as AAD, nonce separated by path/seq/salt/key
+//! ChaCha20Poly1305 0.11.0, 16B tag overhead, header bound as AAD, nonce separated by frame kind/path/seq/salt/key
 
 use balancify_crypto::TunnelCipher;
 use balancify_tunnel::Crypto;
@@ -72,7 +72,7 @@ fn main() {
         iters, secs_both, elapsed.as_micros() as f64 / iters as f64, mbps_both/2.0, gbps_both, cores_per_gbps_both);
 
     println!("\n--- CPU/Gbit estimation (Sec.10.3) ---");
-    println!("TunnelCipher: ChaCha20Poly1305 0.11.0, 16B tag, header as AAD, nonce path/seq/salt/key");
+    println!("TunnelCipher: ChaCha20Poly1305 0.11.0, 16B tag, header as AAD, nonce frame-kind/path/seq/salt/key");
     println!("Seal {:.2} Gbit/s per core, Open {:.2} Gbit/s per core, Seal+Open {:.2} Gbit/s per core", gbps, gbps_open, gbps_both);
     println!("Expected x64 with AES-NI: ~0.5-1 core per Gbit/s, ARM64 without acceleration more");
     println!("ETW CPU sampling via WPA, event IDs 100-600, working set bounded, power delta via telemetry");

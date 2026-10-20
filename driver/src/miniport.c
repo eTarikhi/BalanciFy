@@ -11,32 +11,7 @@
 // - blueprint Sec.6.1 TAP-like virtual adapter, Sec.4.5 pause/resume, Sec.6.6 NAT keepalive
 // - No third-party kernel component in data path (C2): only NDIS + WDF
 
-#include <ndis.h>
-#include <wdf.h>
-
-#define BALANCIFY_TAG 'laBB' // 'BBal' reversed
-#define BALANCIFY_POOL_TAG BALANCIFY_TAG
-
-// Adapter context -- one per virtual NIC
-typedef struct _BALANCIFY_ADAPTER {
-    NDIS_HANDLE miniportAdapterHandle;
-    NDIS_HANDLE netBufferListPool;
-    NDIS_HANDLE netBufferPool;
-    WDFDEVICE controlDevice; // for IOCTLs from service (WDF)
-    NDIS_SPIN_LOCK lock;
-    BOOLEAN paused;
-    ULONG mtu; // Sec.6.1 adapter MTU, follows narrowest live path
-    // Stats for OID_GEN_STATISTICS
-    ULONG64 txPackets;
-    ULONG64 rxPackets;
-    ULONG64 txBytes;
-    ULONG64 rxBytes;
-    // Service ring: shared memory for packet exchange (planned)
-    // For now, packets are looped back in MiniportSendNetBufferLists
-} BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;
-
-// IOCTL control device (ioctl.c)
-NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapter);
+#include "miniport.h"
 
 // Forward decls
 DRIVER_INITIALIZE DriverEntry;
@@ -146,7 +121,7 @@ NDIS_STATUS MiniportInitializeEx(
         nblParams.Header.Size = NDIS_SIZEOF_NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
         nblParams.ProtocolId = NDIS_PROTOCOL_ID_DEFAULT;
         nblParams.fAllocateNetBuffer = TRUE;
-        nblParams.ContextSize = 0;
+        nblParams.ContextSize = sizeof(BALANCIFY_RX_NBL_CONTEXT);
         nblParams.PoolTag = BALANCIFY_POOL_TAG;
         nblParams.DataSize = 0;
         adapter->netBufferListPool = NdisAllocateNetBufferListPool(miniportAdapterHandle, &nblParams);
@@ -256,17 +231,23 @@ VOID MiniportReturnNetBufferLists(
     PNET_BUFFER_LIST curr = netBufferLists;
     while (curr) {
         PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(curr);
-        // For RX NBLs we allocated, free MDL chain then NBL
+        // These NBLs are the private receive allocations created by INJECT_NBL.
+        // Keep the packet copy and MDL alive until NDIS returns the NBL.
         PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr);
         if (nb) {
             PMDL mdl = NET_BUFFER_FIRST_MDL(nb);
-            // The MDL was allocated via NdisAllocateMdl and owns the buffer copy
-            // Free chain if present (normally single MDL for injected packet)
             PMDL nextMdl = NULL;
             for (PMDL m = mdl; m; m = nextMdl) {
                 nextMdl = m->Next;
                 NdisFreeMdl(m);
             }
+        }
+        PBALANCIFY_RX_NBL_CONTEXT context =
+            (PBALANCIFY_RX_NBL_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(curr);
+        if (context && context->packetBuffer) {
+            NdisFreeMemory(context->packetBuffer, context->packetLength, 0);
+            context->packetBuffer = NULL;
+            context->packetLength = 0;
         }
         NdisFreeNetBufferList(curr);
         curr = next;

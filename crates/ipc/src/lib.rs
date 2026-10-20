@@ -86,6 +86,16 @@ impl Writer {
         self.buf.extend_from_slice(t.as_bytes());
         self
     }
+    /// Encode a UTF-8 string with a u32 byte length for large payload fields.
+    pub fn str32(&mut self, s: &str) -> &mut Self {
+        assert!(
+            self.buf.len().saturating_add(4).saturating_add(s.len()) <= MAX_PAYLOAD,
+            "IPC string exceeds frame payload limit",
+        );
+        self.u32(s.len() as u32);
+        self.buf.extend_from_slice(s.as_bytes());
+        self
+    }
     pub fn into_bytes(self) -> Vec<u8> { self.buf }
     pub fn len(&self) -> usize { self.buf.len() }
     pub fn is_empty(&self) -> bool { self.buf.is_empty() }
@@ -142,6 +152,11 @@ impl<'a> Reader<'a> {
         let n = self.u8()? as usize;
         let b = self.take(n)?;
         Some(String::from_utf8_lossy(b).into_owned())
+    }
+    pub fn string32(&mut self) -> Option<String> {
+        let n = self.u32()? as usize;
+        if n > MAX_PAYLOAD { return None; }
+        String::from_utf8(self.take(n)?.to_vec()).ok()
     }
 }
 
@@ -205,6 +220,7 @@ pub enum Opcode {
     SetAllowMetered,
     RunSelfTest,
     SubscribeEvents,
+    GetSupportBundle,
 }
 
 impl Opcode {
@@ -221,6 +237,7 @@ impl Opcode {
             Opcode::SetAllowMetered => 8,
             Opcode::RunSelfTest => 9,
             Opcode::SubscribeEvents => 10,
+            Opcode::GetSupportBundle => 11,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -236,10 +253,11 @@ impl Opcode {
             8 => Opcode::SetAllowMetered,
             9 => Opcode::RunSelfTest,
             10 => Opcode::SubscribeEvents,
+            11 => Opcode::GetSupportBundle,
             _ => return None,
         })
     }
-    pub fn all() -> [Opcode; 11] {
+    pub fn all() -> [Opcode; 12] {
         [
             Opcode::Ping,
             Opcode::GetStatus,
@@ -252,6 +270,7 @@ impl Opcode {
             Opcode::SetAllowMetered,
             Opcode::RunSelfTest,
             Opcode::SubscribeEvents,
+            Opcode::GetSupportBundle,
         ]
     }
 }
@@ -312,6 +331,7 @@ pub enum Request {
     SetAllowMetered { allowed: bool },
     RunSelfTest,
     SubscribeEvents { interval_hz: u8 },
+    GetSupportBundle,
 }
 
 /// One row of the Rules screen (Sec.8.2), and the wire form of a core rule.
@@ -389,6 +409,7 @@ pub enum Response {
     FlowRules(Vec<FlowRule>),
     Ack,
     SelfTest { passed: bool, detail: String },
+    SupportBundle(String),
     Error { status: Status, message: String },
 }
 
@@ -436,6 +457,9 @@ impl Request {
             Request::SubscribeEvents { interval_hz } => {
                 w.u8(Opcode::SubscribeEvents.as_u8()).u8(*interval_hz);
             }
+            Request::GetSupportBundle => {
+                w.u8(Opcode::GetSupportBundle.as_u8());
+            }
             Request::RemoveFlowRule { id } => {
                 w.u8(Opcode::RemoveFlowRule.as_u8()).u32(*id);
             }
@@ -460,6 +484,7 @@ impl Request {
             Opcode::SetDuplicateMode => Request::SetDuplicateMode { enabled: r.bool()? },
             Opcode::SetAllowMetered => Request::SetAllowMetered { allowed: r.bool()? },
             Opcode::SubscribeEvents => Request::SubscribeEvents { interval_hz: r.u8()? },
+            Opcode::GetSupportBundle => Request::GetSupportBundle,
             Opcode::RemoveFlowRule => Request::RemoveFlowRule { id: r.u32()? },
             Opcode::SetFlowRule => Request::SetFlowRule(decode_rule(&mut r)?),
         };
@@ -612,6 +637,7 @@ const RESP_FLOW_RULES: u8 = 4;
 const RESP_ACK: u8 = 5;
 const RESP_SELF_TEST: u8 = 6;
 const RESP_ERROR: u8 = 7;
+const RESP_SUPPORT_BUNDLE: u8 = 8;
 
 impl Response {
     pub fn encode(&self) -> Vec<u8> {
@@ -637,6 +663,9 @@ impl Response {
             }
             Response::SelfTest { passed, detail } => {
                 w.u8(RESP_SELF_TEST).bool(*passed).str(detail);
+            }
+            Response::SupportBundle(json) => {
+                w.u8(RESP_SUPPORT_BUNDLE).str32(json);
             }
             Response::Error { status, message } => {
                 w.u8(RESP_ERROR).u8(status.as_u8()).str(message);
@@ -666,6 +695,7 @@ impl Response {
             }
             RESP_ACK => Response::Ack,
             RESP_SELF_TEST => Response::SelfTest { passed: r.bool()?, detail: r.string()? },
+            RESP_SUPPORT_BUNDLE => Response::SupportBundle(r.string32()?),
             RESP_ERROR => Response::Error {
                 status: Status::from_u8(r.u8()?)?,
                 message: r.string()?,
@@ -915,6 +945,7 @@ mod tests {
             Request::SetDuplicateMode { enabled: true },
             Request::SetAllowMetered { allowed: true },
             Request::SubscribeEvents { interval_hz: 1 },
+            Request::GetSupportBundle,
             Request::RemoveFlowRule { id: 4242 },
             Request::SetFlowRule(sample_rule()),
         ];
@@ -932,6 +963,7 @@ mod tests {
             Response::FlowRules(vec![sample_rule()]),
             Response::Ack,
             Response::SelfTest { passed: true, detail: "loopback ok".to_string() },
+            Response::SupportBundle(format!("{{\"diagnostic\":\"{}\"}}", "x".repeat(1024))),
             Response::Error { status: Status::Unavailable, message: "no uplink".to_string() },
         ];
         for resp in responses {
@@ -968,7 +1000,8 @@ mod tests {
         for op in Opcode::all() {
             assert_eq!(Opcode::from_u8(op.as_u8()), Some(op));
         }
-        assert_eq!(Opcode::all().len(), 11);
+        assert_eq!(Opcode::all().len(), 12);
+        assert_eq!(Opcode::GetSupportBundle.as_u8(), 11);
         assert_eq!(Opcode::from_u8(200), None);
         for s in 0..=4u8 { assert!(Status::from_u8(s).is_some()); }
         assert_eq!(Status::from_u8(5), None);

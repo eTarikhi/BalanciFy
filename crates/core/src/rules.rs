@@ -11,6 +11,9 @@ use std::net::SocketAddr;
 
 use crate::placement::{FlowClass, FlowKey, UplinkId};
 
+/// Rule identifiers below this value are reserved for built-in curated rules.
+pub const FIRST_CUSTOM_RULE_ID: u32 = 1_000;
+
 /// Inclusive destination-port range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortRange {
@@ -122,7 +125,11 @@ impl RuleSet {
         s
     }
 
+    /// Insert or replace a rule by its stable id, then restore evaluation order.
+    /// A rule set is id-unique: updating an existing rule must never leave a
+    /// shadowed duplicate that makes removal or UI state ambiguous.
     pub fn add(&mut self, rule: Rule) -> u64 {
+        self.rules.retain(|existing| existing.id != rule.id);
         self.rules.push(rule);
         self.sort();
         self.bump()
@@ -219,6 +226,23 @@ mod tests {
         let rs = RuleSet::curated();
         assert!(rs.duplicate_eligible(&f(17, 53), None));
         assert!(!rs.duplicate_eligible(&f(6, 443), None));
+    }
+
+    #[test]
+    fn adding_an_existing_id_replaces_instead_of_creating_a_duplicate() {
+        let mut rs = RuleSet::new();
+        rs.add(Rule::new(42, "old", FlowClass::Bulk).priority(50));
+        let revision = rs.revision();
+
+        rs.add(Rule::new(42, "updated", FlowClass::LatencySensitive).priority(5));
+
+        assert_eq!(rs.rules().len(), 1);
+        assert_eq!(rs.revision(), revision + 1);
+        assert_eq!(rs.rules()[0].name, "updated");
+        assert_eq!(rs.rules()[0].class, FlowClass::LatencySensitive);
+        assert_eq!(rs.rules()[0].priority, 5);
+        assert!(rs.remove(42));
+        assert!(rs.rules().is_empty());
     }
 
     #[test]

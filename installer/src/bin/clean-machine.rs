@@ -54,7 +54,7 @@ fn main() {
         println!("  dotnet --list-runtimes — .NET 10 present if bundled, or self-contained shell runs");
         println!("  Get-AppxPackage -Name Balancify — GUI registered");
         println!("  netsh advfirewall firewall show rule name=Balancify — UDP allow");
-        println!("  C:\\ProgramData\\Balancify\\sbom.spdx.json exists, SPDX 3.0 + VEX, 10 first-party + vetted + transitive 24 packages");
+        println!("  Expected: C:\\ProgramData\\Balancify\\sbom.spdx.json is the generated SPDX 2.3 locked-graph inventory; VEX is not generated");
 
         // Self-test
         println!("[{}] Self-test hook: loop through embedded endpoint, local mode", rep+1);
@@ -122,7 +122,7 @@ fn main() {
     println!("- Journal JSON at C:\\ProgramData\\Balancify\\install.json 8 entries");
     println!("- Support bundle via IPC: balancify-app.exe diagnostics — cwnd/in_flight per uplink, congestion diag, failover count+conv ms");
     println!("- ETW logs: provider Balancify event IDs 100-600, WPA CPU sampling, working set bounded, power delta");
-    println!("- SBOM at C:\\ProgramData\\Balancify\\sbom.spdx.json sidecar SPDX 3.0 + VEX");
+    println!("- Expected SBOM sidecar: SPDX 2.3 locked-graph inventory; no VEX or vulnerability-status claims");
     println!("- Throughput: 10 profiles 10 reps mean/median/p95/spread");
     println!("- Soak: 72h + random flaps + 100 resume");
     println!("\nClean-machine offline test harness done — Sec.8.3 Sec.10.3, 10 reps per VM template x64 ARM64 HVCI on/off, median/p95/spread, Windows build hardware driver versions uplink types relay region");

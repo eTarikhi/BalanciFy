@@ -40,31 +40,34 @@ Enhance `tools/lab/netem-rig.sh` to 11 profiles + all:
 
 **Measurement checklist:** 10 reps median/p95/spread mean stdev min max, record Windows build hardware driver versions uplink types relay region with every result, traffic iperf3 TCP/UDP N flows curated real workloads, instrumentation pktmon+Wireshark at adapter and per-uplink ETW->WPA CPU Performance Monitor working set power telemetry, acceptance rows aggregate >=90% sum single-flow >=70% sum mismatched >=100% best auto-revert Sec.6.4.6 added delay <=3ms wired loss/reordering <=0.1% failover <=2s CPU & memory report first limits after S2 power delta stability 72h soak + random flaps + 100 resume compat matrix clean-machine provisioning offline VM, data stored as data not screenshots JSON+ETL+CSV
 
-**analyze.py:** New tool `tools/lab/analyze.py` computes mean/median/p95/spread per Sec.10.1:
-- Parses iperf3 JSON end.sum_received.bits_per_second -> Mbps
-- Parses throughput.rs logs mean= median= p95= spread=
-- compute_stats: count mean median p95 min max spread stdev
-- Simulated data demo when output dir missing: bonded 42.8% gain, lossy 16.7% penalty, Rig B 1.3 Gbps, per-flow on/off diff, aggregate 16 flows, added delay <=3ms
-- Real parsing: glob *.json, profile from stem split _rep, mbps, results dict profile -> vals, stats per profile, bonded gain, loss penalty, Rig B mean
-- Outputs summary for docs/phase2/throughput-rows.md with dates hardware Windows build driver version uplink types relay region per Sec.10.1 reporting discipline
-- Usage: python3 tools/lab/analyze.py /tmp/balancify-netem-results
+**analyze.py:** `tools/lab/analyze.py` accepts only iperf3 JSON result files:
+- Parses `end.sum_received.bits_per_second` as Mbps and rejects missing, non-finite, or non-positive results.
+- Groups repetitions by profile and reports count, mean, median, nearest-rank p95, spread, standard deviation, min, and max.
+- Missing/empty result directories are errors. It never invents simulated/demo values and never parses `throughput.rs` software-benchmark logs as network measurements.
+- `python3 -m unittest discover -s tools/lab -p 'test_*.py'` covers percentile calculation, JSON parsing/grouping, invalid input, and the no-fabricated-data behavior.
 
 **Integration:**
-- netem-rig.sh dry-run mode in sandbox (no tc, no iperf3, no Rig B hardware), real netem requires Linux gateway with tc + iperf3 + Rig B hardware per Sec.10.1
+- `netem-rig.sh` defaults to dry-run (no tc, iperf3, output directory, or result file). Its explicit `--apply` mode supports seven raw link profiles and requires a separate iperf3 server; Rig B acceptance still requires the physical hardware and adapter-level instrumentation per Sec.10.1.
 - Simulated S2c in CI: cargo test -p balancify-service --test e2e -- --nocapture, cargo run -p balancify-service --bin throughput -- rigb, cargo run -p balancify-crypto --bin bench
-- Real UDP relay + netem: cargo run -p balancify-relay -- 4430,4431, cargo run -p balancify-client -- RELAY 100, IFACE=eth0 IFACE_SLOW=eth1 ./tools/lab/netem-rig.sh PROFILE REPS, iperf3 -c relay -t 60 -P 16 -J > OUTPUT_DIR/PROFILE_repI.json, python3 tools/lab/analyze.py OUTPUT_DIR, update docs/phase2/throughput-rows.md + lab-progress.md with dates hardware Windows build driver version uplink types relay region
+- Raw link baseline (not BalanciFy bonding): start an iperf3 server on a separate host, then run `CONFIRM_TC_ROOT_REPLACE=YES IPERF3_HOST=iperf-server IFACE=eth0 IFACE_SLOW=eth1 ./tools/lab/netem-rig.sh --apply PROFILE REPS`; review saved JSON with `python3 tools/lab/analyze.py OUTPUT_DIR`. Collect bonded/adapter evidence separately through the BalanciFy service, driver, pktmon/Wireshark, and ETW procedures; document actual hardware and software versions.
 
 ## Consequences
 
 - Netem rig now has 11 profiles matching throughput harness 9 profiles + soak + all, with 10 reps median/p95/spread per Sec.10.1, measurement checklist, analyze.py
 - S2c reorder/reinjection measurements can be run on Linux gateway with tc netem + iperf3 + Rig B hardware, results stored as data not screenshots, documented with hardware/build/driver versions
-- Simulated data from throughput-rows.md: bonded 42.8% gain mean 1.3ms vs single 2.0ms, lossy 16.7% penalty, ECN 80% reduction, delay 10% reduction, Rig B 1Gbps/300M, per-flow on/off diff, aggregate 16 flows, added delay <=3ms, CPU/Gbit via crypto-bench+ETW
-- Real Rig B still pending hardware, but harness + rig script + analyze.py ready
-- CI green: netem-rig.sh and analyze.py are tools, no Rust changes, but throughput harness already green
-- No PR per user instruction, stay on branch arena/7abc96c8-balancify
+- Local software-path benchmark outputs are not networking evidence. Real throughput, added-delay, failover, and CPU/Gbit acceptance remains pending Rig B/ETW measurements; see `docs/phase2/throughput-rows.md`
+- Real Rig B still pending hardware. See the execution-status clarification below: the aspirational 11-profile plan is not the same as currently executable profiles.
+- CI runs analyzer and netem-runner safety tests plus Rust workspace checks; no lab execution is implied by CI.
+- No PR is required for this local development step; push changes only to the active Arena branch
 
 ## References
 
 - Blueprint Sec.10.1 Rig A/B, Sec.10.2 baselines, Sec.10.3 acceptance rows, Sec.6.4 DRR+pacing+CC, Sec.6.3 capacity, Sec.6.5 health hysteresis, S13 SBOM/VEX, S15 HVCI trio, C2/C4
-- Code: tools/lab/netem-rig.sh enhanced 11 profiles, tools/lab/analyze.py, crates/service/src/bin/throughput.rs 9 profiles, crates/crypto/src/bin/bench.rs CPU/Gbit, crates/service/src/etw.rs 200/201/300/400/401/402/500/600, docs/phase2/throughput-rows.md, docs/phase2/lab-progress.md
-- CI: 5c05cb5 success (latest), 7fb32ec, 2f2766c, b666a03, etc. all green ubuntu+windows+audit
+- Code: `tools/lab/netem-rig.sh` explicit dry-run/apply modes with seven executable link profiles; `tools/lab/test_netem_rig.sh` guardrail tests; `tools/lab/analyze.py`; `crates/service/src/bin/throughput.rs` software-path benchmark; ETW/support and measurement docs. Hardware acceptance remains pending.
+- CI: historical runs listed above; current verification is recorded on the active branch checks.
+
+## Execution status clarification (2026-10-20)
+
+The original 11-profile list above is the intended lab matrix, not a statement that every mode executes. `tools/lab/netem-rig.sh` now defaults to an explicit side-effect-free dry run. `--apply` runs real iperf3 and captures JSON only for seven supported profiles (delay-gap, lossy, asymmetric, cellular, rigb link baseline, ECN, aggregate); delay-jump, per-flow, failover, and soak remain unimplemented and are rejected in apply mode. A separately running iperf3 server is required—the Rust relay is not one.
+
+Shaped apply profiles require root, `CONFIRM_TC_ROOT_REPLACE=YES`, and dedicated/disposable interfaces. They replace the interfaces' root qdiscs; cleanup removes the test qdisc but does not restore a previous custom qdisc. `aggregate` does not alter qdiscs. No apply-mode lab run was executed here. These raw link-path measurements are not evidence for BalanciFy bonding, NDIS/driver behavior, Rig B acceptance, failover convergence, or HVCI/Verifier readiness.

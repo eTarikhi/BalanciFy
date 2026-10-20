@@ -49,7 +49,7 @@ pub use placement::{place, wrh_place, FlowClass, FlowKey, UplinkId};
 pub use policy::{
     PolicyConfig, PolicyEngine, PolicySnapshot, UplinkConfig, UplinkView, EWMA_ALPHA, TUNNEL_MTU,
 };
-pub use rules::{PortRange, Rule, RuleSet};
+pub use rules::{PortRange, Rule, RuleSet, FIRST_CUSTOM_RULE_ID};
 pub use scoring::{CapacityEstimator, LinkScore};
 
 /// Crate version surfaced through the IPC contract (Sec.9.2: schema versioned).

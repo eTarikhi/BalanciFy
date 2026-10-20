@@ -1,8 +1,8 @@
 # Balancify — Comprehensive Development Progress Report
 
-**Date:** 2026-10-19 (Asia/Tehran) — Trust date 2026-10-20 per arena  
-**Branch:** `arena/7abc96c8-balancify` — Latest CI green `493f354` (ubuntu + windows + audit success)  
-**Status:** Phase 4/5 boundary (MVP → Alpha), 215+ tests, 0 failures, 30 ADRs, 53 CI runs  
+**Date:** 2026-10-20
+**Branch at report creation:** `arena/7abc96c8-balancify` (historical snapshot; current work is on the active Arena branch)
+**Status:** Historical snapshot; gate status is tracked in the current README and phase notes.
 **Report Type:** Retrospective + Prospective + Strategic Alignment with data visualizations
 
 ---
@@ -13,7 +13,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 
 **Current momentum:** CI green chain from `39233826038` onward (after fixing non-ASCII `§`, format! escaping, arg order), velocity 8-15 commits/week, tests grew from 0 to 215+ in 8 weeks, 30 ADRs ratified.
 
-**Current position:** G1 and G2 passed, G3 in progress (driver perf + HVCI + signing dry-run), G4 pending (acceptance table with signed driver). 68% of scoped work completed, 22% in progress, 10% pending.
+**Measurement correction (2026-10-20):** `crates/service/src/bin/throughput.rs` is a synthetic software-path benchmark, not a network simulation. Historical rates and “added delay” figures in this report were derived from CPU-side send loops and are not acceptance evidence. See `docs/phase2/throughput-rows.md`; all real Rig B performance rows remain pending.
 
 ---
 
@@ -25,11 +25,11 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 |------|-----------|--------|----------|--------|
 | **G1** | Decisions D1-D5 + dependency policy + signing strategy + enrolment | **PASS** | ADR-0002 dependency policy (no third-party kernel in data path, only vetted/pinned crates, PassThrough test-only), signing strategy attestation vs HLK, EV ordered | `18c028a` ADR-0015, `56fb239` ADR-0016 |
 | **G2** | Steering proven (≥3 adapter classes) + tunnel end-to-end via in-house miniport (test-signed) + no third-party kernel in data path | **PASS** | Spike S1 source-address/`IP_UNICAST_IF` steering, S2a datagram tunnel over bound sockets (`ordered_stream_survives_a_real_udp_socket` real UdpSocket), S2b miniport skeleton passing packets, WDF control device + IOCTLs, NBL pool + INJECT_NBL via `NdisMIndicateReceiveNetBufferLists` | `be21940` driver WDF, `4d05142` NBL pool |
-| **G3** | Miniport perf + HVCI trio + signing dry-run | **IN PROGRESS** | Miniport perf: DRR proportionality 3000:1000, pacing 80% capacity, added delay target ≤3ms; HVCI: code ready (NonPagedPoolNx, no RWX, MDL freeing, SDDL, METHOD_BUFFERED), docs `hvci-readiness.md` with Verifier 0x209BB, HLK HVCIMemoryIntegrity, VBS/MI VM; signing dry-run pending | `5fc3af0` hvci-readiness |
-| **G4** | Acceptance table on Rig B with signed driver + clean-machine offline provisioning | **PENDING** | Harness `throughput.rs` 5 profiles (bonded/single/lossy/ECN/delay) 10 reps mean/median/p95/spread, simulated 42.8% gain, 16.7% loss penalty, ECN 80%, delay 10%; real Rig B pending | `4761969` throughput real cipher |
+| **G3** | Miniport perf + HVCI trio + signing dry-run | **IN PROGRESS** | DRR/pacing unit behavior is covered in software tests; no driver packet-path latency or CPU performance acceptance measurement yet. HVCI readiness procedure documented; VM/HLK and signing dry-run pending. | `5fc3af0` hvci-readiness |
+| **G4** | Acceptance table on Rig B with signed driver + clean-machine offline provisioning | **PENDING** | The software-path harness is not network evidence; no §10.3 throughput, added-delay, or failover row is accepted until measured on Rig B with the driver and real relay. | Pending hardware validation |
 | **G5** | Soak + Driver Verifier clean | PENDING | 72h soak, random flaps, 100 resume cycles, Verifier standard+random | — |
 | **G6** | Review + compat matrix | PENDING | VPN clients, AV, Hyper-V, WSL2, MI on/off | — |
-| **G7** | Checklist + rollback + final attestation + SBOM/VEX | PENDING | SPDX 3.0 stub `sbom.sh`, installer journaled 7 steps | `5fc3af0` |
+| **G7** | Checklist + rollback + final attestation + SBOM/VEX | PENDING | SPDX 2.3 locked-graph inventory generator added; standards-valid SPDX 3.0, reviewed VEX, and installer/rollback validation remain pending | `5fc3af0` (historical baseline) |
 | **G8** | Field stable | PENDING | GA + winget + status page | — |
 
 ### 1.2 Detailed Technical Work Breakdown (Completed)
@@ -60,7 +60,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 - **Support bundle (ADR-0022):** `support/mod.rs` `per_path Vec<PathCongestionDiag>` cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, JSON includes new fields, test `bundle_includes_per_path_ecn_delay`
 
 #### Crypto (balancify-crypto) — 36 tests
-- **AEAD (ADR-0006):** `TunnelCipher` ChaCha20Poly1305 0.11.0, nonce separated by path/seq/salt/key, header bound as AAD, 16B tag only overhead, 8 tests
+- **AEAD (ADR-0006):** `TunnelCipher` ChaCha20Poly1305 0.11.0, wire-v1 nonce separated by frame kind/path/seq/salt/key, header bound as AAD, 16B tag only overhead, 10 crypto unit tests
 - **Handshake (ADR-0007):** Noise_IK `-> e, es, s, ss` / `<- e, ee, se`, X25519 2.0.1, BLAKE2s 0.10.6, HKDF 0.12.4, 12 tests: same keys, pinned identity, every byte auth, prologue binds context, initiator static encrypted, fresh ephemeral → fresh session, out-of-order refused, truncations refused, pinning enforced, replay cache
 - **Key Management (ADR-0008):** StaticKeypair, Ephemeral zeroized on drop, PinnedKeys, OS RNG getrandom 0.2.15 distinct, memory/file store, zeroize 1.8.1
 - **Replay (Sec.11.4):** ReplayCache 5 tests
@@ -78,7 +78,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 - **Installer (installer/src/main.rs):** journaled 7 steps preflight/driver/service/adapter/runtimes/gui/self-test with reverse rollback, dry-run, tests, SBOM sidecar copy to `ProgramData\Balancify\sbom.spdx.json`, clean-machine offline test per `clean-machine-test.md`, offline bundle + SHA-256 sidecar
 
 #### Benches & Harnesses
-- **throughput.rs:** real cipher, 5 profiles bonded/single/lossy/ECN/delay, 10 reps 1000×1200B, mean/median/p95/spread, gain 42.8%, loss penalty 16.7% (simulated)
+- **throughput.rs:** real cipher in a synthetic service-path workload; reports local work rate and per-call software latency only. It does not measure network throughput, added delay, loss penalty, or end-to-end failover.
 - **drr-bench, pacing-bench, ecn-bench, crypto-bench:** DRR proportionality, pacing rate+burst, ECN 80% vs loss 50%, delay 10%, seal/open/rekey MB/s + us/op for CPU/Gbit/s
 
 ### 1.3 Velocity & Momentum
@@ -191,7 +191,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 - **Driver/Kernel (70%):** First-party NDIS miniport from Phase 2 (rev 2 directive, no third-party kernel in data path C2), WDF control device + IOCTLs + NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists, handlers InitializeEx/HaltEx/Pause/Restart/Send/Return/Oid/Shutdown/PnP, stats, MTU, paused flag, length validation, SDDL, METHOD_BUFFERED, NonPagedPoolNx, no RWX, Verifier ready, HVCI docs, real VM pending
 - **Security/Crypto (95%):** Noise_IK handshake, ChaCha20Poly1305 0.11.0, X25519 2.0.1, BLAKE2s 0.10.6, HKDF 0.12.4, getrandom 0.2.15, zeroize 1.8.1, pinned keys, replay cache, rekey forward secrecy 1h/1M packets, DPAPI store, TPM-backed where available, authenticated IPC named pipe ACL + caller identity, small kernel surface fuzzed, safe failure defaults fail-closed tunneled/fail-open balanced, relay trust minimization no persistent logs, privacy telemetry opt-in counters only
 - **UX/GUI (60%):** Lab CLI `balancify-app` mimics WinUI3 shell Home/Rules/Diagnostics/Tray/Relay/Bundle modes, 1Hz telemetry, ECN/delay counters, last-known-good + stale markers planned, tray flyout keyboard+screen-reader operable, install elevation once, uninstall atomic, first-run wizard detect→propose→self-test; WinUI3 .NET 10 self-contained or bundled Desktop Runtime + WinAppSDK runtime redistributable, offline bundle, winget optional channel only per §4.8 rev 2.1
-- **Docs/Compliance (80%):** 30 ADRs, blueprint rev 2, technical docs phase2, SBOM/VEX SPDX 3.0 stub, clean-machine test, throughput rows, hvci-readiness, final-summary, ci-history, lab-progress, security-hardening, test-coverage, roadmap-next, continuous-development-log, ETW schema, support bundle redaction, docs site Astro Starlight/Docusaurus planned
+- **Docs/Compliance (80%, historical estimate):** ADRs, blueprint rev 2, technical docs phase2, SPDX 2.3 locked-graph SBOM generator, clean-machine procedure, throughput rows, HVCI readiness, final-summary, CI history, lab-progress, security-hardening, test-coverage, roadmap-next, continuous-development-log, ETW schema, support-bundle redaction; standards-valid SPDX 3.0, reviewed VEX, hardware validation, and production docs site remain pending.
 
 **Donut: Completed 68%, In Progress 22%, Pending 10%**
 - Completed: all above data plane, control plane core, crypto, driver skeleton + WDF + NBL pool, ETW wiring, support bundle per-path, relay ECN, app relay/bundle, ECN bench, throughput harness 5 profiles, per-flow retx (session,seq), flow ACK integration, HVCI/SBOM docs
@@ -236,7 +236,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 
 - **CI history:** `docs/phase2/ci-history.md` — 53 runs, last green `493f354`, ubuntu+windows+audits, `cargo test --workspace --all-targets --no-fail-fast` + `cargo build --release --workspace` + `audit-deps.sh`
 - **Lab progress:** `docs/phase2/lab-progress.md` — 214+ items proven, simulated vs real, known gaps updated after ADR-0029/0030/0031
-- **Throughput:** `docs/phase2/throughput-rows.md` — harness 5 profiles, simulated 42.8% gain, 16.7% penalty, ECN 80%, delay 10%, Rig B procedure with 10 reps median/p95/spread per Sec.10.1
+- **Throughput:** `docs/phase2/throughput-rows.md` — synthetic benchmark scope and Rig B measurement procedure; no real §10.3 performance row is yet accepted.
 - **HVCI:** `docs/phase2/hvci-readiness.md` — Verifier 0x209BB, HLK HVCIMemoryIntegrity, VBS/MI VM, code NonPagedPoolNx, NBL pool, MDL freeing, SDDL, METHOD_BUFFERED
 - **SBOM:** `tools/ci/sbom.sh` — SPDX 3.0 JSON, 6 vetted crates chacha20poly1305=0.11.0 x25519-dalek=2.0.1 blake2=0.10.6 hkdf=0.12.4 getrandom=0.2.15 zeroize=1.8.1 + first-party, relationships, annotations C2, VEX
 - **ADRs:** `docs/decisions/` 30 ADRs (0002-0031) — dependency policy, tunnel wire v0, IPC v1, per-path CC, vetted AEAD, Noise IK, key management+pacing, Wintun fallback exception, rate limiting+flow capacity, per-session sequencing, ETW+bundle, per-class sessions, throughput harness, continuous development, CI, rate limiter, flow capacity, ETW bundle, throughput harness, ETW wiring, support bundle per-path, relay ECN stats, driver WDF control, app shell relay+bundle, ECN bench, ETW uplink/bond, flow ACK, per-flow retx, flow ACK+driver S2b, HVCI+SBOM

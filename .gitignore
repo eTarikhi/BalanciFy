@@ -1,0 +1,6 @@
+# Rust build outputs and generated software-composition artifacts
+target/
+__pycache__/
+sbom.spdx.json
+sbom.vex.json
+*.sbom.tmp

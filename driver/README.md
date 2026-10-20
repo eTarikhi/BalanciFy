@@ -1,12 +1,12 @@
-# Balancify NDIS virtual miniport -- Phase 2 S2b (skeleton -> functional stub)
+# Balancify NDIS virtual miniport -- Phase 2 S2b source scaffold
 
-This directory is the first-party NDIS virtual miniport that owns the packet path (Sec.4.8, Sec.5, Sec.7). No third-party kernel component in data path (C2).
+This directory contains first-party NDIS miniport and WDF control-device source for the planned packet path (Sec.4.8, Sec.5, Sec.7). No third-party kernel component is used in the intended data path (C2).
 
-**Status:** functional stub -- compiles on WDK 10.0.22621+, passes Driver Verifier basic, loops back packets in `MiniportSendNetBufferLists`. The lab prototype still uses bound UDP sockets (S2a) to validate steering and tunnel logic; G2 requires this miniport passing packets on a test-signed rig with Driver Verifier on and S2b socket test through it.
+**Status:** source-level scaffold only. No WDK build, test-signed installation, Driver Verifier run, HVCI test, or packet-path validation is claimed. `MiniportInitializeEx` still has a TODO where valid NDIS adapter attributes must be registered, so this is not an installable/functional driver. The lab prototype continues to use bound UDP sockets (S2a); G2 requires completing the initialization and lifecycle work, then validating on a Windows test rig.
 
 **Structure:**
-- `src/miniport.c` -- NDIS 6.8 miniport: `DriverEntry`, `DriverUnload`, `MiniportInitializeEx`, `MiniportHaltEx`, `MiniportPause` (Sec.4.5 sleep), `MiniportRestart` (Sec.4.5 resume), `MiniportSendNetBufferLists` (service->NDIS), `MiniportReturnNetBufferLists` (NDIS->service), `MiniportOidRequest` (MTU, stats), `MiniportShutdownEx`, `MiniportDevicePnPEventNotify`. Adapter context with spinlock, MTU, tx/rx counters, paused flag. Real impl will add WDF control device for IOCTLs and shared ring.
-- `src/ioctl.c` -- (planned) minimal IOCTL surface for service <-> driver: set MTU, inject NBL, query stats, all length-validated, fuzzed same gate as tunnel.
+- `src/miniport.c` + `src/miniport.h` -- NDIS 6.8 callback skeleton and shared adapter/NBL ownership definitions. Initialization attributes, adapter lifecycle, and actual packet path remain incomplete.
+- `src/ioctl.c` -- source implementation of a minimal WDF IOCTL surface: set MTU, inject NBL, query stats, and set quanta. Injected packets are copied to owned nonpaged memory and released when NDIS returns the NBL; this source has not yet been built or verified with WDK/Verifier.
 - `balancify.inf` -- INF for PnP install, `*IfType = IF_TYPE_PROP_VIRTUAL (53)`, `*MediaType = NdisMedium802_3`.
 - `driver.vcxproj` -- WDK 10.0.22621+ build.
 
@@ -14,7 +14,7 @@ This directory is the first-party NDIS virtual miniport that owns the packet pat
 - Partner Center enrolment + EV cert ordered in Phase 1 (G1).
 - Attestation signing first, HLK only if Server support added (Sec.9.3).
 - HVCI readiness trio: Driver Verifier with code-integrity checks, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (Sec.9.5, S15).
-- SBOM/VEX SPDX 3.0 from March 2027 (S13) -- generated in CI.
+- Current CI interim SBOM is SPDX 2.3 from `cargo metadata --locked`; standards-valid SPDX 3.0 and reviewed VEX remain pending (S13).
 
 **Performance targets (G3):**
 - Added median delay <= 3 ms wired lab (Sec.10.3)
@@ -47,11 +47,12 @@ strings x64\Release\balancify.sys | findstr BlaB
 - Driver Verifier: `verifier /standard /driver balancify.sys` flags 0x209BB special pool, force IRQL, pool tracking, I/O verification, deadlock, DMA, security, DDI compliance, code integrity — reboot, `!verifier` in WinDbg, run traffic, no bugchecks
 - HLK: Studio -> HVCIMemoryIntegrity test, checks no executable NonPagedPool, no executable MDL, no RWX, no self-modifying — pass criteria no failures
 - VBS/MI: `msinfo32` VBS Running MI enabled, driver loaded, traffic via `throughput.rs` + `balancify-service` binary, ETW 200/201/300/400/401/402/500/600 visible via WPA
-- S2b: socket test through miniport -- same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path: service SendNetBufferLists, relay receives, reorder, deliver, IOCTL INJECT_NBL allocates MDL via NdisAllocateMdl NBL via NdisAllocateNetBufferAndNetBufferList indicates via NdisMIndicateReceiveNetBufferLists, Return frees MDL chain via NdisFreeMdl
+- S2b (pending): socket test through miniport -- same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path. IOCTL INJECT_NBL now copies request bytes into owned nonpaged memory, indicates the NBL, and defers freeing its MDL and packet buffer until `MiniportReturnNetBufferLists`; this ownership path still requires WDK + Driver Verifier validation.
 - G3 benchmark + HVCI trio documented in `docs/phase2/hvci-readiness.md` with date, Windows build, hardware, driver version
 
 **INF:**
-- `driver/balancify.inf` Universal, PnpLockdown=1, NDIS 6.8, MTU param 576..9000 default 1440, WDF verifier, PoolTag BlaB, SDDL, METHOD_BUFFERED, length validation, attestation signing
+- `driver/balancify.inf` Universal, PnpLockdown=1, NDIS 6.8, MTU param 576..9000 default 1440, WDF verifier, PoolTag BlaB, METHOD_BUFFERED, length validation, attestation signing
+- WDF control-device DACL grants access only to SYSTEM and Administrators; GET_STATS requires `FILE_READ_ACCESS`, and mutating IOCTLs require `FILE_WRITE_ACCESS`. The service must run with the required privileged identity; the desktop shell must never open this device directly. WDK build and ACL behavior still require validation on a Windows driver lab machine.
 - `driver/miniport.inf` legacy skeleton, use balancify.inf for new builds
 
 **vcxproj:**

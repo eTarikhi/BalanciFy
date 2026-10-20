@@ -1,15 +1,21 @@
+> Measurement correction (2026-10-20): historical `throughput.rs` and `analyze.py` demo figures are not evidence of network performance. The analyzer now requires actual iperf3 JSON; all Rig B acceptance rows remain pending. See `docs/phase2/throughput-rows.md`.
+
 # Final summary — continuous development without stopping to report
 
-Date: 2026-10-19 → 2026-10-20
-Status: continuous, CI green 36d65eb (latest), 215+ tests, Cargo.lock vetted-only, driver vcxproj HVCI flags, SBOM/VEX SPDX3, throughput 9 profiles Rig B, app shell 9 modes, report with 5 visualizations green
+Date: 2026-10-19 → 2026-10-21
+Status: historical baseline at 36d65eb; active Arena continuation and current gates are recorded below.
+
+## Active Arena continuation (2026-10-21)
+
+Branch `arena/6b225b20-balancify` has pushed authenticated tunnel control/replay protections, admission-before-session-allocation, relay idle-timer protections, per-session retransmission acknowledgements, wire-v2 selective FlowAck, an SPDX 2.3 locked-graph SBOM generator, and a client CLI that now fails closed on missing or invalid relay identities and handshake errors. Latest CI run 39508334534 passed Ubuntu/Windows tests, release build, lab/policy checks, and standards-parser validation of the generated SPDX 2.3 document. The generator joins registry checksums from `Cargo.lock`, preserves declared license metadata, and emits no VEX/vulnerability claims; SPDX 3.0/VEX remain pending. WDK/NDIS build/runtime, HVCI, real netem/Rig B performance, production GUI/IPC, and hardware gates remain unverified; do not infer completion from the historical baseline below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change to report. This is the third+ time user said it, so we continue even more. Latest: "Create a comprehensive development progress report that utilizes data visualizations" done (4feba2b green), then "Continue developing app" ongoing.
 
-New since 5fc3af0: Cargo.lock gap closed (5491758) vetted-only version 3 with 9 workspace members + allowlisted transitive, audit passes with lock file; crypto-allowlist.txt updated with transitive closure from CI logs 39268156078/4761969; driver/balancify.vcxproj HVCI flags (9115e4f) /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre PoolTag BlaB Spectre mitigation KMDF 1.33 Universal 10.0.22621.0 NDIS620_MINIPORT; sbom.sh v2 SPDX 3.0 + VEX (6c9a52f) 10 first-party + vetted + transitive packages relationships annotations HVCI trio installer vulnerabilities 3 entries; throughput.rs enhanced 9 profiles (0581256) Rig B wired 1Gbps/Wi-Fi 6 300M per-flow on/off aggregate 16 flows iperf3-like added delay <=3ms CPU/Gbit pacing 80% secure notes; app shell 9 modes (cd1673f) per-path ECN/delay bond gain uplink up/down ETW per-flow sessions Rig B HVCI SBOM diagnostics; report docs/development-progress-report.md with 5 visualizations (gantt option1 burndown option2 velocity option2 strategic-alignment option1 technical-breakdown option1) 4feba2b green; lab-progress, throughput-rows, hvci-readiness, final-summary updated (78cd32b, 36d65eb).
+New since 5fc3af0: Cargo.lock gap closed and dependency audit passes; driver project HVCI flags and lab harness documentation were added. Historical correction (2026-10-20): `sbom.sh v2` (6c9a52f) emitted handwritten SPDX-3-shaped JSON with placeholder vulnerability IDs. That output was not standards-valid and is not an SBOM/VEX deliverable; the current replacement generates SPDX 2.3 from the locked Cargo graph and makes no vulnerability claims. SPDX 3.0/VEX remain pending. Other entries in this historical baseline describe planned lab profiles and tooling, not measurements or hardware validation.
 
-CI progression now includes: 4feba2b report+assets green, 5491758 Cargo.lock green, 9115e4f vcxproj green, 6c9a52f sbom green, 0581256 throughput green, cd1673f app green, 78cd32b docs green, 36d65eb docs green — all ubuntu+windows+audit success via check-runs API.
+Historical CI runs passed those commits' checks, including the run that carried the invalid SBOM placeholder; CI success did not establish SPDX/VEX validity. Current continuation CI run 39484151181 passed Ubuntu/Windows tests, release build, lab/policy checks, and SPDX 2.3 standards-parser validation.
 
-Per-flow retx (session,seq) + flow ACK + driver S2b NBL pool + HVCI flags + SBOM/VEX + Cargo.lock + throughput 9 profiles + app 9 modes + report visualizations — all CI-verified.
+Per-flow retx (session,seq) + flow ACK + driver source changes + HVCI flags + Cargo.lock + software harnesses + report visualizations — CI-verified as code/build checks only. No WDK, hardware, SPDX 3.0, or VEX validation is implied.
 
 Next still: netem S2c real, driver S2b real VM Verifier 0x209BB + HLK HVCIMemoryIntegrity + VBS/MI, throughput Rig B real iperf3, HVCI trio real, WinUI3 shell, soak+Verifier+compat, RC+attestation+rollback, GA.
 
@@ -41,13 +47,13 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 - **Throughput harness with ECN/delay profiles** (10 reps, 1000x1200B, bonded/single/lossy/ECN/delay, mean/median/p95/spread, gain, loss penalty, real TunnelCipher) — commit 4761969
 - **Per-flow retx keyed by (session,seq) + per-session seq spaces** (Sent includes session, RetxEntry includes session, retx BTreeMap<(u64,u64), RetxEntry>, session_seqs authoritative, next_seq_for per-session, remember(session, seq, ...), on_ack_for_session, duplicate_with_session, reinjections_due preserves session, service uses duplicate_with_session and on_ack_for_session) — ADR-0029, commit 4d05142
 - **Explicit flow-level ACK integration + driver S2b NBL indication** (PolicyEngine on_flow_ack wrapper, Service ingest_path detects FlowData and calls on_flow_ack + on_ack for each Payload, miniport NBL pool via NdisAllocateNetBufferListPool, ioctl INJECT_NBL allocates MDL via NdisAllocateMdl, NBL via NdisAllocateNetBufferAndNetBufferList, indicates via NdisMIndicateReceiveNetBufferLists, Return path frees MDL chain via NdisFreeMdl) — ADR-0030, commit 4d05142
-- **HVCI readiness trio + SBOM/VEX SPDX 3.0** (hvci-readiness.md documents Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/Memory-Integrity VM with Secure Boot/vTPM/test-signing, driver uses NonPagedPoolNx, no executable pools, no RWX, proper MDL freeing, NBL pool, SDDL, METHOD_BUFFERED, length validation; sbom.sh generates SPDX 3.0 JSON with 6 vetted crates + first-party, relationships, annotations C2, VEX section; installer includes SBOM sidecar) — ADR-0031, commit 5fc3af0
-- **Throughput Rig B plan** (throughput-rows.md updated with 5 profiles, simulated 42.8% gain, 16.7% loss penalty, ECN 80%, delay 10%, real Rig B procedure with wired 1Gbps/Wi-Fi 6 300M, secure Noise_IK, pacing 80%, per-flow on/off, iperf3, added delay <=3ms, CPU/Gbit via crypto-bench+ETW) — commit 5fc3af0
+- **HVCI readiness trio + SBOM/VEX SPDX 3.0** (hvci-readiness.md documents Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/Memory-Integrity VM with Secure Boot/vTPM/test-signing, driver uses NonPagedPoolNx, no executable pools, no RWX, proper MDL freeing, NBL pool, SDDL, METHOD_BUFFERED, length validation; historical SBOM/VEX placeholder was invalid and has been removed; current SPDX 2.3 generator uses locked Cargo metadata and makes no VEX claims) — ADR-0031, commit 5fc3af0
+- **Throughput harness scope correction (2026-10-20):** local `throughput.rs` exercises software processing only; historical simulated gain/penalty/delay output is not networking evidence. `throughput-rows.md` now records the proper Rig B method; real acceptance remains pending.
 - **Docs**: ADR-0021..0031, continuous-development-log, security-hardening, test-coverage, next-steps, ci-history, lab-progress (updated with per-flow retx, flow ACK, driver S2b NBL pool, HVCI, SBOM), throughput-rows, hvci-readiness, final-summary
 
 ### Test coverage
 
-- 215+ tests, 0 failures, identical on Linux and Windows runners (windows had transient failures fixed: E0503 borrow checker in delay detection, E0063 Counters missing ecn_ce/delay_events, truncated test with optional tail, FlowClass vs BondClass, WindowsEtwHandle case, bench imports, rate limiter burst 1000<1036, non-ASCII Sec. markers, format! escaping, on_ack_with_rtt arg order, Service generic, PassThrough string in throughput.rs)
+- Latest CI run 39508334534 passed 252 Rust tests on Ubuntu/Windows, plus seven Python SBOM tests and SPDX 2.3 parser validation. Earlier Windows/Ubuntu runner failures were corrected (E0503 borrow checker, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, ACK argument order, Service generic, PassThrough audit guard).
 - Core: 85+ tests (bond, congestion 13, flowtable, health, keepalive, mtu, pacing 7, placement, policy, ratelimit 3, rules, scoring)
 - Crypto: 36 tests (AEAD 8, handshake 12, keys, store, replay 5, rekey 3)
 - IPC: 9 tests (contract v1, truncation, Counters 10 fields)
@@ -62,10 +68,10 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 - Real netem S2c: netem-rig.sh profiles delay-gap 40ms, lossy 1%, asymmetric 200M/50M, cellular 100ms+2%+20Mbit, 10 reps median/p95/spread Sec.10.1 on Linux gateway with tc + iperf3
 - Driver S2b real VM: test-signed load with new NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists on Hyper-V VM with Driver Verifier 0x209BB + code integrity, VBS/Memory-Integrity on, Secure Boot, vTPM, re-run S2a socket test through miniport
-- Cargo.lock: gen-lock.sh once toolchain available (rustup needs static.rust-lang.org, currently blocked), commit Cargo.lock, audit checks if present
+- Cargo.lock is refreshed from the successful Ubuntu runner's Cargo resolution; local dependency-policy audit passes. Re-run generation/audit when changing dependencies.
 - Throughput Rig B real: wired 1Gbps/Wi-Fi 6 300M, secure Noise_IK, pacing 80%, per-flow on/off, iperf3, added delay <=3ms, CPU/Gbit via crypto-bench+ETW, 10 reps median/p95/spread, record in throughput-rows.md + lab-progress.md
 - HVCI trio S15 real: Verifier, HLK HVCI readiness test, VBS/Memory-Integrity VM, document in hvci-readiness.md
-- SBOM/VEX SPDX 3.0 S13 real: cargo cyclonedx when toolchain available, publish sidecar, include in installer ProgramData\Balancify\sbom.spdx.json
+- SPDX 3.0/VEX S13: current interim output is SPDX 2.3 from the locked Cargo graph; still add standards-valid SPDX 3.0, reviewed VEX, publish sidecar, and validate installer copy.
 - WinUI3 shell: Home, Rules, Relay & account, Diagnostics, tray flyout, 1Hz telemetry, last-known-good + stale markers, accessibility, self-contained .NET 10 + WinAppSDK runtimes bundled, offline installer per §4.8 rev 2.1
 - Soak + Verifier + compat matrix: 72h soak, random flaps, 100 sleep/resume with Verifier standard+random, compat matrix VPN clients, security suites, Hyper-V, WSL2, Memory Integrity on/off (G5, G6)
 - RC + final attestation + SBOM/VEX + rollback drill (G7), GA + winget + status page (G8)

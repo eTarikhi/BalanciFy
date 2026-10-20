@@ -7,16 +7,16 @@
 #include <ndis.h>
 #include <wdf.h>
 #include <ntstrsafe.h>
+#include "miniport.h"
 
-#define BALANCIFY_TAG 'laBB'
 #define BALANCIFY_DEVICE_NAME L"\\Device\\Balancify"
 #define BALANCIFY_DOS_NAME L"\\DosDevices\\Balancify"
 
-// IOCTLs (METHOD_BUFFERED, FILE_ANY_ACCESS, custom codes 0x800-0x8FF)
-#define IOCTL_BALANCIFY_SET_MTU CTL_CODE(FILE_DEVICE_NETWORK, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_BALANCIFY_INJECT_NBL CTL_CODE(FILE_DEVICE_NETWORK, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_BALANCIFY_SET_QUANTA CTL_CODE(FILE_DEVICE_NETWORK, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+// IOCTLs (METHOD_BUFFERED, explicit caller access rights, custom codes 0x800-0x8FF)
+#define IOCTL_BALANCIFY_SET_MTU CTL_CODE(FILE_DEVICE_NETWORK, 0x800, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_BALANCIFY_INJECT_NBL CTL_CODE(FILE_DEVICE_NETWORK, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_BALANCIFY_SET_QUANTA CTL_CODE(FILE_DEVICE_NETWORK, 0x803, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 // Input for SET_MTU: ULONG mtu
 // Input for GET_STATS: none, output: BALANCIFY_STATS
@@ -37,10 +37,6 @@ typedef struct _BALANCIFY_QUANTA {
     ULONGLONG quanta;
 } BALANCIFY_QUANTA, *PBALANCIFY_QUANTA;
 
-// Forward decls from miniport.c
-typedef struct _BALANCIFY_ADAPTER BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;
-extern NDIS_HANDLE gDriverHandle;
-
 // Control device context
 typedef struct _BALANCIFY_CONTROL {
     PBALANCIFY_ADAPTER adapter; // associated miniport adapter (one for now)
@@ -60,13 +56,16 @@ NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapt
     WDF_OBJECT_ATTRIBUTES deviceAttributes;
     WDF_IO_QUEUE_CONFIG queueConfig;
     WDF_FILEOBJECT_CONFIG fileConfig;
-    UNICODE_STRING deviceName, dosName;
+    UNICODE_STRING deviceName, dosName, deviceSddl;
     PBALANCIFY_CONTROL control;
 
     RtlInitUnicodeString(&deviceName, BALANCIFY_DEVICE_NAME);
     RtlInitUnicodeString(&dosName, BALANCIFY_DOS_NAME);
+    // Only SYSTEM and Administrators may open the driver control device. The
+    // unprivileged desktop shell must use the service's authenticated IPC.
+    RtlInitUnicodeString(&deviceSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
 
-    deviceInit = WdfControlDeviceInitAllocate(driver, &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
+    deviceInit = WdfControlDeviceInitAllocate(driver, &deviceSddl);
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -193,14 +192,31 @@ VOID BalancifyEvtIoDeviceControl(
         status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
 
-        // Allocate MDL for the packet (NdisAllocateMdl requires adapter handle)
-        PMDL mdl = NdisAllocateMdl(adapter->miniportAdapterHandle, inputBuffer, (ULONG)inputBufferLength);
+        // Copy out of the METHOD_BUFFERED request before completing it. NDIS may
+        // retain the indicated NBL after this IOCTL returns.
+        PVOID packetCopy = NdisAllocateMemoryWithTagPriority(
+            adapter->miniportAdapterHandle,
+            (ULONG)inputBufferLength,
+            BALANCIFY_POOL_TAG,
+            NormalPoolPriority);
+        if (!packetCopy) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+        NdisMoveMemory(packetCopy, inputBuffer, inputBufferLength);
+
+        PMDL mdl = NdisAllocateMdl(
+            adapter->miniportAdapterHandle,
+            packetCopy,
+            (ULONG)inputBufferLength);
         if (!mdl) {
+            NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
             status = STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
 
-        // Allocate NBL/NB from pool (pool created in MiniportInitializeEx)
+        // Allocate the NBL/NB from the miniport pool, which reserves a private
+        // context slot for packetCopy until MiniportReturnNetBufferLists.
         PNET_BUFFER_LIST nbl = NULL;
         if (adapter->netBufferListPool) {
             nbl = NdisAllocateNetBufferAndNetBufferList(
@@ -210,12 +226,24 @@ VOID BalancifyEvtIoDeviceControl(
                 0,
                 (ULONG)inputBufferLength);
         }
-
         if (!nbl) {
             NdisFreeMdl(mdl);
+            NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
             status = STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
+
+        PBALANCIFY_RX_NBL_CONTEXT nblContext =
+            (PBALANCIFY_RX_NBL_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(nbl);
+        if (!nblContext) {
+            NdisFreeNetBufferList(nbl);
+            NdisFreeMdl(mdl);
+            NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+        nblContext->packetBuffer = packetCopy;
+        nblContext->packetLength = (ULONG)inputBufferLength;
 
         NBL_SET_PORT_NUMBER(nbl, 0);
 
@@ -227,17 +255,23 @@ VOID BalancifyEvtIoDeviceControl(
 
         if (paused) {
             NdisFreeNetBufferList(nbl);
+            NdisFreeMdl(mdl);
+            NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
             status = STATUS_SUCCESS;
             break;
         }
 
-        // Indicate to NDIS stack (Sec.6.1 TAP-like adapter, S2b)
+        // The WDF callback may run below DISPATCH_LEVEL. Set the NDIS flag only
+        // when it is actually executing at DISPATCH_LEVEL.
+        ULONG receiveFlags = (KeGetCurrentIrql() == DISPATCH_LEVEL)
+            ? NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL
+            : 0;
         NdisMIndicateReceiveNetBufferLists(
             adapter->miniportAdapterHandle,
             nbl,
             NDIS_DEFAULT_PORT_NUMBER,
             1,
-            NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL);
+            receiveFlags);
 
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: INJECT_NBL %zu bytes indicated\n", inputBufferLength));
         status = STATUS_SUCCESS;

@@ -8,15 +8,21 @@
 //! * `FileKeyStore` -- for lab use, storing keys as raw bytes in a file with
 //!   restrictive permissions (0600 on Unix). On Windows, when the `dpapi`
 //!   feature is enabled, the file contents are protected via
-//!   `CryptProtectData` (DPAPI). The DPAPI implementation is Windows-only and
-//!   behind a feature so the crate stays cross-platform.
+//!   `CryptProtectData` (DPAPI) by default on Windows. The DPAPI implementation
+//!   is cfg-gated so the crate stays cross-platform.
 //!
 //! The trait is sans-I/O in the sense that it takes paths as arguments; the
 //! actual I/O happens inside the implementation. That keeps the handshake and
 //! tunnel crates free of filesystem dependencies.
 
 use crate::keys::{PinnedKeys, StaticKeypair};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use zeroize::{Zeroize, Zeroizing};
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
@@ -109,7 +115,7 @@ impl KeyStore for MemoryKeyStore {
 }
 
 /// File-backed store. Lab form: raw 32-byte secret in a file with 0600
-/// permissions. Production form (Windows, `dpapi` feature): DPAPI-protected.
+/// permissions. On Windows the default `dpapi` feature protects files with DPAPI.
 #[derive(Debug, Clone)]
 pub struct FileKeyStore {
     secret_path: PathBuf,
@@ -122,14 +128,14 @@ impl FileKeyStore {
     }
 
     fn read_secret_file(path: &Path) -> Result<[u8; 32], StoreError> {
-        let raw = std::fs::read(path).map_err(|e| {
+        let mut raw = std::fs::read(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound { StoreError::NotFound }
             else { StoreError::Io(e.to_string()) }
         })?;
         // DPAPI: file contains protected blob; otherwise raw 32 bytes.
         // For migration, if DPAPI unprotect fails and raw is exactly 32 bytes,
         // treat raw as secret (old file) and next save will protect it.
-        let data = match dpapi_unprotect(&raw) {
+        let mut data = match dpapi_unprotect(&raw) {
             Ok(d) => d,
             Err(StoreError::Dpapi(_)) => {
                 if raw.len() == 32 {
@@ -140,26 +146,77 @@ impl FileKeyStore {
             }
             Err(e) => return Err(e),
         };
-        if data.len() != 32 { return Err(StoreError::Corrupt); }
+        if data.len() != 32 {
+            data.zeroize();
+            if raw.len() == 32 {
+                raw.zeroize();
+            }
+            return Err(StoreError::Corrupt);
+        }
         let mut out = [0u8; 32];
         out.copy_from_slice(&data);
+        data.zeroize();
+        if raw.len() == 32 {
+            raw.zeroize();
+        }
         Ok(out)
     }
 
     fn write_secret_file(path: &Path, secret: &[u8; 32]) -> Result<(), StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
-        }
         let protected = dpapi_protect(secret)?;
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, &protected).map_err(|e| StoreError::Io(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        Self::write_private_atomic(path, &protected)
+    }
+
+    fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<(), StoreError> {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| StoreError::Io("key file path has no filename".to_string()))?;
+        let file_name = file_name.to_string_lossy();
+
+        // Never reuse a predictable .tmp path: create_new refuses to follow or
+        // overwrite a pre-existing symlink/file. The unique sibling also keeps
+        // the final rename on the same filesystem.
+        for _ in 0..128 {
+            let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let temp_path = parent.join(format!(
+                ".{file_name}.{}.{}.tmp",
+                std::process::id(),
+                sequence,
+            ));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = match options.open(&temp_path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(StoreError::Io(error.to_string())),
+            };
+
+            let write_result = file.write_all(contents).and_then(|()| file.sync_all());
+            drop(file);
+            if let Err(error) = write_result {
+                let _ = fs::remove_file(&temp_path);
+                return Err(StoreError::Io(error.to_string()));
+            }
+            if let Err(error) = fs::rename(&temp_path, path) {
+                let _ = fs::remove_file(&temp_path);
+                return Err(StoreError::Io(error.to_string()));
+            }
+            return Ok(());
         }
-        std::fs::rename(&tmp, path).map_err(|e| StoreError::Io(e.to_string()))?;
-        Ok(())
+
+        Err(StoreError::Io(
+            "could not allocate a unique temporary key file".to_string(),
+        ))
     }
 
     fn read_pinned_file(path: &Path) -> Result<PinnedKeys, StoreError> {
@@ -194,21 +251,12 @@ impl FileKeyStore {
     }
 
     fn write_pinned_file(path: &Path, pinned: &PinnedKeys) -> Result<(), StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
-        }
         let mut raw = Vec::with_capacity(pinned.len() * 32);
-        for k in pinned.iter() { raw.extend_from_slice(k); }
-        let protected = dpapi_protect(&raw)?;
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, &protected).map_err(|e| StoreError::Io(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        for key in pinned.iter() {
+            raw.extend_from_slice(key);
         }
-        std::fs::rename(&tmp, path).map_err(|e| StoreError::Io(e.to_string()))?;
-        Ok(())
+        let protected = dpapi_protect(&raw)?;
+        Self::write_private_atomic(path, &protected)
     }
 }
 
@@ -218,7 +266,8 @@ impl KeyStore for FileKeyStore {
             Ok(secret) => Ok(StaticKeypair::from_bytes(secret)),
             Err(StoreError::NotFound) => {
                 let kp = StaticKeypair::generate();
-                Self::write_secret_file(&self.secret_path, &kp.secret_bytes())?;
+                let secret = Zeroizing::new(kp.secret_bytes());
+                Self::write_secret_file(&self.secret_path, &secret)?;
                 Ok(kp)
             }
             Err(e) => Err(e),
@@ -226,7 +275,8 @@ impl KeyStore for FileKeyStore {
     }
 
     fn save(&mut self, keypair: &StaticKeypair) -> Result<(), StoreError> {
-        Self::write_secret_file(&self.secret_path, &keypair.secret_bytes())
+        let secret = Zeroizing::new(keypair.secret_bytes());
+        Self::write_secret_file(&self.secret_path, &secret)
     }
 
     fn load_pinned(&self) -> Result<PinnedKeys, StoreError> {
@@ -248,6 +298,7 @@ impl KeyStore for FileKeyStore {
 #[cfg(all(windows, feature = "dpapi"))]
 mod dpapi {
     use crate::store::StoreError;
+    use zeroize::Zeroize;
 
     #[repr(C)]
     struct DataBlob {
@@ -343,8 +394,9 @@ mod dpapi {
             return Err(StoreError::Dpapi(format!("CryptUnprotectData failed: {err}")));
         }
         let out = unsafe {
-            let slice = core::slice::from_raw_parts(blob_out.pb_data, blob_out.cb_data as usize);
+            let slice = core::slice::from_raw_parts_mut(blob_out.pb_data, blob_out.cb_data as usize);
             let v = slice.to_vec();
+            slice.zeroize();
             LocalFree(blob_out.pb_data as *mut _);
             v
         };
@@ -403,6 +455,57 @@ mod tests {
         let loaded = store.load_pinned().unwrap();
         assert_eq!(loaded.len(), 1);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(all(windows, feature = "dpapi"))]
+    #[test]
+    fn windows_file_store_protects_legacy_raw_secret_on_save() {
+        let dir = std::env::temp_dir().join(format!("balancify-dpapi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        let legacy_secret = [42u8; 32];
+        std::fs::write(&secret_path, legacy_secret).unwrap();
+
+        let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+        let keypair = store.load_or_generate().expect("load legacy raw key");
+        assert_eq!(keypair.secret_bytes(), legacy_secret);
+        store.save(&keypair).expect("migrate to DPAPI blob");
+        let protected = std::fs::read(&secret_path).unwrap();
+        assert_ne!(protected.as_slice(), legacy_secret.as_slice());
+        let restored = store.load_or_generate().expect("unprotect migrated key");
+        assert_eq!(restored.public_bytes(), keypair.public_bytes());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_does_not_follow_precreated_temp_symlink_and_keeps_key_private() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!("balancify-temp-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        let victim_path = dir.join("victim");
+        std::fs::write(&victim_path, b"leave this file alone").unwrap();
+        symlink(&victim_path, secret_path.with_extension("tmp")).unwrap();
+
+        let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+        let keypair = StaticKeypair::generate();
+        let expected_secret = keypair.secret_bytes();
+        store.save(&keypair).unwrap();
+
+        assert_eq!(std::fs::read(&victim_path).unwrap(), b"leave this file alone");
+        assert_eq!(std::fs::read(&secret_path).unwrap(), expected_secret.to_vec());
+        assert_eq!(
+            std::fs::metadata(&secret_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

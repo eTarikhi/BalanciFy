@@ -8,7 +8,8 @@
 //!
 //! Real Windows service integration would bind the virtual miniport and forward
 //! IP packets via this service core; this CLI validates the handshake + tunnel
-//! path end-to-end without requiring the driver.
+//! path end-to-end without requiring the driver. It fails closed unless a relay
+//! identity is configured; `--insecure-lab` is debug-build-only and loopback-only.
 
 use balancify_core::{UplinkId, FlowKey};
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
@@ -16,70 +17,193 @@ use balancify_service::{Service, ServiceConfig};
 use std::net::{UdpSocket, SocketAddr};
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionMode {
+    Secure,
+    InsecureLab,
+}
+
+fn select_connection_mode(
+    has_relay_key: bool,
+    insecure_lab_requested: bool,
+    debug_build: bool,
+) -> Result<ConnectionMode, std::io::Error> {
+    if has_relay_key {
+        return Ok(ConnectionMode::Secure);
+    }
+    if !insecure_lab_requested {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "no relay identity configured; refusing insecure transport (use --insecure-lab for loopback-only debug runs)",
+        ));
+    }
+    if !debug_build {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "insecure lab mode is disabled in release builds",
+        ));
+    }
+    Ok(ConnectionMode::InsecureLab)
+}
+
+fn parse_relay_public_key(encoded: &str) -> Result<[u8; 32], std::io::Error> {
+    let bytes = hex::decode(encoded).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "relay public key must be valid hex")
+    })?;
+    let public: [u8; 32] = bytes.try_into().map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "relay public key must be exactly 32 bytes")
+    })?;
+    if public == [0; 32] {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "all-zero relay public key is not a valid identity",
+        ));
+    }
+    Ok(public)
+}
+
+fn resolve_relay_public(
+    configured: Option<[u8; 32]>,
+    pinned: &PinnedKeys,
+) -> Result<Option<[u8; 32]>, std::io::Error> {
+    match configured {
+        Some(public) => {
+            if public == [0; 32] {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "all-zero relay public key is not a valid identity",
+                ));
+            }
+            if !pinned.is_empty() && !pinned.is_pinned(&public) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "configured relay key does not match any pinned identity",
+                ));
+            }
+            Ok(Some(public))
+        }
+        None => match pinned.iter().next().copied() {
+            Some(public) if public == [0; 32] => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stored pinned relay identity is all zeroes",
+            )),
+            Some(public) => Ok(Some(public)),
+            None => Ok(None),
+        },
+    }
+}
+
+fn choose_state_dir(
+    override_dir: Option<std::path::PathBuf>,
+    windows_local_app_data: Option<std::path::PathBuf>,
+    xdg_state_home: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+    is_windows: bool,
+) -> Result<std::path::PathBuf, std::io::Error> {
+    if let Some(path) = override_dir {
+        if path.as_os_str().is_empty() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "BALANCIFY_STATE_DIR cannot be empty"));
+        }
+        return Ok(path);
+    }
+    if is_windows {
+        if let Some(path) = windows_local_app_data {
+            return Ok(path.join("Balancify"));
+        }
+        return home
+            .map(|path| path.join("AppData").join("Local").join("Balancify"))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA or USERPROFILE is required"));
+    }
+    if let Some(path) = xdg_state_home.filter(|path| path.is_absolute()) {
+        return Ok(path.join("balancify"));
+    }
+    home.map(|path| path.join(".local").join("state").join("balancify"))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "XDG_STATE_HOME or HOME is required"))
+}
+
+fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
+    let override_dir = std::env::var_os("BALANCIFY_STATE_DIR").map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let windows_local_app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let windows_local_app_data = None;
+    #[cfg(not(windows))]
+    let xdg_state_home = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let xdg_state_home = None;
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    choose_state_dir(override_dir, windows_local_app_data, xdg_state_home, home, cfg!(windows))
+}
+
+fn validate_lab_target(mode: ConnectionMode, relay_addr: SocketAddr) -> Result<(), std::io::Error> {
+    if mode == ConnectionMode::InsecureLab && !relay_addr.ip().is_loopback() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "insecure lab mode is restricted to loopback relay addresses",
+        ));
+    }
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let relay_addr: SocketAddr = args
-        .get(1)
-        .and_then(|s| s.parse().ok())
+    let mut positional = Vec::new();
+    let mut insecure_lab_requested = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--insecure-lab" => insecure_lab_requested = true,
+            "--help" | "-h" => {
+                println!("Usage: balancify-client [--insecure-lab] [RELAY_ADDR] [PACKET_COUNT]");
+                println!("Without a configured relay identity, the client fails closed. Insecure lab mode is debug-build-only and loopback-only.");
+                return Ok(());
+            }
+            _ if arg.starts_with('-') => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unknown option: {arg}")));
+            }
+            _ => positional.push(arg),
+        }
+    }
+    if positional.len() > 2 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "expected at most RELAY_ADDR and PACKET_COUNT"));
+    }
+    let relay_addr: SocketAddr = positional
+        .first()
+        .map(|s| s.parse())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid relay address"))?
         .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
-    let count: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let count: usize = positional
+        .get(1)
+        .map(|s| s.parse())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet count must be a non-negative integer"))?
+        .unwrap_or(10);
 
     // Load or generate client static keypair
-    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
-        #[cfg(windows)]
-        {
-            std::env::var("ProgramData")
-                .map(|pd| format!("{}\\Balancify", pd))
-                .unwrap_or_else(|_| "/tmp/balancify_client".to_string())
-        }
-        #[cfg(not(windows))]
-        {
-            "/tmp/balancify_client".to_string()
-        }
-    });
-    let secret_path = std::path::Path::new(&state_dir).join("client_secret.key");
-    let pinned_path = std::path::Path::new(&state_dir).join("pinned_relays.keys");
+    let state_dir = default_state_dir()?;
+    let secret_path = state_dir.join("client_secret.key");
+    let pinned_path = state_dir.join("pinned_relays.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let keypair = store.load_or_generate().unwrap_or_else(|_| {
-        eprintln!("Failed to load keypair, generating ephemeral");
-        balancify_crypto::StaticKeypair::generate()
-    });
-    let pinned_relays = store.load_pinned().unwrap_or_else(|_| PinnedKeys::new());
+    let keypair = store.load_or_generate().map_err(|e| {
+        std::io::Error::other(format!("failed to load or persist client identity: {e}"))
+    })?;
+    let pinned_relays = store.load_pinned().map_err(|e| {
+        std::io::Error::other(format!("failed to load pinned relay identities: {e}"))
+    })?;
 
-    // For demo, if no pinned relay, we need relay's public key. In real use,
-    // the relay public key would be provisioned out-of-band. Here we try to
-    // load from BALANCIFY_RELAY_PUBLIC_KEY env (hex) or fail.
-    let relay_public = if pinned_relays.is_empty() {
-        if let Ok(hex) = std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
-            let bytes = hex::decode(&hex).unwrap_or_else(|_| vec![0u8; 32]);
-            if bytes.len() == 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&bytes);
-                arr
-            } else {
-                eprintln!("BALANCIFY_RELAY_PUBLIC_KEY must be 32-byte hex");
-                eprintln!("No pinned relay, will try unauthenticated (lab) handshake");
-                [0u8; 32]
-            }
-        } else {
-            eprintln!("No pinned relay and no BALANCIFY_RELAY_PUBLIC_KEY -- using lab mode (no pinning)");
-            [0u8; 32]
-        }
-    } else {
-        // Use first pinned
-        let mut arr = [0u8; 32];
-        // PinnedKeys doesn't expose iteration easily, so we use env var still
-        if let Ok(hex) = std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
-            if let Ok(bytes) = hex::decode(&hex) {
-                if bytes.len() == 32 {
-                    arr.copy_from_slice(&bytes);
-                }
-            }
-        }
-        arr
+    let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
+        Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
     };
+    let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
+    let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
+    validate_lab_target(mode, relay_addr)?;
+    let relay_public = relay_public.unwrap_or([0; 32]);
 
-    println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir, relay_addr, count);
+    println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir.display(), relay_addr, count);
     println!("  client public: {:02x?}...", &keypair.public_bytes()[..8]);
 
     // Create service core with dummy TunnelCipher, will be replaced after handshake
@@ -118,38 +242,38 @@ fn main() -> std::io::Result<()> {
     let local_addr = sock.local_addr()?;
     println!("  local socket: {}", local_addr);
 
-    // Initiate handshake if relay public known, otherwise skip to lab mode
-    let use_secure = relay_public != [0u8; 32];
-    if use_secure {
-        println!("  initiating secure handshake (Noise_IK)...");
-        let prologue = b"balancify handshake v1";
-        let msg1_framed = svc
-            .initiate_handshake(relay_public, prologue)
-            .expect("handshake init");
-        sock.send_to(&msg1_framed, relay_addr)?;
-        println!("  sent handshake msg1 ({} bytes)", msg1_framed.len());
+    match mode {
+        ConnectionMode::Secure => {
+            println!("  initiating authenticated Noise_IK handshake...");
+            let prologue = b"balancify handshake v1";
+            let msg1_framed = svc
+                .initiate_handshake(relay_public, prologue)
+                .map_err(|e| std::io::Error::other(format!("handshake initialization failed: {e:?}")))?;
+            sock.send_to(&msg1_framed, relay_addr)?;
+            println!("  sent handshake msg1 ({} bytes)", msg1_framed.len());
 
-        let mut buf = [0u8; 65535];
-        match sock.recv_from(&mut buf) {
-            Ok((n, from)) => {
-                println!("  received {} bytes from {}", n, from);
-                if n >= 2 && buf[0] == 0xFF && buf[1] == 0x02 {
-                    let now2 = Instant::now();
-                    svc.handle_handshake_msg2(&buf[..n], now2)
-                        .expect("handle msg2");
-                    println!("  handshake complete, transport keys installed");
-                } else {
-                    eprintln!("  unexpected handshake response: first bytes {:02x?}", &buf[..n.min(16)]);
-                }
+            let mut buf = [0u8; 65535];
+            let (n, from) = sock.recv_from(&mut buf)?;
+            if from != relay_addr {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("handshake response came from unexpected peer {from}"),
+                ));
             }
-            Err(e) => {
-                eprintln!("  handshake response timeout: {}", e);
-                eprintln!("  continuing in lab mode (null cipher)");
+            if n < 2 || buf[0] != 0xFF || buf[1] != 0x02 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("unexpected handshake response framing: {:02x?}", &buf[..n.min(16)]),
+                ));
             }
+            svc.handle_handshake_msg2(&buf[..n], Instant::now())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("relay authentication failed: {e:?}")))?;
+            println!("  authenticated handshake complete; transport keys installed");
         }
-    } else {
-        println!("  lab mode: no secure handshake, using null cipher");
-        svc.open_session(1, now);
+        ConnectionMode::InsecureLab => {
+            println!("  WARNING: explicitly enabled INSECURE lab mode; loopback only, zero-key test cipher");
+            svc.open_session(1, now);
+        }
     }
 
     // Optional per-flow sessions (Sec.4.7.4)
@@ -222,11 +346,148 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secure_identity_selects_secure_mode_even_when_lab_flag_was_set() {
+        assert_eq!(
+            select_connection_mode(true, true, true).unwrap(),
+            ConnectionMode::Secure
+        );
+    }
+
+    #[test]
+    fn missing_identity_fails_closed_by_default() {
+        let error = select_connection_mode(false, false, true).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn insecure_lab_requires_explicit_debug_opt_in() {
+        assert_eq!(
+            select_connection_mode(false, true, true).unwrap(),
+            ConnectionMode::InsecureLab
+        );
+        assert_eq!(
+            select_connection_mode(false, true, false).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn insecure_lab_is_loopback_only() {
+        assert!(validate_lab_target(
+            ConnectionMode::InsecureLab,
+            "127.0.0.1:4430".parse().unwrap()
+        ).is_ok());
+        assert_eq!(
+            validate_lab_target(ConnectionMode::InsecureLab, "192.0.2.1:4430".parse().unwrap())
+                .unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(validate_lab_target(
+            ConnectionMode::Secure,
+            "192.0.2.1:4430".parse().unwrap()
+        ).is_ok());
+    }
+
+    #[test]
+    fn configured_relay_key_must_match_existing_pins() {
+        let pinned_key = [0x11; 32];
+        let mut pins = PinnedKeys::new();
+        pins.pin(pinned_key);
+        assert_eq!(resolve_relay_public(None, &pins).unwrap(), Some(pinned_key));
+        assert_eq!(resolve_relay_public(Some(pinned_key), &pins).unwrap(), Some(pinned_key));
+        assert_eq!(
+            resolve_relay_public(Some([0x22; 32]), &pins).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            resolve_relay_public(Some([0; 32]), &PinnedKeys::new()).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            resolve_relay_public(None, &PinnedKeys::from_iter([[0; 32]])).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn state_dir_override_has_highest_precedence() {
+        let chosen = choose_state_dir(
+            Some("/custom/state".into()),
+            Some("/local/app".into()),
+            Some("/xdg".into()),
+            Some("/home/user".into()),
+            false,
+        ).unwrap();
+        assert_eq!(chosen, std::path::PathBuf::from("/custom/state"));
+    }
+
+    #[test]
+    fn windows_state_prefers_per_user_local_app_data() {
+        let chosen = choose_state_dir(
+            None,
+            Some("C:/Users/test/AppData/Local".into()),
+            None,
+            Some("C:/Users/test".into()),
+            true,
+        ).unwrap();
+        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+    }
+
+    #[test]
+    fn windows_state_falls_back_to_user_profile_not_program_data() {
+        let chosen = choose_state_dir(
+            None,
+            None,
+            None,
+            Some("C:/Users/test".into()),
+            true,
+        ).unwrap();
+        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+    }
+
+    #[test]
+    fn unix_state_prefers_absolute_xdg_then_home_state_dir() {
+        assert_eq!(
+            choose_state_dir(None, None, Some("/run/user/1000/state".into()), Some("/home/test".into()), false).unwrap(),
+            std::path::PathBuf::from("/run/user/1000/state/balancify")
+        );
+        assert_eq!(
+            choose_state_dir(None, None, Some("relative".into()), Some("/home/test".into()), false).unwrap(),
+            std::path::PathBuf::from("/home/test/.local/state/balancify")
+        );
+    }
+
+    #[test]
+    fn state_dir_rejects_empty_override_and_missing_home() {
+        assert_eq!(
+            choose_state_dir(Some(std::path::PathBuf::new()), None, None, None, false).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            choose_state_dir(None, None, None, None, false).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn relay_key_parser_rejects_malformed_or_zero_identity() {
+        assert!(parse_relay_public_key(&"01".repeat(32)).is_ok());
+        assert!(parse_relay_public_key("abcdxyz").is_err());
+        assert!(parse_relay_public_key(&"00".repeat(32)).is_err());
+        assert!(parse_relay_public_key("é" ).is_err());
+    }
+}
+
 // Minimal hex decode without external crate for env var parsing
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, ()> {
         let s = s.trim();
-        if s.len() % 2 != 0 {
+        if !s.is_ascii() || s.len() % 2 != 0 {
             return Err(());
         }
         let mut out = Vec::with_capacity(s.len() / 2);

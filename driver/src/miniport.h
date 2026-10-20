@@ -1,0 +1,31 @@
+#pragma once
+
+#include <ndis.h>
+#include <wdf.h>
+
+#define BALANCIFY_TAG 'laBB' // 'BBal' reversed
+#define BALANCIFY_POOL_TAG BALANCIFY_TAG
+
+typedef struct _BALANCIFY_ADAPTER {
+    NDIS_HANDLE miniportAdapterHandle;
+    NDIS_HANDLE netBufferListPool;
+    NDIS_HANDLE netBufferPool;
+    WDFDEVICE controlDevice;
+    NDIS_SPIN_LOCK lock;
+    BOOLEAN paused;
+    ULONG mtu;
+    ULONG64 txPackets;
+    ULONG64 rxPackets;
+    ULONG64 txBytes;
+    ULONG64 rxBytes;
+} BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;
+
+// Stored in each injected receive NBL until NDIS returns it. The packet bytes
+// are separately allocated nonpaged memory, never the short-lived WDF request
+// system buffer.
+typedef struct _BALANCIFY_RX_NBL_CONTEXT {
+    PVOID packetBuffer;
+    ULONG packetLength;
+} BALANCIFY_RX_NBL_CONTEXT, *PBALANCIFY_RX_NBL_CONTEXT;
+
+NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapter);

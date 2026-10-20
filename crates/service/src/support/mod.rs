@@ -27,7 +27,8 @@ pub struct SupportBundle {
     pub pending_probes: usize,
     pub sessions: usize,
     pub held_packets: usize,
-    pub relay_current: Option<String>,
+    /// Whether a relay is configured, without including its address.
+    pub relay_configured: bool,
     pub relay_failover_count: u64,
     pub relay_failover_convergence_ms: Option<u64>,
     pub uplink_failover_count: u64,
@@ -134,7 +135,7 @@ impl SupportBundle {
             pending_probes: svc.pending_probes(),
             sessions: svc.sessions(),
             held_packets: svc.held_packets(),
-            relay_current: svc.relay_current().map(|a| a.to_string()),
+            relay_configured: svc.relay_current().is_some(),
             relay_failover_count: svc.relay_failover_count(),
             relay_failover_convergence_ms: svc.relay_failover_convergence().map(|d| d.as_millis() as u64),
             uplink_failover_count: svc.uplink_failover_count(),
@@ -146,26 +147,138 @@ impl SupportBundle {
     }
 
     pub fn to_json(&self) -> String {
-        format!(
-            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_current\":{},\"failovers\":{},\"relay_conv_ms\":{},\"uplink_failovers\":{},\"uplink_conv_ms\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{},\"per_path\":{}}}",
-            self.timestamp,
-            self.service_version,
+        use std::fmt::Write as _;
+
+        let mut json = String::with_capacity(1024);
+        write!(
+            json,
+            "{{\"timestamp\":{},\"service_version\":{},\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"pending_probes\":{},\"sessions\":{},\"held_packets\":{},\"relay_configured\":{},\"relay_failover_count\":{},\"relay_failover_convergence_ms\":{},\"uplink_failover_count\":{},\"uplink_failover_convergence_ms\":{},\"counters\":{{\"packets_stripped\":{},\"packets_forwarded\":{},\"duplicates_sent\":{},\"reinjections\":{},\"delivered\":{},\"out_of_order\":{},\"refused\":{},\"held\":{},\"path_changes\":{},\"resumes\":{},\"auth_failed\":{},\"keepalives\":{},\"probes\":{},\"sessions_evicted\":{},\"ecn_ce\":{},\"delay_events\":{}}},\"uplinks\":[",
+            json_quote(&self.timestamp),
+            json_quote(&self.service_version),
             self.schema_version,
             self.policy_revision,
             self.active_flows,
+            self.pending_probes,
             self.sessions,
-            self.relay_current.as_ref().map(|s| format!("\"{}\"", s)).unwrap_or_else(|| "null".to_string()),
+            self.held_packets,
+            self.relay_configured,
             self.relay_failover_count,
-            self.relay_failover_convergence_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+            json_optional_u64(self.relay_failover_convergence_ms),
             self.uplink_failover_count,
-            self.uplink_failover_convergence_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+            json_optional_u64(self.uplink_failover_convergence_ms),
+            self.counters.packets_stripped,
+            self.counters.packets_forwarded,
+            self.counters.duplicates_sent,
+            self.counters.reinjections,
+            self.counters.delivered,
+            self.counters.out_of_order,
+            self.counters.refused,
+            self.counters.held,
+            self.counters.path_changes,
+            self.counters.resumes,
+            self.counters.auth_failed,
+            self.counters.keepalives,
+            self.counters.probes,
+            self.counters.sessions_evicted,
+            self.counters.ecn_ce,
+            self.counters.delay_events,
+        )
+        .expect("writing JSON into a String cannot fail");
+
+        for (index, uplink) in self.uplinks.iter().enumerate() {
+            if index != 0 {
+                json.push(',');
+            }
+            write!(
+                json,
+                "{{\"id\":{},\"state\":{},\"rtt_ms\":{},\"loss_permille\":{},\"capacity_bps\":{},\"weight_permille\":{},\"metered\":{},\"eligible\":{},\"cwnd\":{},\"in_flight\":{}}}",
+                uplink.id,
+                json_quote(&uplink.state),
+                uplink.rtt_ms,
+                uplink.loss_permille,
+                uplink.capacity_bps,
+                uplink.weight_permille,
+                uplink.metered,
+                uplink.eligible,
+                uplink.cwnd,
+                uplink.in_flight,
+            )
+            .expect("writing JSON into a String cannot fail");
+        }
+
+        write!(
+            json,
+            "],\"rekey\":{{\"packets_since_rekey\":{},\"last_rekey_ago_secs\":{}}},\"congestion\":{{\"loss_events\":{},\"ecn_events\":{},\"delay_events\":{},\"paths\":[",
+            self.rekey.packets_since_rekey,
+            json_optional_u64(self.rekey.last_rekey_ago_secs),
             self.congestion.loss_events,
             self.congestion.ecn_events,
             self.congestion.delay_events,
-            self.rekey.packets_since_rekey,
-            self.congestion.per_path.len()
         )
+        .expect("writing JSON into a String cannot fail");
+        for (index, path) in self.congestion.paths.iter().enumerate() {
+            if index != 0 {
+                json.push(',');
+            }
+            write!(json, "{}", path).expect("writing JSON into a String cannot fail");
+        }
+        json.push_str("],\"per_path\":[");
+        for (index, path) in self.congestion.per_path.iter().enumerate() {
+            if index != 0 {
+                json.push(',');
+            }
+            write!(
+                json,
+                "{{\"id\":{},\"cwnd\":{},\"in_flight\":{},\"ecn_ce\":{},\"delay_events\":{},\"rtt_min_ms\":{},\"rtt_last_ms\":{}}}",
+                path.id,
+                path.cwnd,
+                path.in_flight,
+                path.ecn_ce,
+                path.delay_events,
+                json_optional_u64(path.rtt_min_ms),
+                json_optional_u64(path.rtt_last_ms),
+            )
+            .expect("writing JSON into a String cannot fail");
+        }
+        json.push_str("]},\"warnings\":[");
+        for (index, warning) in self.warnings.iter().enumerate() {
+            if index != 0 {
+                json.push(',');
+            }
+            json.push_str(&json_quote(warning));
+        }
+        json.push_str("]}");
+        json
     }
+}
+
+fn json_quote(value: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => quoted.push_str("\\\""),
+            '\\' => quoted.push_str("\\\\"),
+            '\u{08}' => quoted.push_str("\\b"),
+            '\u{0c}' => quoted.push_str("\\f"),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            ch if ch <= '\u{1f}' => {
+                write!(quoted, "\\u{:04x}", ch as u32)
+                    .expect("writing JSON into a String cannot fail");
+            }
+            ch => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn json_optional_u64(value: Option<u64>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
 }
 
 #[cfg(test)]
@@ -175,6 +288,26 @@ mod tests {
     use balancify_core::UplinkId;
     use balancify_tunnel::PassThrough;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn json_string_escaping_handles_quotes_slashes_and_controls() {
+        assert_eq!(json_quote("quote\" slash\\ newline\n nul\0"), "\"quote\\\" slash\\\\ newline\\n nul\\u0000\"");
+    }
+
+    #[test]
+    fn support_bundle_reports_relay_presence_without_exposing_endpoint() {
+        let now = Instant::now();
+        let mut svc = Service::new(ServiceConfig::default(), PassThrough, PassThrough);
+        let relay = "198.51.100.42:9443".parse().unwrap();
+        svc.set_relays(relay, None);
+
+        let bundle = SupportBundle::collect(&svc, now);
+        assert!(bundle.relay_configured);
+        let json = bundle.to_json();
+        assert!(json.contains("\"relay_configured\":true"));
+        assert!(!json.contains("198.51.100.42"));
+        assert!(!json.contains("9443"));
+    }
 
     #[test]
     fn bundle_includes_per_path_ecn_delay() {
@@ -197,7 +330,9 @@ mod tests {
         assert_eq!(bundle.congestion.per_path[0].delay_events, 1);
         assert!(bundle.congestion.per_path[0].rtt_min_ms.is_some());
         let json = bundle.to_json();
-        assert!(json.contains("ecn"));
-        assert!(json.contains("per_path"));
+        assert!(json.contains("\"ecn_events\":1"));
+        assert!(json.contains("\"per_path\":[{\"id\":0"));
+        assert!(json.contains("\"rtt_min_ms\":"));
+        assert!(json.contains("\"counters\":{"));
     }
 }

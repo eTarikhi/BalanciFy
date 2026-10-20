@@ -1,11 +1,34 @@
 # Continuous development log — without stopping to report
 
-Date: 2026-10-19
-Status: continuous, CI green
+Date: 2026-10-21
+Status: continuous; latest CI green on Ubuntu and Windows
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
 This log records what was done while continuing without stopping, after ADR-0015.
+
+## Continuation (2026-10-20–2026-10-21)
+
+- `7920e4a test service telemetry snapshots for IPC` — centralized warning + counter event composition in Service and tested the IPC payload. CI 39426255171 passed.
+- `5751d43 close idle unsubscribed IPC clients` — impose a 60-second idle limit for unsubscribed lab clients; retain long-lived event subscriptions. CI 39426687493 passed.
+- `93dc6ff refresh IPC coverage notes` and `5e15a4b document responsive service loop` — synchronized roadmap/test coverage with implemented behavior.
+- `a548fc2 keep the service dispatcher responsive to IPC` — make lab UDP sockets nonblocking so two-path polling cannot block IPC dispatch for up to 200ms. CI 39427278094 passed.
+- `6c1f19f redact relay endpoints from support bundles` — expose relay presence only, with a regression test proving that the relay address and port do not appear in the exported JSON. CI 39431889338 passed.
+- `0d0a580 serialize complete redacted support diagnostics` — serialize full counters, uplinks and per-path congestion measurements; add JSON string escaping and tests for control characters. CI 39432345360 passed.
+- `8b61140 write key files through private unique temporaries` — replace predictable `.tmp` writes with collision-resistant sibling files opened using `create_new`, set mode 0600 at creation on Unix, sync before rename, and cover pre-created symlink behavior. CI 39433158496 passed.
+- `bd5ccec enable DPAPI for Windows key storage by default` — activate the first-party DPAPI wrapper in normal Windows builds, add raw-key migration coverage, and extend the policy audit. CI 39433909156 passed, including Windows tests.
+- `6749a0a zeroize plaintext key-store temporaries` and `5c23d1d zeroize temporary copies of stored secrets` — wipe DPAPI plaintext allocations, migration buffers, and temporary secret copies; audit the source guard. CI 39434291882 and 39434898635 passed.
+- `81a37e5 expose redacted support bundles over IPC` — add request opcode 11 and a u32-length response field so full JSON does not truncate at the contract's u8 string limit; wire service dispatch and the CLI bundle mode. Service/IPC tests cover large response round-trip and relay-endpoint redaction. CI 39436081009 passed.
+- `03cd876 separate tunnel AEAD nonce lanes` — close repeated-nonce cases across frame kinds with wire-v1 domain separation, give FlowData a replay-protected independent sequence, and stop reusing keepalive sequence zero. CI 39437678125 exposed a stale keepalive-count assertion; `3dd24cb` corrected it and CI 39472791434 passed on Ubuntu and Windows.
+- `1153d7a authenticate tunnel control frames` and `96c9b9a make control-auth test cipher cloneable` — verify ACK/probe/probe-reply/keepalive tags and replay windows before relay liveness, RTT, congestion, or ECN state can change; add a forged-ACK regression test. Initial CI found a test-only Clone bound, corrected in `96c9b9a`; CI 39473880986 passed on Ubuntu and Windows.
+- `a1f674e ignore unauthenticated relay activity`, `b549ada import tunnel header in relay test`, and `880cf6c update invalid-frame session allocation test` — ensure relay idle timers and receiver session slots advance only for fresh authenticated frames, not garbage, invalid tags, or replay. CI 39474473731 caught missing test imports; 39474656908 then caught the now-invalid expectation that a bad tag allocates a session. CI 39474871649 passed on Ubuntu and Windows after both corrections.
+
+- `d96d656 add authenticated flow-level acknowledgements` — wire v2 adds selective FlowAck (kind 6) in its own nonce domain, bounded sender-side per-session byte/sequence state, authenticated replay-checked service handling, receiver duplicate re-ACK, and capacity sampling from peer receipt. Rate-limited unsent frames release their pending entry; the relay emits FlowAck with its transmit key. CI 39476560004 passed on Ubuntu and Windows.
+
+- `f712a97` — replaced handwritten SBOM/VEX JSON with SPDX 2.3 generation from `cargo metadata --locked`, refreshed the runner-resolved `Cargo.lock`, made installer sidecar copying fail closed, and corrected current documentation/runtime claims. CI first exposed a missing `os` import (`39482972727`), then the invalid Cargo license spelling `MIT/Apache-2.0` (`39483294083`).
+- `66d1da6` — restored atomic SBOM writing and added a writer regression test; `6f9d3cb` — preserve malformed Cargo license metadata in `licenseComments` and use `NOASSERTION` rather than inventing a valid expression; `9103cbc` — join registry SHA-256 checksums from `Cargo.lock` because Cargo metadata does not provide those checksums.
+- `8651def fail closed on unauthenticated client transport` — use stored relay pins by default, reject invalid/mismatched environment keys and identity-store failures, prohibit implicit zero-key fallback, and abort on handshake timeout, source/framing mismatch, or authentication failure. `--insecure-lab` now requires a debug build and loopback target. Six client policy/parser tests were added.
+- CI `39508334534` passed on Ubuntu and Windows, including FlowAck, six client regressions, seven SBOM tests, SPDX 2.3 generation/parser validation, lab tools, release build, and dependency/crypto audit. SPDX 3.0/VEX remain pending. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
 ## Commits since last green 39209903149 (ADR-0020)
 
@@ -18,23 +41,22 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `054481e docs: ADR-0022 support bundle per-path` — documented per-path diag.
 - `9084d95 docs: ADR-0023 relay ECN echo stats` — documented relay ECN stats.
 
-## Current CI
+## CI status at original snapshot
 
-- Last green 39234937199 (ADR-0023) — ubuntu+windows+audits success, 214+ tests (now 215 with bundle test), benches compile, docs.
+- The original ADR-0023 snapshot was green at run 39234937199. For later CI runs, see the continuation entry above.
 
 ## Next (still without stopping)
 
-- Driver WDF control device + IOCTLs (`driver/src/ioctl.c`) — create WDFDEVICE in MiniportInitializeEx, minimal IOCTLs (set MTU, inject NBL, query stats), length-validated, fuzzed same gate as tunnel, build with WDK 10.0.22621+, test-signed install on Hyper-V VM with Driver Verifier
-- S2b socket test through miniport — same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path
-- Cargo.lock generation — `cargo generate-lockfile` once toolchain available, commit, audit checks lock file if present
+- Driver validation remains blocked on WDK/Windows hardware: resolve NDIS adapter initialization and lifecycle, build x64/ARM64, then test-signed install, Driver Verifier/HVCI, and S2b socket path. Do not report the driver operational before those gates pass.
+- Cargo.lock is present and audited; regenerate only for an intentional pinned-dependency change.
 - Real netem S2c — replace simulated rig with `tools/lab/netem-rig.sh` profiles, record 10 reps median/p95/spread per Sec.10.1
 - Throughput rows on Rig B — run `throughput.rs` + iperf3 on real hardware, secure mode, pacing 80% capacity, per-flow off/on, measure aggregate/single-flow/failover/added delay (target <=3ms) + CPU/Gbit/s via crypto-bench + ETW
 - Driver packaging — bundle self-contained .NET 10 + WinAppSDK runtimes, transactional installer with atomic rollback, clean-machine offline test
 - HVCI readiness trio — Driver Verifier with code-integrity, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (S15)
-- SBOM/VEX SPDX 3.0 — generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13
+- SPDX 3.0 serialization and reviewed VEX for S13 — current build graph SBOM is valid SPDX 2.3 from `cargo metadata --locked`; do not treat the removed handwritten JSON or placeholder CVEs as a valid SBOM/VEX.
 - Client binary + GUI IPC — wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10
-- Per-flow session demux retx keyed by (session, seq) — currently global unique seq for retx simplicity, future per-session seq spaces
-- Flow-level ACK — add explicit FlowData ACK for capacity (done via on_flow_packet, but could add explicit ACK)
+- FlowAck now uses per-session sequence spaces and authenticated selective receipts; retransmission state is keyed by `(session, seq)`. FlowData repair/retransmission remains a possible future extension.
+- FlowData retransmission/repair remains a possible extension; wire v2 selective FlowAck currently feeds capacity estimation but does not resend a lost non-striped packet.
 - ETW wiring already done, but could add more events (bond revert, uplink up/down)
 
 ## References
