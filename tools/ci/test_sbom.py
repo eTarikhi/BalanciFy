@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sbom import build_document, write_atomic
+from sbom import attach_lock_checksums, build_document, write_atomic
 
 
 class SbomGenerationTests(unittest.TestCase):
@@ -86,6 +86,25 @@ class SbomGenerationTests(unittest.TestCase):
             and edge["relationshipType"] == "DEPENDS_ON"
             for edge in document["relationships"]
         ))
+
+    def test_attaches_registry_checksums_from_cargo_lock(self):
+        checksum = "c" * 64
+        lockfile = {
+            "package": [{
+                "name": "serde",
+                "version": "1.0.0",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "checksum": checksum,
+            }, {
+                "name": "test-only",
+                "version": "0.1.0",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "checksum": "d" * 64,
+            }]
+        }
+        metadata = attach_lock_checksums(self.metadata, lockfile)
+        serde = next(package for package in metadata["packages"] if package["name"] == "serde")
+        self.assertEqual(serde["checksum"], checksum)
 
     def test_does_not_invent_vulnerability_or_vex_claims(self):
         document = build_document(self.metadata, namespace="https://example.test/spdx/test")

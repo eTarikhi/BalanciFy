@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -195,6 +196,25 @@ def build_document(
     }
 
 
+def attach_lock_checksums(metadata: dict, lockfile: dict) -> dict:
+    """Join Cargo.lock SHA-256 checksums onto metadata's resolved packages."""
+    checksums = {
+        (package["name"], package["version"], package.get("source")): package["checksum"]
+        for package in lockfile.get("package", [])
+        if package.get("checksum")
+    }
+    for package in metadata.get("packages", []):
+        source = package.get("source")
+        if source and source.startswith("registry+"):
+            checksum = checksums.get((package["name"], package["version"], source))
+            if not checksum:
+                raise ValueError(
+                    f"Cargo.lock is missing a checksum for {package['name']} {package['version']} ({source})"
+                )
+            package["checksum"] = checksum
+    return metadata
+
+
 def cargo_metadata() -> dict:
     try:
         completed = subprocess.run(
@@ -209,7 +229,13 @@ def cargo_metadata() -> dict:
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout).strip()
         raise RuntimeError(f"cargo metadata --locked failed: {detail}") from exc
-    return json.loads(completed.stdout)
+    metadata = json.loads(completed.stdout)
+    try:
+        with (ROOT / "Cargo.lock").open("rb") as lock_file:
+            lockfile = tomllib.load(lock_file)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(f"could not read Cargo.lock checksums: {exc}") from exc
+    return attach_lock_checksums(metadata, lockfile)
 
 
 def write_atomic(path: Path, document: dict) -> None:
