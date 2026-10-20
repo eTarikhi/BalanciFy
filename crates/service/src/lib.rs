@@ -1797,6 +1797,7 @@ mod tests {
 
     #[test]
     fn forged_ack_does_not_refresh_relay_liveness() {
+        #[derive(Clone)]
         struct RejectAll;
         impl balancify_tunnel::Crypto for RejectAll {
             fn seal(&self, _path: u8, _seq: u64, _aad: &[u8], plain: &[u8], out: &mut Vec<u8>) {
