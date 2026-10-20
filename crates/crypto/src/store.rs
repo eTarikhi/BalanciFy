@@ -20,6 +20,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use zeroize::Zeroize;
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -127,14 +128,14 @@ impl FileKeyStore {
     }
 
     fn read_secret_file(path: &Path) -> Result<[u8; 32], StoreError> {
-        let raw = std::fs::read(path).map_err(|e| {
+        let mut raw = std::fs::read(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound { StoreError::NotFound }
             else { StoreError::Io(e.to_string()) }
         })?;
         // DPAPI: file contains protected blob; otherwise raw 32 bytes.
         // For migration, if DPAPI unprotect fails and raw is exactly 32 bytes,
         // treat raw as secret (old file) and next save will protect it.
-        let data = match dpapi_unprotect(&raw) {
+        let mut data = match dpapi_unprotect(&raw) {
             Ok(d) => d,
             Err(StoreError::Dpapi(_)) => {
                 if raw.len() == 32 {
@@ -145,9 +146,19 @@ impl FileKeyStore {
             }
             Err(e) => return Err(e),
         };
-        if data.len() != 32 { return Err(StoreError::Corrupt); }
+        if data.len() != 32 {
+            data.zeroize();
+            if raw.len() == 32 {
+                raw.zeroize();
+            }
+            return Err(StoreError::Corrupt);
+        }
         let mut out = [0u8; 32];
         out.copy_from_slice(&data);
+        data.zeroize();
+        if raw.len() == 32 {
+            raw.zeroize();
+        }
         Ok(out)
     }
 
@@ -285,6 +296,7 @@ impl KeyStore for FileKeyStore {
 #[cfg(all(windows, feature = "dpapi"))]
 mod dpapi {
     use crate::store::StoreError;
+    use zeroize::Zeroize;
 
     #[repr(C)]
     struct DataBlob {
@@ -380,8 +392,9 @@ mod dpapi {
             return Err(StoreError::Dpapi(format!("CryptUnprotectData failed: {err}")));
         }
         let out = unsafe {
-            let slice = core::slice::from_raw_parts(blob_out.pb_data, blob_out.cb_data as usize);
+            let slice = core::slice::from_raw_parts_mut(blob_out.pb_data, blob_out.cb_data as usize);
             let v = slice.to_vec();
+            slice.zeroize();
             LocalFree(blob_out.pb_data as *mut _);
             v
         };
