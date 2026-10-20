@@ -28,7 +28,7 @@ Status: continuous, 215+ tests green
 - **SBOM/VEX SPDX 3.0**: generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13 — stub exists, real generation needs cargo cyclonedx
 - **Cargo.lock**: generate with `cargo generate-lockfile` once toolchain available, commit, audit checks lock file if present — currently no toolchain in sandbox (crates.io blocked, only github/pypi/npm allowed)
 - **Real netem S2c**: replace simulated rig with `tools/lab/netem-rig.sh` profiles, record 10 reps median/p95/spread per Sec.10.1 — harness exists, real Rig B pending
-- **Throughput rows on Rig B**: re-run Sec.10.3 aggregate/single-flow/failover with pacing enabled and secure mode, measure added delay and CPU/Gbit/s via crypto-bench + ETW — simulated results exist (42.8% gain, 16.7% loss penalty), real pending
+- **Throughput rows on Rig B**: re-run Sec.10.3 aggregate/single-flow/failover with pacing enabled and secure mode, measure added delay and CPU/Gbit/s via crypto-bench + ETW — the local synthetic benchmark is not network evidence; real Rig B results pending
 - **Client binary + GUI IPC**: wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10 — lab CLI `balancify-app` already mimics shell with home/rules/diagnostics/tray/relay/bundle modes
 - **Per-flow session demux retx keyed by (session, seq)**: currently global unique seq for retx simplicity, future per-session seq spaces for true per-session sequencing
 - **Flow-level ACK**: add explicit FlowData ACK for capacity (done via on_flow_packet counting flow packets into window_bytes, suppresses idle probe, but explicit ACK could still be added)

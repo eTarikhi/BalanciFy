@@ -39,7 +39,7 @@ Validate that the installer is truly offline (one signed bundle, zero user prere
    - Verify same as rollback: no leftover, routes restored, runtimes we added removed, pre-existing runtimes kept, SBOM sidecar removed.
 9. **Offline check**: repeat with VM offline (no internet) — installer must not attempt download, must use bundled runtimes only.
 10. **HVCI**: run on VM with Memory Integrity on — driver must load, Verifier `verifier /standard /driver balancify.sys` flags 0x209BB no bugcheck, HLK HVCIMemoryIntegrity test passes, VBS Running MI enabled via msinfo32.
-11. **Throughput Rig B**: run `throughput.rs` 10 profiles bonded/single/lossy/ECN/delay/RigB/perflow_off/perflow_on/aggregate_16flows/failover, 10 reps mean/median/p95/spread, gain, loss penalty, per-flow diff, Rig B mean, failover convergence <=2s, added delay <=3ms, CPU/Gbit via crypto-bench + ETW.
+11. **Throughput Rig B**: use `throughput-rows.md` for real iperf3/UDP-echo runs. `throughput.rs` is a local software-path microbenchmark and must not be used for throughput, added-delay, or failover acceptance. Collect 10 reps, median/p95/spread, ETW CPU/Gbit, and remote-ACK failover convergence.
 12. **Soak + Verifier + compat**: run `soak.rs` 1000 iterations 72h simulated + random flaps + 100 resume with Verifier standard+random, no crash, no leaked route/filter/handle/IOCTL buffer, compat matrix VPN clients security suites Hyper-V WSL2 MI on/off.
 
 ## Expected artifacts
@@ -48,7 +48,7 @@ Validate that the installer is truly offline (one signed bundle, zero user prere
 - Support bundle via IPC: `balancify-app.exe diagnostics` — includes cwnd/in_flight per uplink, congestion diag loss/ecn/delay+paths per_path Vec<PathCongestionDiag> cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, rekey diag, relay stats, failover count+convergence ms (relay_failover_count, relay_conv_ms, uplink_failover_count, uplink_conv_ms), history
 - ETW logs: provider `Balancify` with event IDs 100-600 (100 start, 101 stop, 200 up, 201 down, 300 bond reverted, 400 rekey, 401 ECN CE, 402 delay, 500 failover, 600 auth failed) — WPA CPU sampling, working set bounded, power delta
 - SBOM at `C:\ProgramData\Balancify\sbom.spdx.json` sidecar (v2 SPDX 3.0 + VEX, 10 first-party + vetted + transitive 24 packages, relationships DEPENDS_ON, annotations C2/HVCI/installer, vulnerabilities 3 VEX, installer copies, support bundle includes)
-- Throughput: 10 profiles bonded/single/lossy/ECN/delay/RigB/perflow_off/perflow_on/aggregate_16flows/failover, 10 reps mean/median/p95/spread, gain, loss penalty, per-flow diff, Rig B mean, failover convergence ms, added delay <=3ms, CPU/Gbit
+- Throughput: real Rig B iperf3/UDP echo results with 10 reps, median/p95/spread, ETW CPU/Gbit and remote-ACK failover convergence; local harness output is not acceptance evidence
 - Soak: 72h + random flaps + 100 resume with Verifier, no crash, no leaked route/filter/handle/IOCTL buffer, compat matrix VPN/Hyper-V/WSL2/MI
 
 ## Checklist (Sec.10.3)
