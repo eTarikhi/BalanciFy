@@ -27,7 +27,8 @@ pub struct SupportBundle {
     pub pending_probes: usize,
     pub sessions: usize,
     pub held_packets: usize,
-    pub relay_current: Option<String>,
+    /// Whether a relay is configured, without including its address.
+    pub relay_configured: bool,
     pub relay_failover_count: u64,
     pub relay_failover_convergence_ms: Option<u64>,
     pub uplink_failover_count: u64,
@@ -134,7 +135,7 @@ impl SupportBundle {
             pending_probes: svc.pending_probes(),
             sessions: svc.sessions(),
             held_packets: svc.held_packets(),
-            relay_current: svc.relay_current().map(|a| a.to_string()),
+            relay_configured: svc.relay_current().is_some(),
             relay_failover_count: svc.relay_failover_count(),
             relay_failover_convergence_ms: svc.relay_failover_convergence().map(|d| d.as_millis() as u64),
             uplink_failover_count: svc.uplink_failover_count(),
@@ -147,14 +148,14 @@ impl SupportBundle {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_current\":{},\"failovers\":{},\"relay_conv_ms\":{},\"uplink_failovers\":{},\"uplink_conv_ms\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{},\"per_path\":{}}}",
+            "{{\"timestamp\":\"{}\",\"service_version\":\"{}\",\"schema_version\":{},\"policy_revision\":{},\"active_flows\":{},\"sessions\":{},\"relay_configured\":{},\"failovers\":{},\"relay_conv_ms\":{},\"uplink_failovers\":{},\"uplink_conv_ms\":{},\"loss\":{},\"ecn\":{},\"delay\":{},\"rekey_packets\":{},\"per_path\":{}}}",
             self.timestamp,
             self.service_version,
             self.schema_version,
             self.policy_revision,
             self.active_flows,
             self.sessions,
-            self.relay_current.as_ref().map(|s| format!("\"{}\"", s)).unwrap_or_else(|| "null".to_string()),
+            self.relay_configured,
             self.relay_failover_count,
             self.relay_failover_convergence_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
             self.uplink_failover_count,
@@ -175,6 +176,21 @@ mod tests {
     use balancify_core::UplinkId;
     use balancify_tunnel::PassThrough;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn support_bundle_reports_relay_presence_without_exposing_endpoint() {
+        let now = Instant::now();
+        let mut svc = Service::new(ServiceConfig::default(), PassThrough, PassThrough);
+        let relay = "198.51.100.42:9443".parse().unwrap();
+        svc.set_relays(relay, None);
+
+        let bundle = SupportBundle::collect(&svc, now);
+        assert!(bundle.relay_configured);
+        let json = bundle.to_json();
+        assert!(json.contains("\"relay_configured\":true"));
+        assert!(!json.contains("198.51.100.42"));
+        assert!(!json.contains("9443"));
+    }
 
     #[test]
     fn bundle_includes_per_path_ecn_delay() {
