@@ -40,14 +40,11 @@ Enhance `tools/lab/netem-rig.sh` to 11 profiles + all:
 
 **Measurement checklist:** 10 reps median/p95/spread mean stdev min max, record Windows build hardware driver versions uplink types relay region with every result, traffic iperf3 TCP/UDP N flows curated real workloads, instrumentation pktmon+Wireshark at adapter and per-uplink ETW->WPA CPU Performance Monitor working set power telemetry, acceptance rows aggregate >=90% sum single-flow >=70% sum mismatched >=100% best auto-revert Sec.6.4.6 added delay <=3ms wired loss/reordering <=0.1% failover <=2s CPU & memory report first limits after S2 power delta stability 72h soak + random flaps + 100 resume compat matrix clean-machine provisioning offline VM, data stored as data not screenshots JSON+ETL+CSV
 
-**analyze.py:** New tool `tools/lab/analyze.py` computes mean/median/p95/spread per Sec.10.1:
-- Parses iperf3 JSON end.sum_received.bits_per_second -> Mbps
-- Parses throughput.rs logs mean= median= p95= spread=
-- compute_stats: count mean median p95 min max spread stdev
-- Simulated data demo when output dir missing: bonded 42.8% gain, lossy 16.7% penalty, Rig B 1.3 Gbps, per-flow on/off diff, aggregate 16 flows, added delay <=3ms
-- Real parsing: glob *.json, profile from stem split _rep, mbps, results dict profile -> vals, stats per profile, bonded gain, loss penalty, Rig B mean
-- Outputs summary for docs/phase2/throughput-rows.md with dates hardware Windows build driver version uplink types relay region per Sec.10.1 reporting discipline
-- Usage: python3 tools/lab/analyze.py /tmp/balancify-netem-results
+**analyze.py:** `tools/lab/analyze.py` accepts only iperf3 JSON result files:
+- Parses `end.sum_received.bits_per_second` as Mbps and rejects missing, non-finite, or non-positive results.
+- Groups repetitions by profile and reports count, mean, median, nearest-rank p95, spread, standard deviation, min, and max.
+- Missing/empty result directories are errors. It never invents simulated/demo values and never parses `throughput.rs` software-benchmark logs as network measurements.
+- `python3 -m unittest discover -s tools/lab -p 'test_*.py'` covers percentile calculation, JSON parsing/grouping, invalid input, and the no-fabricated-data behavior.
 
 **Integration:**
 - netem-rig.sh dry-run mode in sandbox (no tc, no iperf3, no Rig B hardware), real netem requires Linux gateway with tc + iperf3 + Rig B hardware per Sec.10.1
@@ -58,10 +55,10 @@ Enhance `tools/lab/netem-rig.sh` to 11 profiles + all:
 
 - Netem rig now has 11 profiles matching throughput harness 9 profiles + soak + all, with 10 reps median/p95/spread per Sec.10.1, measurement checklist, analyze.py
 - S2c reorder/reinjection measurements can be run on Linux gateway with tc netem + iperf3 + Rig B hardware, results stored as data not screenshots, documented with hardware/build/driver versions
-- Simulated data from throughput-rows.md: bonded 42.8% gain mean 1.3ms vs single 2.0ms, lossy 16.7% penalty, ECN 80% reduction, delay 10% reduction, Rig B 1Gbps/300M, per-flow on/off diff, aggregate 16 flows, added delay <=3ms, CPU/Gbit via crypto-bench+ETW
+- Local software-path benchmark outputs are not networking evidence. Real throughput, added-delay, failover, and CPU/Gbit acceptance remains pending Rig B/ETW measurements; see `docs/phase2/throughput-rows.md`
 - Real Rig B still pending hardware, but harness + rig script + analyze.py ready
-- CI green: netem-rig.sh and analyze.py are tools, no Rust changes, but throughput harness already green
-- No PR per user instruction, stay on branch arena/7abc96c8-balancify
+- CI runs analyzer unit tests and Rust workspace checks; real netem/Rig B execution remains a separate hardware gate
+- No PR is required for this local development step; push changes only to the active Arena branch
 
 ## References
 

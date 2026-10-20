@@ -20,6 +20,14 @@ jobs:
       - name: audit
         run: sh tools/ci/audit-deps.sh
 
+  lab-tool-tests:
+    name: Lab analysis tool tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: test analyzer
+        run: python3 -m unittest discover -s tools/lab -p 'test_*.py' -v
+
   core-tests-linux:
     name: Rust workspace tests (ubuntu)
     runs-on: ubuntu-latest

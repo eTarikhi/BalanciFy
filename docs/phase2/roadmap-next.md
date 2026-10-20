@@ -15,7 +15,7 @@ Status: in progress, continuous development
 - Installer transactional (journaled, 7 steps, reverse rollback, dry-run, tests)
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
 - ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
-- Throughput harness + benches (throughput.rs 10 reps bonded vs single, lossy, ECN, delay, mean/median/p95/spread; drr-bench, pacing-bench, crypto-bench)
+- Software benchmark + benches (throughput.rs local work rate/per-call latency only; drr-bench, pacing-bench, crypto-bench). Real network performance and G3/G4 acceptance remain pending.
 - SBOM + clean-machine test docs (sbom.sh SPDX 3.0, clean-machine-test.md offline bundle, rollback, HVCI trio)
 - ADRs: 0009 Wintun fallback, 0010 rate limiting+flow capacity, 0011 per-session sequencing, 0012 ETW+support bundle, 0013 per-class sessions, 0014 throughput harness, 0015 continuous development
 

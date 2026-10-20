@@ -1,3 +1,5 @@
+> Measurement correction (2026-10-20): historical `throughput.rs` and `analyze.py` demo figures are not evidence of network performance. The analyzer now requires actual iperf3 JSON; all Rig B acceptance rows remain pending. See `docs/phase2/throughput-rows.md`.
+
 # Final summary — continuous development without stopping to report
 
 Date: 2026-10-19 → 2026-10-20
