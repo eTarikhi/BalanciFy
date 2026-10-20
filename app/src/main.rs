@@ -32,21 +32,21 @@ fn main() -> std::io::Result<()> {
             }
             // Subscribe to events at 1 Hz
             send_request(&mut stream, &Request::SubscribeEvents { interval_hz: 1 })?;
-            if let Some(response) = recv_response(&mut stream)? {
-                if response != Response::Ack {
-                    println!("Event subscription was not accepted: {:?}", response);
-                    break;
-                }
-            }
-            println!("Subscribed to events at 1 Hz, listening for 5 events...");
-            for _ in 0..5 {
-                match recv_event(&mut stream)? {
-                    Some(ev) => render_event(ev),
-                    None => {
-                        println!("No event arrived before the IPC read timeout; the service currently exposes request/response IPC only.");
-                        break;
+            match recv_response(&mut stream)? {
+                Some(Response::Ack) => {
+                    println!("Subscribed to events at 1 Hz, listening for 5 events...");
+                    for _ in 0..5 {
+                        match recv_event(&mut stream)? {
+                            Some(ev) => render_event(ev),
+                            None => {
+                                println!("No event arrived before the IPC read timeout; the service currently exposes request/response IPC only.");
+                                break;
+                            }
+                        }
                     }
                 }
+                Some(response) => println!("Event subscription was not accepted: {:?}", response),
+                None => println!("Service closed the IPC connection before acknowledging the event subscription."),
             }
         }
         "rules" => {
