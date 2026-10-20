@@ -93,6 +93,13 @@ class SbomGenerationTests(unittest.TestCase):
         self.assertIn("no VEX statements", document["comment"])
         self.assertNotIn("CVE-", str(document))
 
+    def test_invalid_cargo_license_is_preserved_without_becoming_a_claim(self):
+        self.metadata["packages"][1]["license"] = "MIT/Apache-2.0"
+        document = build_document(self.metadata, namespace="https://example.test/spdx/test")
+        serde = next(package for package in document["packages"] if package["name"] == "serde")
+        self.assertEqual(serde["licenseDeclared"], "NOASSERTION")
+        self.assertIn("MIT/Apache-2.0", serde["licenseComments"])
+
     def test_refuses_metadata_without_resolved_graph(self):
         with self.assertRaisesRegex(ValueError, "resolved dependency graph"):
             build_document({"workspace_members": [], "packages": [], "resolve": None})

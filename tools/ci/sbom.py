@@ -45,8 +45,15 @@ def _package(package: dict, workspace_ids: set[str], version_override: str | Non
         download = "NOASSERTION"
 
     declared = package.get("license") or "NOASSERTION"
+    license_comment = None
     if first_party and declared == "Proprietary":
         declared = "LicenseRef-Proprietary"
+    elif declared != "NOASSERTION" and not re.fullmatch(r"[A-Za-z0-9.+():_-]+(?:\s+[A-Za-z0-9.+():_-]+)*", declared):
+        # SPDX 2.3 expressions cannot contain arbitrary Cargo metadata such as
+        # the common but invalid `MIT/Apache-2.0` spelling. Preserve the raw
+        # declaration, but do not silently reinterpret it as a legal expression.
+        license_comment = f"Unparsed Cargo license metadata (not an SPDX expression): {declared}"
+        declared = "NOASSERTION"
 
     result = {
         "name": name,
@@ -60,6 +67,8 @@ def _package(package: dict, workspace_ids: set[str], version_override: str | Non
         "primaryPackagePurpose": "APPLICATION" if any("bin" in t.get("kind", []) for t in package.get("targets", [])) else "LIBRARY",
         "sourceInfo": "First-party Cargo workspace package" if first_party else "Resolved Cargo package",
     }
+    if license_comment:
+        result["licenseComments"] = license_comment
     checksum = package.get("checksum")
     if checksum:
         result["checksums"] = [{"algorithm": "SHA256", "checksumValue": checksum}]
