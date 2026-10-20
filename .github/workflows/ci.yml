@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: test analyzer
         run: python3 -m unittest discover -s tools/lab -p 'test_*.py' -v
+      - name: test netem rig safety
+        run: sh -n tools/lab/netem-rig.sh && sh tools/lab/test_netem_rig.sh
 
   core-tests-linux:
     name: Rust workspace tests (ubuntu)

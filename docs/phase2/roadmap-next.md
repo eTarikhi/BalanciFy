@@ -24,7 +24,7 @@ Status: in progress, continuous development
 1. **Driver WDF control device + IOCTLs**: create WDFDEVICE in MiniportInitializeEx, implement `src/ioctl.c` with minimal IOCTLs (set MTU, inject NBL, query stats), length-validated, fuzzed same gate as tunnel. Build with WDK 10.0.22621+, test-signed install on Hyper-V VM with Driver Verifier.
 2. **S2b socket test through miniport**: same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path — service sends through miniport, relay receives, reorder, deliver.
 3. **Cargo.lock**: generate with `cargo generate-lockfile` once toolchain available, commit, audit checks lock file if present.
-4. **Real netem S2c**: replace simulated rig with `tools/lab/netem-rig.sh` profiles (delay-gap 40ms, lossy 1%, asymmetric 200M/50M, cellular 100ms+2%+20Mbit), record 10 reps median/p95/spread per §10.1.
+4. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 
 ## Next for G3 (gate: performance + HVCI)
 
