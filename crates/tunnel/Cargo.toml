@@ -6,4 +6,14 @@ license.workspace = true
 description = "First-party datagram lane: framing, sequencing, reorder buffer, deficit round robin, reinjection policy"
 
 [dependencies]
-balancify-core = { path = "../core" }
+# None by design: the lane is first-party with no third-party runtime
+# dependency (ADR-0002). Cryptography crates arrive in Phase 4 behind the
+# `Crypto` trait as vetted, pinned crates.
+
+[features]
+default = []
+# Compiles the null cipher (`PassThrough`) for lab rigs and tests. Shipped
+# builds must not enable it; `tools/ci/audit-deps.sh` fails the build if they do.
+lab-crypto = []
+
+[dev-dependencies]

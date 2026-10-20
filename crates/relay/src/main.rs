@@ -1,98 +1,1003 @@
-//! Balancify in-binary cooperating endpoint ("server mode"), blueprint §4.7.
-//!
-//! Lab/Phase-2 form: binds one UDP socket per path, decodes tunnel headers,
-//! re-sequences through the first-party reorder buffer and emits the ordered
-//! stream. Production form (Phase 4) adds: Noise-style handshake + AEAD,
-//! session auth/PSK, forwarding/NAT egress from one stable address, dual
-//! relays (§6.6), abuse controls and the no-destination-logging rule (§9.2).
+//! Balancify in-binary cooperating endpoint ("server mode"), blueprint Sec.4.7.
 
-use balancify_tunnel::{Header, ReorderBuffer};
+use balancify_tunnel::{Crypto, Event, Receiver, ReceiverConfig, Sender, SenderConfig};
+use std::collections::BTreeMap;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
-pub struct Reassembler {
-    buf: ReorderBuffer,
+pub struct Endpoint<C: Crypto> {
+    rx: Receiver<C>,
+    delivered: u64,
+    pinned_clients: balancify_crypto::PinnedKeys,
+    replay_cache: balancify_crypto::ReplayCache,
 }
 
-impl Reassembler {
-    pub fn new(hold_cap: Duration) -> Self { Self { buf: ReorderBuffer::new(hold_cap) } }
-    /// Feed one tunnel datagram; returns payloads released in order.
-    pub fn ingest(&mut self, dg: &[u8], now: Instant) -> Vec<Vec<u8>> {
-        let Some((hdr, payload)) = Header::decode(dg) else { return Vec::new(); };
-        let _ = hdr.path; // path identity is carried by the receiving socket in prod
-        self.buf.push(hdr.seq, payload.to_vec());
-        self.buf.pop_ready(now)
+impl<C: Crypto> Endpoint<C> {
+    pub fn new(crypto: C, cfg: ReceiverConfig) -> Self {
+        Self {
+            rx: Receiver::new(crypto, cfg),
+            delivered: 0,
+            pinned_clients: balancify_crypto::PinnedKeys::new(),
+            replay_cache: balancify_crypto::ReplayCache::with_defaults(),
+        }
     }
-    /// Release everything deliverable at `now` without ingesting (final drain).
-    pub fn drain(&mut self, now: Instant) -> Vec<Vec<u8>> { self.buf.pop_ready(now) }
-    pub fn out_of_order_releases(&self) -> u64 { self.buf.released_out_of_order }
+    pub fn set_pinned_clients(&mut self, pinned: balancify_crypto::PinnedKeys)
+    where C: Clone,
+    {
+        self.pinned_clients = pinned;
+        if !self.pinned_clients.is_empty() {
+            let cfg = ReceiverConfig {
+                hold_cap: self.rx.config().hold_cap,
+                idle_timeout: self.rx.config().idle_timeout,
+                auto_accept: false,
+                max_sessions: self.rx.config().max_sessions,
+            };
+            let crypto = self.rx.crypto().clone();
+            self.rx = Receiver::new(crypto, cfg);
+        }
+    }
+    pub fn set_pinned_clients_no_clone(&mut self, pinned: balancify_crypto::PinnedKeys) {
+        self.pinned_clients = pinned;
+    }
+    pub fn pinned_clients(&self) -> &balancify_crypto::PinnedKeys { &self.pinned_clients }
+    pub fn replay_cache(&self) -> &balancify_crypto::ReplayCache { &self.replay_cache }
+    pub fn replay_cache_mut(&mut self) -> &mut balancify_crypto::ReplayCache { &mut self.replay_cache }
+    pub fn open_session(&mut self, session: u64, now: Instant) -> bool { self.rx.open_session(session, now) }
+    pub fn is_peer_allowed(&self, peer_static: &[u8; 32]) -> bool {
+        if self.pinned_clients.is_empty() { true } else { self.pinned_clients.is_pinned(peer_static) }
+    }
+    pub fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut payloads = Vec::new();
+        let mut replies = Vec::new();
+        for ev in self.rx.ingest(dg, now) {
+            match ev {
+                Event::Payload { data, .. } => { self.delivered += 1; payloads.push(data); }
+                other => { if let Some(frame) = self.rx.reply_for(&other) { replies.push(frame); } }
+            }
+        }
+        (payloads, replies)
+    }
+    pub fn drain(&mut self, now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut payloads = Vec::new();
+        let mut replies = Vec::new();
+        for ev in self.rx.drain(now) {
+            match ev {
+                Event::Payload { data, .. } => { self.delivered += 1; payloads.push(data); }
+                other => { if let Some(frame) = self.rx.reply_for(&other) { replies.push(frame); } }
+            }
+        }
+        (payloads, replies)
+    }
+    pub fn delivered(&self) -> u64 { self.delivered }
+    pub fn out_of_order_releases(&self) -> u64 { self.rx.counters().out_of_order }
+    pub fn duplicates_seen(&self) -> u64 { self.rx.counters().duplicates }
+    pub fn sessions(&self) -> usize { self.rx.sessions() }
+    pub fn sweep(&mut self, now: Instant) -> Vec<u64> { self.rx.sweep(now) }
+    pub fn counters(&self) -> balancify_tunnel::ReceiverCounters { self.rx.counters() }
 }
 
-fn main() -> std::io::Result<()> {
+impl Endpoint<balancify_crypto::TunnelCipher> {
+    pub fn apply_transport_keys(&mut self, keys: &balancify_crypto::TransportKeys, now: Instant) {
+        if let Some(rx_cipher) = keys.recv_cipher() {
+            let cfg = self.rx.config().clone();
+            let auto_accept = cfg.auto_accept;
+            self.rx = Receiver::new(rx_cipher, cfg);
+            if !auto_accept { self.rx.open_session(1, now); }
+        }
+    }
+    pub fn establish_secure_session(
+        &mut self,
+        keys: &balancify_crypto::TransportKeys,
+        peer_static: [u8; 32],
+        now: Instant,
+    ) -> Result<(), balancify_crypto::HandshakeError> {
+        if !self.is_peer_allowed(&peer_static) {
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        self.apply_transport_keys(keys, now);
+        Ok(())
+    }
+}
+
+const HANDSHAKE_VERSION: u8 = 0xFF;
+const HANDSHAKE_MSG1: u8 = 0x01;
+const HANDSHAKE_MSG2: u8 = 0x02;
+const PROLOGUE: &[u8] = b"balancify handshake v1";
+
+struct RateLimiter {
+    /// Token bucket: tokens in bytes, refill rate bytes/sec
+    tokens: u64,
+    max_tokens: u64,
+    refill_rate: u64,
+    last_refill: Instant,
+    /// Packet rate limit: packets per second
+    packet_tokens: u64,
+    max_packet_tokens: u64,
+    packet_refill_rate: u64,
+}
+
+impl RateLimiter {
+    fn new(max_bytes_per_sec: u64, max_pps: u64, now: Instant) -> Self {
+        Self {
+            tokens: max_bytes_per_sec,
+            max_tokens: max_bytes_per_sec,
+            refill_rate: max_bytes_per_sec,
+            last_refill: now,
+            packet_tokens: max_pps,
+            max_packet_tokens: max_pps,
+            packet_refill_rate: max_pps,
+        }
+    }
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        if elapsed <= 0.0 {
+            return;
+        }
+        let add_bytes = (elapsed * self.refill_rate as f64) as u64;
+        self.tokens = (self.tokens + add_bytes).min(self.max_tokens);
+        let add_pkts = (elapsed * self.packet_refill_rate as f64) as u64;
+        self.packet_tokens = (self.packet_tokens + add_pkts).min(self.max_packet_tokens);
+        self.last_refill = now;
+    }
+    fn try_consume(&mut self, bytes: usize, now: Instant) -> bool {
+        self.refill(now);
+        if self.tokens < bytes as u64 || self.packet_tokens == 0 {
+            return false;
+        }
+        self.tokens -= bytes as u64;
+        self.packet_tokens -= 1;
+        true
+    }
+}
+
+struct RelaySession {
+    id: u64,
+    peer_static: [u8; 32],
+    peer_addr: std::net::SocketAddr,
+    rx: Receiver<balancify_crypto::TunnelCipher>,
+    tx: Sender<balancify_crypto::TunnelCipher>,
+    last_activity: Instant,
+    bytes_forwarded: u64,
+    packets_forwarded: u64,
+    ecn_echoed: u64,
+    rate_limiter: RateLimiter,
+    created_at: Instant,
+}
+
+impl RelaySession {
+    fn new(
+        id: u64,
+        peer_static: [u8; 32],
+        peer_addr: std::net::SocketAddr,
+        recv_cipher: balancify_crypto::TunnelCipher,
+        send_cipher: balancify_crypto::TunnelCipher,
+        now: Instant,
+    ) -> Self {
+        let rx_cfg = ReceiverConfig {
+            hold_cap: Duration::from_millis(80),
+            idle_timeout: Duration::from_secs(120),
+            auto_accept: false,
+            max_sessions: 64,
+        };
+        let tx_cfg = SenderConfig::default();
+        let mut rx = Receiver::new(recv_cipher, rx_cfg);
+        rx.open_session(id, now);
+        let tx = Sender::with_config(id, send_cipher, vec![(0, 2000), (1, 2000)], tx_cfg);
+        // Default limits: 100 Mbit/s, 10k pps per session (Sec.4.4 B4 rate-limited)
+        let rate_limiter = RateLimiter::new(12_500_000, 10_000, now);
+        Self {
+            id,
+            peer_static,
+            peer_addr,
+            rx,
+            tx,
+            last_activity: now,
+            bytes_forwarded: 0,
+            packets_forwarded: 0,
+            ecn_echoed: 0,
+            rate_limiter,
+            created_at: now,
+        }
+    }
+    fn rekey(&mut self, now: Instant) -> bool {
+        let rx_cipher = self.rx.crypto().clone();
+        let tx_cipher = self.tx.crypto().clone();
+        let new_rx = match rx_cipher.rekey() {
+            Some(c) => c,
+            None => return false,
+        };
+        let new_tx = match tx_cipher.rekey() {
+            Some(c) => c,
+            None => return false,
+        };
+        let rx_cfg = self.rx.config().clone();
+        let tx_cfg = self.tx.config().clone();
+        let id = self.id;
+        let mut rx = Receiver::new(new_rx, rx_cfg);
+        rx.open_session(id, now);
+        let tx = Sender::with_config(id, new_tx, vec![(0, 2000), (1, 2000)], tx_cfg);
+        self.rx = rx;
+        self.tx = tx;
+        self.last_activity = now;
+        true
+    }
+
+    fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        self.last_activity = now;
+        let mut payloads = Vec::new();
+        let mut replies = Vec::new();
+        let simulate_ecn = std::env::var("BALANCIFY_SIMULATE_ECN").map(|v| v == "1").unwrap_or(false);
+        for ev in self.rx.ingest(dg, now) {
+            match ev {
+                Event::Payload { data, .. } => payloads.push(data),
+                Event::Ack { path, seq, .. } => {
+                    let sent = if simulate_ecn {
+                        self.ecn_echoed += 1;
+                        self.tx.ack_with_ecn(path, seq)
+                    } else {
+                        self.tx.ack(path, seq)
+                    };
+                    replies.push(sent.bytes);
+                }
+                Event::ProbeEcho { path, seq, .. } => {
+                    let sent = self.tx.probe_reply(path, seq);
+                    replies.push(sent.bytes);
+                }
+                _ => {}
+            }
+        }
+        (payloads, replies)
+    }
+    fn drain(&mut self, now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut payloads = Vec::new();
+        let mut replies = Vec::new();
+        let simulate_ecn = std::env::var("BALANCIFY_SIMULATE_ECN").map(|v| v == "1").unwrap_or(false);
+        for ev in self.rx.drain(now) {
+            match ev {
+                Event::Payload { data, .. } => payloads.push(data),
+                Event::Ack { path, seq, .. } => {
+                    let sent = if simulate_ecn {
+                        self.ecn_echoed += 1;
+                        self.tx.ack_with_ecn(path, seq)
+                    } else {
+                        self.tx.ack(path, seq)
+                    };
+                    replies.push(sent.bytes);
+                }
+                Event::ProbeEcho { path, seq, .. } => {
+                    let sent = self.tx.probe_reply(path, seq);
+                    replies.push(sent.bytes);
+                }
+                _ => {}
+            }
+        }
+        (payloads, replies)
+    }
+}
+
+struct SecureRelay {
+    static_keypair: balancify_crypto::StaticKeypair,
+    pinned_clients: balancify_crypto::PinnedKeys,
+    replay_cache: balancify_crypto::ReplayCache,
+    sessions: BTreeMap<u64, RelaySession>,
+    prologue: Vec<u8>,
+    // Abuse controls (Sec.4.4 B4, Sec.9.1)
+    max_sessions: usize,
+    max_sessions_per_ip: usize,
+    handshake_attempts: BTreeMap<std::net::IpAddr, (u64, Instant)>, // ip -> (count, window_start)
+    total_bytes_forwarded: u64,
+    total_packets_forwarded: u64,
+    total_handshakes: u64,
+    total_rejected: u64,
+    total_ecn_echoed: u64,
+}
+
+impl SecureRelay {
+    fn new(static_keypair: balancify_crypto::StaticKeypair, pinned_clients: balancify_crypto::PinnedKeys) -> Self {
+        Self {
+            static_keypair,
+            pinned_clients,
+            replay_cache: balancify_crypto::ReplayCache::with_defaults(),
+            sessions: BTreeMap::new(),
+            prologue: PROLOGUE.to_vec(),
+            max_sessions: 1024,
+            max_sessions_per_ip: 8,
+            handshake_attempts: BTreeMap::new(),
+            total_bytes_forwarded: 0,
+            total_packets_forwarded: 0,
+            total_handshakes: 0,
+            total_rejected: 0,
+            total_ecn_echoed: 0,
+        }
+    }
+    fn is_peer_allowed(&self, peer_static: &[u8; 32]) -> bool {
+        if self.pinned_clients.is_empty() { true } else { self.pinned_clients.is_pinned(peer_static) }
+    }
+    fn check_rate_limit_handshake(&mut self, peer: std::net::SocketAddr, now: Instant) -> bool {
+        let ip = peer.ip();
+        let window = Duration::from_secs(60);
+        let max_per_window = 10; // 10 handshakes per minute per IP
+        let entry = self.handshake_attempts.entry(ip).or_insert((0, now));
+        if now.duration_since(entry.1) >= window {
+            *entry = (1, now);
+            true
+        } else if entry.0 >= max_per_window {
+            false
+        } else {
+            entry.0 += 1;
+            true
+        }
+    }
+    fn sessions_for_ip(&self, ip: std::net::IpAddr) -> usize {
+        self.sessions.values().filter(|s| s.peer_addr.ip() == ip).count()
+    }
+    fn handle_msg1(
+        &mut self,
+        msg1: &[u8],
+        peer: std::net::SocketAddr,
+        now: Instant,
+    ) -> Result<(Vec<u8>, u64), balancify_crypto::HandshakeError> {
+        // Abuse: global session cap
+        if self.sessions.len() >= self.max_sessions {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        // Abuse: per-IP session cap
+        if self.sessions_for_ip(peer.ip()) >= self.max_sessions_per_ip {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        // Abuse: handshake rate limit per IP
+        if !self.check_rate_limit_handshake(peer, now) {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        let mut responder = balancify_crypto::Responder::new(self.static_keypair.secret_bytes(), &self.prologue);
+        let payload = responder.read_message_checked(
+            msg1,
+            Some(&self.pinned_clients),
+            Some(&mut self.replay_cache),
+            Some(now),
+        )?;
+        if payload.len() < 8 { return Err(balancify_crypto::HandshakeError::Truncated); }
+        let session_id = u64::from_be_bytes(payload[..8].try_into().unwrap());
+        let peer_static = responder.peer_static().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
+        if !self.is_peer_allowed(&peer_static) {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        let eph = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
+        let resp_payload = session_id.to_be_bytes().to_vec();
+        let (msg2, transport_keys) = responder.write_message(eph, &resp_payload)?;
+        let recv_cipher = transport_keys.recv_cipher().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
+        let send_cipher = transport_keys.send_cipher().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
+        let session = RelaySession::new(session_id, peer_static, peer, recv_cipher, send_cipher, now);
+        self.sessions.insert(session_id, session);
+        self.total_handshakes += 1;
+        Ok((msg2, session_id))
+    }
+    fn ingest_tunnel(&mut self, dg: &[u8], now: Instant) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
+        let (hdr, _) = balancify_tunnel::Header::decode(dg)?;
+        let session_id = hdr.session;
+        // Rate limiting per session
+        let session = self.sessions.get_mut(&session_id)?;
+        if !session.rate_limiter.try_consume(dg.len(), now) {
+            // Drop frame if over limit -- counts as abuse, but don't kill session
+            return Some((Vec::new(), Vec::new()));
+        }
+        let (payloads, replies) = session.ingest(dg, now);
+        // Account forwarded bytes
+        for p in &payloads {
+            session.bytes_forwarded += p.len() as u64;
+            session.packets_forwarded += 1;
+            self.total_bytes_forwarded += p.len() as u64;
+            self.total_packets_forwarded += 1;
+        }
+        Some((payloads, replies))
+    }
+    fn drain_all(&mut self, now: Instant) -> Vec<(u64, Vec<Vec<u8>>, Vec<Vec<u8>>)> {
+        let mut out = Vec::new();
+        for (id, sess) in self.sessions.iter_mut() {
+            let (p, r) = sess.drain(now);
+            if !p.is_empty() || !r.is_empty() { out.push((*id, p, r)); }
+        }
+        out
+    }
+    fn sweep(&mut self, now: Instant) -> Vec<u64> {
+        let idle_timeout = Duration::from_secs(120);
+        let stale: Vec<u64> = self.sessions.iter()
+            .filter(|(_, s)| now.duration_since(s.last_activity) >= idle_timeout)
+            .map(|(id, _)| *id).collect();
+        for id in &stale {
+            if let Some(sess) = self.sessions.remove(id) {
+                self.total_ecn_echoed += sess.ecn_echoed;
+            }
+        }
+        // Sweep old handshake attempt entries
+        let window = Duration::from_secs(60);
+        self.handshake_attempts.retain(|_, (_, start)| now.duration_since(*start) < window * 2);
+        stale
+    }
+    fn stats(&self) -> (usize, u64, u64, u64, u64, u64) {
+        let ecn_sum: u64 = self.sessions.values().map(|s| s.ecn_echoed).sum::<u64>() + self.total_ecn_echoed;
+        (
+            self.sessions.len(),
+            self.total_handshakes,
+            self.total_rejected,
+            self.total_bytes_forwarded,
+            self.total_packets_forwarded,
+            ecn_sum,
+        )
+    }
+}
+
+fn main() -> std::io::Result<()> { run() }
+
+#[cfg(feature = "lab-crypto")]
+fn run() -> std::io::Result<()> {
+    use balancify_tunnel::PassThrough;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let ports: Vec<u16> = args
-        .first()
+    if args.first().map(|s| s == "secure").unwrap_or(false) {
+        return run_secure(args.into_iter().skip(1).collect());
+    }
+    let ports: Vec<u16> = args.first()
         .map(|s| s.split(',').filter_map(|p| p.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![4430, 4431]);
-    let sockets: Vec<UdpSocket> = ports
-        .iter()
-        .map(|p| UdpSocket::bind(("0.0.0.0", *p)))
-        .collect::<Result<_, _>>()?;
+    let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
     for s in &sockets { s.set_read_timeout(Some(Duration::from_millis(100)))?; }
-    eprintln!("balancify-relay (phase-2 lab form): listening on UDP {ports:?}");
-    let mut re = Reassembler::new(Duration::from_millis(80));
+    eprintln!("balancify-relay (lab form; lab-crypto = NO CONFIDENTIALITY): listening on UDP {:?}", ports);
+    let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
     let mut dg = [0u8; 65535];
+    let mut peers: Vec<Option<std::net::SocketAddr>> = vec![None; sockets.len()];
     loop {
-        for s in &sockets {
+        for (i, s) in sockets.iter().enumerate() {
             match s.recv_from(&mut dg) {
                 Ok((n, peer)) => {
+                    peers[i] = Some(peer);
                     let now = Instant::now();
-                    for payload in re.ingest(&dg[..n], now) {
-                        // Phase 2: echo the ordered stream back on the path it arrived on.
-                        let _ = s.send_to(&payload, peer);
+                    let (payloads, replies) = ep.ingest(&dg[..n], now);
+                    for frame in replies { let _ = s.send_to(&frame, peer); }
+                    for payload in payloads { let _ = s.send_to(&payload, peer); }
+                    ep.sweep(now);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                    if let Some(peer) = peers[i] {
+                        let now = Instant::now();
+                        let (payloads, replies) = ep.drain(now);
+                        for frame in replies { let _ = s.send_to(&frame, peer); }
+                        for payload in payloads { let _ = s.send_to(&payload, peer); }
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => return Err(e),
             }
         }
     }
 }
 
+#[cfg(not(feature = "lab-crypto"))]
+fn run() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() || args.iter().any(|a| a.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)) {
+        eprintln!("balancify-relay: starting in secure mode (no lab-crypto)");
+        return run_secure(args);
+    }
+    eprintln!(
+        "balancify-relay: refusing to start without lab-crypto in lab mode.\n\
+         This build carries no null cipher: use secure mode with keys.\n\
+         Lab use: cargo run -p balancify-relay --features lab-crypto -- 4430,4431\n\
+         Secure use: cargo run -p balancify-relay -- 4430,4431 (keys in $BALANCIFY_STATE_DIR or /tmp/balancify)"
+    );
+    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| "/tmp/balancify".to_string());
+    if std::path::Path::new(&state_dir).exists() {
+        return run_secure(args);
+    }
+    std::process::exit(2)
+}
+
+fn run_secure(args: Vec<String>) -> std::io::Result<()> {
+    use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
+    let ports: Vec<u16> = args.first()
+        .map(|s| s.split(',').filter_map(|p| p.trim().parse().ok()).collect())
+        .unwrap_or_else(|| vec![4430, 4431]);
+    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
+        #[cfg(windows)]
+        { std::env::var("ProgramData").map(|pd| format!("{}\\Balancify", pd)).unwrap_or_else(|_| "/tmp/balancify".to_string()) }
+        #[cfg(not(windows))]
+        { "/tmp/balancify".to_string() }
+    });
+    let secret_path = std::path::Path::new(&state_dir).join("relay_secret.key");
+    let pinned_path = std::path::Path::new(&state_dir).join("pinned_clients.keys");
+    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+    let keypair = match store.load_or_generate() {
+        Ok(kp) => kp,
+        Err(e) => {
+            eprintln!("Failed to load/generate relay keypair from {:?}: {}", secret_path, e);
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)));
+        }
+    };
+    let pinned = store.load_pinned().unwrap_or_else(|_| PinnedKeys::new());
+    eprintln!("balancify-relay (secure mode): listening on UDP {:?}, state_dir={}, pinned_clients={}", ports, state_dir, pinned.len());
+    eprintln!("  relay public key: {:02x?}...", &keypair.public_bytes()[..8]);
+    let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
+    for s in &sockets { s.set_read_timeout(Some(Duration::from_millis(100)))?; }
+    let mut relay = SecureRelay::new(keypair, pinned);
+    let mut dg = [0u8; 65535];
+    let mut peers: BTreeMap<u64, std::net::SocketAddr> = BTreeMap::new();
+    // Optional upstream forwarding (Sec.4.2 data plane: relay decrypts, reorders, forwards from stable address)
+    // If BALANCIFY_FORWARD_ADDR is set (e.g. 127.0.0.1:8080), decrypted payloads are forwarded via UDP
+    // to that address, and replies are re-encrypted back to the client session.
+    // If not set, we echo payloads (lab mode).
+    let forward_addr: Option<std::net::SocketAddr> = std::env::var("BALANCIFY_FORWARD_ADDR")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    if let Some(fa) = forward_addr {
+        eprintln!("Forwarding enabled: decrypted payloads -> {} (stable egress)", fa);
+    } else {
+        eprintln!("Forwarding: echo mode (lab) -- set BALANCIFY_FORWARD_ADDR to enable upstream forwarding");
+    }
+    // Per-session forwarding sockets (one UDP socket per client session, bound to 0.0.0.0:0)
+    // This gives us stable egress per session and lets us map replies back to session.
+    let mut forward_socks: BTreeMap<u64, UdpSocket> = BTreeMap::new();
+    let mut forward_buf = [0u8; 65535];
+
+    loop {
+        for (_idx, s) in sockets.iter().enumerate() {
+            match s.recv_from(&mut dg) {
+                Ok((n, peer)) => {
+                    let now = Instant::now();
+                    if n >= 2 && dg[0] == HANDSHAKE_VERSION {
+                        if dg[1] == HANDSHAKE_MSG1 {
+                            let msg1 = &dg[2..n];
+                            match relay.handle_msg1(msg1, peer, now) {
+                                Ok((msg2, session_id)) => {
+                                    let mut out = Vec::with_capacity(2 + msg2.len());
+                                    out.push(HANDSHAKE_VERSION);
+                                    out.push(HANDSHAKE_MSG2);
+                                    out.extend_from_slice(&msg2);
+                                    let _ = s.send_to(&out, peer);
+                                    peers.insert(session_id, peer);
+                                    if forward_addr.is_some() {
+                                        match UdpSocket::bind("0.0.0.0:0") {
+                                            Ok(fs) => {
+                                                let _ = fs.set_read_timeout(Some(Duration::from_millis(10)));
+                                                forward_socks.insert(session_id, fs);
+                                            }
+                                            Err(e) => eprintln!("Failed to create forward socket for session {}: {}", session_id, e),
+                                        }
+                                    }
+                                    eprintln!("Handshake: new session {} from {} (total sessions {})", session_id, peer, relay.sessions.len());
+                                }
+                                Err(e) => { eprintln!("Handshake msg1 from {} failed: {:?}", peer, e); }
+                            }
+                        } else {
+                            eprintln!("Unknown handshake kind {} from {}", dg[1], peer);
+                        }
+                    } else if n >= 20 && dg[0] == balancify_tunnel::WIRE_VERSION {
+                        // Decode session id for forwarding mapping
+                        let session_id_opt = balancify_tunnel::Header::decode(&dg[..n]).map(|(h, _)| h.session);
+                        if let Some((payloads, replies)) = relay.ingest_tunnel(&dg[..n], now) {
+                            for frame in replies { let _ = s.send_to(&frame, peer); }
+                            for payload in payloads {
+                                if let Some(fa) = forward_addr {
+                                    if let Some(sid) = session_id_opt {
+                                        if let Some(fs) = forward_socks.get(&sid) {
+                                            let _ = fs.send_to(&payload, fa);
+                                        } else if let Some((found_sid, _)) = peers.iter().find(|(_, p)| **p == peer) {
+                                            if let Some(fs) = forward_socks.get(found_sid) {
+                                                let _ = fs.send_to(&payload, fa);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    let _ = s.send_to(&payload, peer);
+                                }
+                            }
+                        }
+                    }
+                    // Periodic sweep every ~10s
+                    if now.elapsed().as_secs() % 10 == 0 {
+                        let evicted = relay.sweep(now);
+                        for sid in evicted {
+                            peers.remove(&sid);
+                            forward_socks.remove(&sid);
+                        }
+                        let (sess_cnt, hs, rej, bytes, pkts, ecn) = relay.stats();
+                        if sess_cnt > 0 {
+                            eprintln!("Stats: sessions={} handshakes={} rejected={} bytes={} pkts={} ecn={}", sess_cnt, hs, rej, bytes, pkts, ecn);
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                    let now = Instant::now();
+                    // Drain reorder buffers
+                    for (session_id, payloads, replies) in relay.drain_all(now) {
+                        if let Some(peer) = peers.get(&session_id) {
+                            for frame in replies { let _ = s.send_to(&frame, peer); }
+                            for payload in payloads {
+                                if let Some(fa) = forward_addr {
+                                    if let Some(fs) = forward_socks.get(&session_id) {
+                                        let _ = fs.send_to(&payload, fa);
+                                    }
+                                } else {
+                                    let _ = s.send_to(&payload, peer);
+                                }
+                            }
+                        }
+                    }
+                    // Poll forwarding sockets for upstream replies
+                    if forward_addr.is_some() {
+                        let mut to_remove = Vec::new();
+                        for (sid, fs) in forward_socks.iter() {
+                            loop {
+                                match fs.recv_from(&mut forward_buf) {
+                                    Ok((n, _from)) => {
+                                        if let Some(peer) = peers.get(sid) {
+                                            if let Some(sess) = relay.sessions.get_mut(sid) {
+                                                // Re-encrypt reply as tunnel data
+                                                if let Some(sent) = sess.tx.send(&forward_buf[..n], now) {
+                                                    let _ = s.send_to(&sent.bytes, peer);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => break,
+                                    Err(_) => break,
+                                }
+                            }
+                            // Check if session still exists, otherwise mark for removal
+                            if !relay.sessions.contains_key(sid) {
+                                to_remove.push(*sid);
+                            }
+                        }
+                        for sid in to_remove {
+                            forward_socks.remove(&sid);
+                        }
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use balancify_tunnel::{PassThrough, Sender};
+    use balancify_tunnel::{PassThrough, Sender, Sent};
 
     #[test]
     fn two_paths_with_delay_gap_reassemble_in_order() {
         let mut send = Sender::new(1, PassThrough, vec![(0, 1000), (1, 1000)]);
-        let mut wire: Vec<(u8, Vec<u8>)> = (0..40).map(|i| send.send(format!("p{i:02}").as_bytes())).collect();
-        // simulate: path 1 datagrams delayed (arrive after later path-0 ones)
-        wire.sort_by_key(|(p, b)| {
-            let (h, _) = Header::decode(b).unwrap();
-            h.seq + if *p == 1 { 5 } else { 0 } // artificial skew
-        });
-        let mut re = Reassembler::new(Duration::from_millis(80));
-        let mut got: Vec<String> = Vec::new();
         let t0 = Instant::now();
-        for (_, bytes) in &wire {
-            for payload in re.ingest(bytes, t0) {
-                got.push(String::from_utf8(payload).unwrap());
-            }
+        let mut wire: Vec<Sent> = (0..40).map(|i| send.send(format!("p{:02}", i).as_bytes(), t0).unwrap()).collect();
+        wire.sort_by_key(|f| f.seq + if f.path == 1 { 5 } else { 0 });
+        let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
+        let mut got: Vec<String> = Vec::new();
+        let mut replies = 0;
+        for f in &wire {
+            let (payloads, out) = ep.ingest(&f.bytes, t0);
+            replies += out.len();
+            got.extend(payloads.into_iter().map(|p| String::from_utf8(p).unwrap()));
         }
-        got.extend(re.drain(t0).into_iter().map(|p| String::from_utf8(p).unwrap()));
-        // Once every datagram has arrived, the full stream must be released in order.
-        let expect: Vec<String> = (0..40).map(|i| format!("p{i:02}")).collect();
+        let expect: Vec<String> = (0..40).map(|i| format!("p{:02}", i)).collect();
         assert_eq!(got, expect);
-        assert_eq!(re.out_of_order_releases(), 0, "no cap expiry when all packets arrive");
+        assert_eq!(ep.out_of_order_releases(), 0);
+        assert!(replies > 0);
     }
 
     #[test]
-    fn reassembler_ignores_garbage() {
-        let mut re = Reassembler::new(Duration::from_millis(10));
-        assert!(re.ingest(b"short", Instant::now()).is_empty());
-        assert!(re.ingest(&[0u8; 4], Instant::now()).is_empty());
+    fn endpoint_ignores_garbage() {
+        let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
+        let now = Instant::now();
+        assert!(ep.ingest(b"short", now).0.is_empty());
+        assert!(ep.ingest(&[0u8; 4], now).0.is_empty());
+        assert_eq!(ep.delivered(), 0);
+    }
+
+    #[test]
+    fn endpoint_deduplicates_the_duplicate_mode_copy() {
+        let mut send = Sender::new(2, PassThrough, vec![(0, 1000), (1, 1000)]);
+        let t0 = Instant::now();
+        let f = send.send(b"tls-clienthello".as_ref(), t0).unwrap();
+        let copy = send.duplicate(b"tls-clienthello".as_ref(), f.seq, 1 - f.path).unwrap();
+        let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
+        let (a, _) = ep.ingest(&f.bytes, t0);
+        let (b, _) = ep.ingest(&copy.bytes, t0);
+        assert_eq!(a.len(), 1);
+        assert!(b.is_empty());
+        assert_eq!(ep.duplicates_seen(), 1);
+        let mut send2 = Sender::new(4, PassThrough, vec![(0, 1000), (1, 1000)]);
+        let g = send2.send(b"tls-clienthello".as_ref(), t0).unwrap();
+        let copy2 = send2.duplicate(b"tls-clienthello".as_ref(), g.seq, 1 - g.path).unwrap();
+        let mut ep2 = Endpoint::new(PassThrough, ReceiverConfig::default());
+        let (first, _) = ep2.ingest(&copy2.bytes, t0);
+        let (second, _) = ep2.ingest(&g.bytes, t0);
+        assert_eq!(first.len(), 1);
+        assert!(second.is_empty());
+        assert_eq!(ep2.duplicates_seen(), 1);
+    }
+
+    #[test]
+    fn endpoint_answers_probes() {
+        let mut send = Sender::new(3, PassThrough, vec![(0, 1000)]);
+        let t0 = Instant::now();
+        let probe = send.probe(0, 48);
+        let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
+        let (payloads, replies) = ep.ingest(&probe.bytes, t0);
+        assert!(payloads.is_empty());
+        assert_eq!(replies.len(), 1);
+        let (h, _) = balancify_tunnel::Header::decode(&replies[0]).unwrap();
+        assert_eq!(h.kind, balancify_tunnel::FrameKind::ProbeReply);
+        assert_eq!(h.seq, probe.seq);
+    }
+
+    #[test]
+    fn endpoint_drains_a_gap_after_the_hold_cap() {
+        let cfg = ReceiverConfig { hold_cap: Duration::from_millis(40), ..ReceiverConfig::default() };
+        let mut ep = Endpoint::new(PassThrough, cfg);
+        let mut send = Sender::new(9, PassThrough, vec![(0, 1000), (1, 1000)]);
+        let t0 = Instant::now();
+        let all: Vec<Sent> = (0..3).map(|i| send.send(format!("g{}", i).as_bytes(), t0).unwrap()).collect();
+        for f in all.iter().skip(1) {
+            let (payloads, _) = ep.ingest(&f.bytes, t0);
+            assert!(payloads.is_empty());
+        }
+        assert!(ep.drain(t0 + Duration::from_millis(5)).0.is_empty());
+        let (payloads, replies) = ep.drain(t0 + Duration::from_millis(50));
+        let got: Vec<String> = payloads.into_iter().map(|p| String::from_utf8(p).unwrap()).collect();
+        assert_eq!(got, vec!["g1".to_string(), "g2".to_string()]);
+        assert_eq!(ep.out_of_order_releases(), 1);
+        assert!(!replies.is_empty());
+        assert_eq!(ep.delivered(), 2);
+    }
+
+    #[test]
+    fn ordered_stream_survives_a_real_udp_socket() {
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let mut send = Sender::new(77, PassThrough, vec![(0, 1000)]);
+        let t0 = Instant::now();
+        for i in 0..10 {
+            let f = send.send(format!("u{}", i).as_bytes(), t0).unwrap();
+            client.send_to(&f.bytes, server_addr).unwrap();
+        }
+        let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
+        let mut buf = [0u8; 65535];
+        let mut got: Vec<String> = Vec::new();
+        for _ in 0..10 {
+            let (n, _) = server.recv_from(&mut buf).unwrap();
+            let (payloads, _) = ep.ingest(&buf[..n], t0);
+            got.extend(payloads.into_iter().map(|p| String::from_utf8(p).unwrap()));
+        }
+        got.sort();
+        let mut expect: Vec<String> = (0..10).map(|i| format!("u{}", i)).collect();
+        expect.sort();
+        assert_eq!(got, expect);
+        assert_eq!(ep.sessions(), 1);
+    }
+
+    #[test]
+    fn secure_handshake_creates_session() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let session_id: u64 = 42;
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let eph_c = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
+        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes());
+        let now = Instant::now();
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        let (msg2, sid) = relay.handle_msg1(&msg1, peer, now).expect("handshake ok");
+        assert_eq!(sid, session_id);
+        assert_eq!(relay.sessions.len(), 1);
+        let (payload, _keys) = initiator.read_message(&msg2).expect("msg2 ok");
+        assert_eq!(payload, session_id.to_be_bytes());
+    }
+
+    #[test]
+    fn secure_relay_rejects_unpinned_client() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let other_kp = balancify_crypto::StaticKeypair::generate();
+        let mut pinned = balancify_crypto::PinnedKeys::new();
+        pinned.pin(other_kp.public_bytes());
+        let mut relay = SecureRelay::new(relay_kp.clone(), pinned);
+        let session_id: u64 = 99;
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let eph_c = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
+        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes());
+        let now = Instant::now();
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        assert!(relay.handle_msg1(&msg1, peer, now).is_err());
+        assert_eq!(relay.sessions.len(), 0);
+    }
+
+    #[test]
+    fn secure_relay_rejects_replay() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let session_id: u64 = 123;
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let eph = [0x11u8; 32];
+        let msg1 = initiator.write_message(eph, &session_id.to_be_bytes());
+        let now = Instant::now();
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        assert!(relay.handle_msg1(&msg1, peer, now).is_ok());
+        let mut initiator2 = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1_replay = initiator2.write_message(eph, &session_id.to_be_bytes());
+        assert!(relay.handle_msg1(&msg1_replay, peer, now + Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn secure_tunnel_after_handshake() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let session_id: u64 = 777;
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let eph_c = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
+        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes());
+        let now = Instant::now();
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        let (msg2, _) = relay.handle_msg1(&msg1, peer, now).expect("handshake");
+        let (payload, client_keys) = initiator.read_message(&msg2).expect("msg2");
+        assert_eq!(payload, session_id.to_be_bytes());
+
+        // Client now has transport keys, sends data
+        let client_send = client_keys.send_cipher().unwrap();
+        let mut client_tx = Sender::new(session_id, client_send, vec![(0, 2000)]);
+        let frame = client_tx.send(b"hello secure world", now).unwrap();
+
+        // Relay ingests
+        let (payloads, replies) = relay.ingest_tunnel(&frame.bytes, now).expect("session exists");
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0], b"hello secure world");
+        assert!(!replies.is_empty(), "must ACK");
+    }
+
+    #[test]
+    fn secure_relay_enforces_rate_limit_and_session_cap() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        relay.max_sessions = 2;
+        relay.max_sessions_per_ip = 1;
+        let now = Instant::now();
+        let peer1: std::net::SocketAddr = "10.0.0.1:1234".parse().unwrap();
+        let peer2: std::net::SocketAddr = "10.0.0.1:5678".parse().unwrap(); // same IP
+        let peer3: std::net::SocketAddr = "10.0.0.2:1234".parse().unwrap(); // different IP
+
+        // First handshake from peer1 should succeed
+        let client_kp1 = balancify_crypto::StaticKeypair::generate();
+        let mut initiator1 = balancify_crypto::Initiator::new(
+            client_kp1.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1_1 = initiator1.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &1u64.to_be_bytes(),
+        );
+        assert!(relay.handle_msg1(&msg1_1, peer1, now).is_ok());
+
+        // Second handshake from same IP should fail (per-IP cap 1)
+        let client_kp2 = balancify_crypto::StaticKeypair::generate();
+        let mut initiator2 = balancify_crypto::Initiator::new(
+            client_kp2.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1_2 = initiator2.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &2u64.to_be_bytes(),
+        );
+        assert!(relay.handle_msg1(&msg1_2, peer2, now).is_err(), "per-IP cap should reject");
+
+        // From different IP should succeed (global cap 2)
+        let client_kp3 = balancify_crypto::StaticKeypair::generate();
+        let mut initiator3 = balancify_crypto::Initiator::new(
+            client_kp3.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1_3 = initiator3.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &3u64.to_be_bytes(),
+        );
+        assert!(relay.handle_msg1(&msg1_3, peer3, now).is_ok());
+
+        // Third IP now exceeds global cap
+        let peer4: std::net::SocketAddr = "10.0.0.3:1234".parse().unwrap();
+        let client_kp4 = balancify_crypto::StaticKeypair::generate();
+        let mut initiator4 = balancify_crypto::Initiator::new(
+            client_kp4.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1_4 = initiator4.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &4u64.to_be_bytes(),
+        );
+        assert!(relay.handle_msg1(&msg1_4, peer4, now).is_err(), "global cap should reject");
+
+        let (sessions, handshakes, rejected, _, _, _) = relay.stats();
+        assert_eq!(sessions, 2);
+        assert_eq!(handshakes, 2);
+        assert!(rejected >= 2);
+    }
+
+    #[test]
+    fn secure_relay_rate_limits_handshakes_per_ip() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        relay.max_sessions_per_ip = 100; // lift cap to test rate limit
+        relay.max_sessions = 100;
+        let now = Instant::now();
+        let peer: std::net::SocketAddr = "192.168.1.1:1234".parse().unwrap();
+
+        // 10 handshakes in same window should succeed, 11th fail
+        for i in 0..10 {
+            let client_kp = balancify_crypto::StaticKeypair::generate();
+            let mut initiator = balancify_crypto::Initiator::new(
+                client_kp.secret_bytes(),
+                relay_kp.public_bytes(),
+                PROLOGUE,
+            );
+            let msg1 = initiator.write_message(
+                balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+                &(100 + i as u64).to_be_bytes(),
+            );
+            assert!(relay.handle_msg1(&msg1, peer, now).is_ok(), "handshake {} should ok", i);
+        }
+        // 11th in same minute should be rate limited
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1 = initiator.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &999u64.to_be_bytes(),
+        );
+        assert!(relay.handle_msg1(&msg1, peer, now).is_err(), "11th should be rate limited");
+
+        // After window, should succeed again
+        let later = now + Duration::from_secs(61);
+        let client_kp2 = balancify_crypto::StaticKeypair::generate();
+        let mut initiator2 = balancify_crypto::Initiator::new(
+            client_kp2.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1_later = initiator2.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &1000u64.to_be_bytes(),
+        );
+        assert!(relay.handle_msg1(&msg1_later, peer, later).is_ok(), "after window should ok");
     }
 }

@@ -10,6 +10,16 @@ permissions:
   checks: write
 
 jobs:
+  policy-audit:
+    name: Dependency + crypto policy audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ADR-0002 / blueprint §11.5 criteria C2 and C4: no third-party runtime
+      # dependency, and the null cipher cannot reach a shipped build.
+      - name: audit
+        run: sh tools/ci/audit-deps.sh
+
   core-tests-linux:
     name: Rust workspace tests (ubuntu)
     runs-on: ubuntu-latest
@@ -21,14 +31,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          cargo test --workspace --all-targets 2>&1 | tee test.log
+          cargo test --workspace --all-targets --no-fail-fast 2>&1 | tee test.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            SUMMARY="$(printf '### cargo test failed (exit %s)\n```\n%s\n```\n' "$code" "$(tail -n 100 test.log)")"
-            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '.check_runs[] | select(.name == "Rust workspace tests (ubuntu)") | .id' | head -1)
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test failure log" -f "output[summary]=$SUMMARY" || true
+            # Show failing tests and last 500 lines, so service failures are visible too
+            FAIL_SNIPPET="$( (grep -n -E "FAILED|failures:|panicked at" test.log; tail -n 500 test.log) | tail -n 600)"
+            SUMMARY="$(printf '### cargo test failed (exit %s)\n```\n%s\n```\n' "$code" "$FAIL_SNIPPET")"
+            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "Rust workspace tests (ubuntu)") | .id][0] // empty' || true)
+            if [ -n "$CRID" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test failure log" -f "output[summary]=$SUMMARY" || true
+            fi
             exit "$code"
           fi
+      # Log downloads are not always reachable from a sandboxed reviewer, so the
+      # counts are published to the check-run summary on success as well.
+      - name: publish results
+        if: success()
+        # Windows runners default to pwsh; this step is bash.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RESULTS="$(sed 's/\x1b\[[0-9;]*m//g' test.log | grep -E '^test result:|^     Running ' || true)"
+          SUMMARY="$(printf '### cargo test results\n```\n%s\n```\n' "$RESULTS")"
+          # jq picks the id itself: piping gh into head trips pipefail on the
+          # Windows runner (SIGPIPE), which fails the step.
+          CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "Rust workspace tests (ubuntu)") | .id][0] // empty' || true)
+          if [ -n "$CRID" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test results" -f "output[summary]=$SUMMARY" || true
+          fi
+
       - run: cargo build --release --workspace
 
   core-tests-windows:
@@ -43,13 +75,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          cargo test --workspace --all-targets 2>&1 | tee test.log
+          cargo test --workspace --all-targets --no-fail-fast 2>&1 | tee test.log
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            SUMMARY="$(printf '### cargo test failed (exit %s)\n```\n%s\n```\n' "$code" "$(tail -n 100 test.log)")"
-            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '.check_runs[] | select(.name == "Rust workspace tests (windows)") | .id' | head -1)
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test failure log" -f "output[summary]=$SUMMARY" || true
+            FAIL_SNIPPET="$( (grep -n -E "FAILED|failures:|panicked at" test.log; tail -n 500 test.log) | tail -n 600)"
+            SUMMARY="$(printf '### cargo test failed (exit %s)\n```\n%s\n```\n' "$code" "$FAIL_SNIPPET")"
+            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "Rust workspace tests (windows)") | .id][0] // empty' || true)
+            if [ -n "$CRID" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test failure log" -f "output[summary]=$SUMMARY" || true
+            fi
             exit "$code"
+          fi
+
+      # Log downloads are not always reachable from a sandboxed reviewer, so the
+      # counts are published to the check-run summary on success as well.
+      - name: publish results
+        if: success()
+        # Windows runners default to pwsh; this step is bash.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RESULTS="$(sed 's/\x1b\[[0-9;]*m//g' test.log | grep -E '^test result:|^     Running ' || true)"
+          SUMMARY="$(printf '### cargo test results\n```\n%s\n```\n' "$RESULTS")"
+          # jq picks the id itself: piping gh into head trips pipefail on the
+          # Windows runner (SIGPIPE), which fails the step.
+          CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "Rust workspace tests (windows)") | .id][0] // empty' || true)
+          if [ -n "$CRID" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test results" -f "output[summary]=$SUMMARY" || true
           fi
 
   # Phase 4: add jobs for (a) WDK driver build + Driver Verifier lab,

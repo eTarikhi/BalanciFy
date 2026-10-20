@@ -10,5 +10,16 @@ name = "balancify-relay"
 path = "src/main.rs"
 
 [dependencies]
-balancify-core = { path = "../core" }
 balancify-tunnel = { path = "../tunnel" }
+balancify-crypto = { path = "../crypto" }
+
+[features]
+default = []
+# Lab only: compiles the null cipher so the rig can run before the Phase-4
+# handshake/AEAD lands. A release build without it refuses to start.
+lab-crypto = ["balancify-tunnel/lab-crypto"]
+
+[dev-dependencies]
+# Tests exercise the lane end to end, so they need the lab cipher — without
+# leaking the feature into the shipped binary.
+balancify-tunnel = { path = "../tunnel", features = ["lab-crypto"] }

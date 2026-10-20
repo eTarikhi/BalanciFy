@@ -1,0 +1,94 @@
+; Balancify NDIS virtual miniport INF — HVCI-ready, test-signing, S15
+; For attestation signing, HLK HVCI readiness, VBS/MI VM
+; WDK 10.0.22621+, NDIS 6.8, KMDF 1.33, Universal
+
+[Version]
+Signature = "$WINDOWS NT$"
+Class = Net
+ClassGuid = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider = %Provider%
+DriverVer = 10/20/2026,0.2.0
+CatalogFile = balancify.cat
+PnpLockdown = 1
+DriverPackageType = Universal
+DriverPackageDisplayName = %Balancify%
+; HVCI compatible: /integritycheck, /DYNAMICBASE, /NXCOMPAT, /Qspectre, NonPagedPoolNx, PoolTag BlaB
+
+[Manufacturer]
+%Provider% = Balancify, NTamd64, NTarm64
+
+[Balancify.NTamd64]
+%Balancify% = Balancify.ndi, ROOT\Balancify
+
+[Balancify.NTarm64]
+%Balancify% = Balancify.ndi, ROOT\Balancify
+
+[Balancify.ndi]
+Characteristics = 0x1 ; NCF_VIRTUAL
+*IfType = 53 ; IF_TYPE_PROP_VIRTUAL
+*MediaType = 0 ; NdisMedium802_3
+*PhysicalMediaType = 0
+AddReg = Balancify.reg, Balancify.Hvci.reg
+CopyFiles = Balancify.CopyFiles
+
+[Balancify.reg]
+HKR, Ndi, Service, 0, "Balancify"
+HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange, 0, "ethernet"
+HKR, Ndi\Params\Mtu, ParamDesc, 0, %Mtu%
+HKR, Ndi\Params\Mtu, Type, 0, "int"
+HKR, Ndi\Params\Mtu, Default, 0, "1440"
+HKR, Ndi\Params\Mtu, Min, 0, "576"
+HKR, Ndi\Params\Mtu, Max, 0, "9000"
+HKR, Ndi\Params\Mtu, Step, 0, "1"
+
+[Balancify.Hvci.reg]
+; No RWX, no executable pools, NonPagedPoolNx via NDIS NormalPoolPriority
+HKR, , HvciEnabled, 0x00010001, 1
+
+[Balancify.CopyFiles]
+balancify.sys
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+balancify.sys = 1,,
+
+[DestinationDirs]
+Balancify.CopyFiles = 12 ; drivers
+
+[Balancify.ndi.Services]
+AddService = Balancify, 2, Balancify.Service, Balancify.EventLog
+
+[Balancify.Service]
+DisplayName = %BalancifyService%
+Description = %BalancifyServiceDesc%
+ServiceType = 1 ; SERVICE_KERNEL_DRIVER
+StartType = 3 ; SERVICE_DEMAND_START
+ErrorControl = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %12%\balancify.sys
+LoadOrderGroup = NDIS
+AddReg = Balancify.Service.AddReg
+
+[Balancify.Service.AddReg]
+HKR, Parameters, MajorNdisVersion, 0x00010001, 6
+HKR, Parameters, MinorNdisVersion, 0x00010001, 80 ; NDIS 6.80
+HKR, Parameters\Wdf, VerifierOn, 0x00010001, 0
+HKR, Parameters\Wdf, VerboseOn, 0x00010001, 0
+; HVCI: PoolTag BlaB, NonPagedPoolNx, /integritycheck, /DYNAMICBASE, /NXCOMPAT, /Qspectre
+
+[Balancify.EventLog]
+AddReg = Balancify.EventLog.AddReg
+
+[Balancify.EventLog.AddReg]
+HKR, , EventMessageFile, 0x00020000, "%%SystemRoot%%\System32\netevent.dll"
+HKR, , TypesSupported, 0x00010001, 7
+
+[Strings]
+Provider = "Balancify"
+Balancify = "Balancify Virtual Adapter"
+BalancifyService = "Balancify NDIS Virtual Miniport"
+BalancifyServiceDesc = "Balancify multi-WAN bonding+load balancing virtual adapter, self-contained, no third-party kernel component (C2), HVCI-ready S15"
+Mtu = "MTU"
+DiskName = "Balancify Installation Disk"

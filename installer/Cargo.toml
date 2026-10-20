@@ -1,0 +1,9 @@
+[package]
+name = "balancify-installer"
+version = "0.1.0"
+edition = "2021"
+description = "Balancify transactional installer (journaled, atomic rollback)"
+
+[[bin]]
+name = "balancify-installer"
+path = "src/main.rs"
