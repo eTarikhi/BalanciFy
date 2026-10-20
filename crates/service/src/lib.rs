@@ -1056,7 +1056,12 @@ impl<C: Crypto + Clone> Service<C> {
                 Err(message) => Response::Error { status: ipc::Status::BadRequest, message },
             },
             Request::RemoveFlowRule { id } => {
-                if self.rules.remove(id) {
+                if id < balancify_core::FIRST_CUSTOM_RULE_ID {
+                    Response::Error {
+                        status: ipc::Status::BadRequest,
+                        message: format!("rule id {id} is reserved for built-in rules"),
+                    }
+                } else if self.rules.remove(id) {
                     Response::Ack
                 } else {
                     Response::Error { status: ipc::Status::BadRequest, message: format!("no rule {id}") }
@@ -1193,6 +1198,12 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     fn apply_rule(&mut self, rule: ipc::FlowRule) -> Result<(), String> {
+        if rule.id < balancify_core::FIRST_CUSTOM_RULE_ID {
+            return Err(format!(
+                "rule id {} is reserved for built-in rules",
+                rule.id
+            ));
+        }
         let class = match rule.class {
             ipc::CLASS_BULK => FlowClass::Bulk,
             ipc::CLASS_LATENCY_SENSITIVE => FlowClass::LatencySensitive,
@@ -1790,6 +1801,36 @@ mod tests {
     }
 
     #[test]
+    fn ipc_cannot_mutate_reserved_builtin_rule_ids() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        let dns_flow = FlowKey::new(17, sa(53000), peer(53));
+        assert_eq!(s.rules().classify(&dns_flow, None), FlowClass::LatencySensitive);
+
+        let attempted_override = ipc::FlowRule {
+            id: 1,
+            name: "replace-built-in-dns".to_string(),
+            class: ipc::CLASS_BULK,
+            pinned_uplink: 0,
+            priority: 1,
+            proto: 17,
+            port_start: 53,
+            port_end: 53,
+            duplicate: false,
+        };
+        assert!(matches!(
+            s.handle(ipc::Request::SetFlowRule(attempted_override), now),
+            ipc::Response::Error { status: ipc::Status::BadRequest, .. }
+        ));
+        assert!(matches!(
+            s.handle(ipc::Request::RemoveFlowRule { id: 1 }, now),
+            ipc::Response::Error { status: ipc::Status::BadRequest, .. }
+        ));
+        assert_eq!(s.rules().classify(&dns_flow, None), FlowClass::LatencySensitive);
+        assert!(s.rules().rules().iter().any(|rule| rule.id == 1 && rule.name == "dns"));
+    }
+
+    #[test]
     fn ipc_rule_edits_reach_the_classifier() {
         let now = Instant::now();
         let mut s = ready_service(now);
@@ -1797,7 +1838,7 @@ mod tests {
         assert_eq!(s.rules().classify(&flow, None), FlowClass::Bulk);
 
         let rule = ipc::FlowRule {
-            id: 900,
+            id: balancify_core::FIRST_CUSTOM_RULE_ID,
             name: "pin-8443".to_string(),
             class: ipc::CLASS_PINNED,
             pinned_uplink: 1,
@@ -1820,29 +1861,29 @@ mod tests {
             ..rule.clone()
         };
         assert_eq!(s.handle(ipc::Request::SetFlowRule(updated), now), ipc::Response::Ack);
-        assert_eq!(s.rules().rules().iter().filter(|r| r.id == 900).count(), 1);
-        assert_eq!(s.rules().rules().iter().find(|r| r.id == 900).unwrap().name, "pin-8443-updated");
+        assert_eq!(s.rules().rules().iter().filter(|r| r.id == balancify_core::FIRST_CUSTOM_RULE_ID).count(), 1);
+        assert_eq!(s.rules().rules().iter().find(|r| r.id == balancify_core::FIRST_CUSTOM_RULE_ID).unwrap().name, "pin-8443-updated");
         assert_eq!(s.rules().classify(&flow, None), FlowClass::Pinned(UplinkId(0)));
         let actions = s.send_app_packet(&flow, None, b"updated", now);
         assert_eq!(sends(&actions), vec![UplinkId(0)]);
 
         // invalid input is rejected, not half-applied
-        let inverted = ipc::FlowRule { id: 901, port_start: 100, port_end: 10, ..rule.clone() };
+        let inverted = ipc::FlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID + 1, port_start: 100, port_end: 10, ..rule.clone() };
         assert!(matches!(
             s.handle(ipc::Request::SetFlowRule(inverted), now),
             ipc::Response::Error { status: ipc::Status::BadRequest, .. }
         ));
-        let unknown = ipc::FlowRule { id: 902, class: 77, ..rule.clone() };
+        let unknown = ipc::FlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID + 2, class: 77, ..rule.clone() };
         assert!(matches!(
             s.handle(ipc::Request::SetFlowRule(unknown), now),
             ipc::Response::Error { status: ipc::Status::BadRequest, .. }
         ));
-        assert!(!s.rules().rules().iter().any(|r| r.id == 901 || r.id == 902));
+        assert!(!s.rules().rules().iter().any(|r| r.id == balancify_core::FIRST_CUSTOM_RULE_ID + 1 || r.id == balancify_core::FIRST_CUSTOM_RULE_ID + 2));
 
-        assert_eq!(s.handle(ipc::Request::RemoveFlowRule { id: 900 }, now), ipc::Response::Ack);
+        assert_eq!(s.handle(ipc::Request::RemoveFlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID }, now), ipc::Response::Ack);
         assert_eq!(s.rules().classify(&flow, None), FlowClass::Bulk);
         assert!(matches!(
-            s.handle(ipc::Request::RemoveFlowRule { id: 900 }, now),
+            s.handle(ipc::Request::RemoveFlowRule { id: balancify_core::FIRST_CUSTOM_RULE_ID }, now),
             ipc::Response::Error { .. }
         ));
     }

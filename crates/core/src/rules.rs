@@ -11,6 +11,9 @@ use std::net::SocketAddr;
 
 use crate::placement::{FlowClass, FlowKey, UplinkId};
 
+/// Rule identifiers below this value are reserved for built-in curated rules.
+pub const FIRST_CUSTOM_RULE_ID: u32 = 1_000;
+
 /// Inclusive destination-port range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortRange {
