@@ -14,7 +14,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - Wintun fallback ADR-0009 (feature-gated, exception file check, raw FFI placeholder)
 - Installer transactional (journaled, 7 steps, reverse rollback, dry-run, tests)
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
-- Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. Concurrency is capped at 16, and idle unsubscribed clients are closed after 60 seconds. Production named-pipe authentication remains pending.
+- Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
 - Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; still source-only, with NDIS initialization incomplete and WDK/Verifier validation pending.
 - ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
