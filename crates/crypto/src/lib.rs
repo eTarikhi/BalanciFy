@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(rx.counters().delivered, 0);
         assert_eq!(rx.counters().auth_failed, 1, "and the refusal is visible in telemetry");
         assert_eq!(rx.counters().dropped, 1);
-        assert_eq!(rx.sessions(), 1, "the session was opened, then the frame was rejected");
+        assert_eq!(rx.sessions(), 0, "an unauthenticated frame cannot allocate a session");
     }
 
     #[test]
