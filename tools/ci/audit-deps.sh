@@ -101,7 +101,7 @@ else
     note "a release build of balancify-relay refuses to start (exit 2)"
 fi
 
-echo "5/5  the driver control device is not world-writable"
+echo "5/5  driver control access and injected-packet lifetime are guarded"
 IOCTL=driver/src/ioctl.c
 if grep -Eq 'FILE_ANY_ACCESS|SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R' "$IOCTL"; then
     bad "$IOCTL contains world-accessible device permissions or FILE_ANY_ACCESS"
@@ -117,7 +117,16 @@ done
 if ! grep -q '#define IOCTL_BALANCIFY_GET_STATS .*FILE_READ_ACCESS' "$IOCTL"; then
     bad "$IOCTL must require FILE_READ_ACCESS for GET_STATS"
 fi
-[ "$fail" -eq 0 ] && note "SYSTEM/Admin ACL and per-operation IOCTL access bits are enforced"
+if ! grep -Fq 'NdisMoveMemory(packetCopy, inputBuffer, inputBufferLength)' "$IOCTL"; then
+    bad "$IOCTL must copy METHOD_BUFFERED input before indicating an NBL"
+fi
+if grep -Fq 'NdisAllocateMdl(adapter->miniportAdapterHandle, inputBuffer' "$IOCTL"; then
+    bad "$IOCTL must not let an indicated NBL reference the short-lived request buffer"
+fi
+if ! grep -Fq 'NdisFreeMemory(context->packetBuffer, context->packetLength, 0)' driver/src/miniport.c; then
+    bad "MiniportReturnNetBufferLists must release each owned injected packet copy"
+fi
+[ "$fail" -eq 0 ] && note "privileged ACL, operation access bits, and deferred packet-buffer ownership are enforced"
 
 if [ "$fail" -ne 0 ]; then
     echo

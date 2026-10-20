@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
-Date: 2026-10-19
-Status: in progress, continuous development
+Date: 2026-10-20
+Status: in progress; software work continues, hardware gates remain pending
 
 ## Completed since last green (39191895800)
 
@@ -14,6 +14,9 @@ Status: in progress, continuous development
 - Wintun fallback ADR-0009 (feature-gated, exception file check, raw FFI placeholder)
 - Installer transactional (journaled, 7 steps, reverse rollback, dry-run, tests)
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
+- Service IPC v1 loopback adapter now handles requests and rate-limited event push; event framing tests pass, concurrency capped at 16. Production named-pipe authentication remains pending.
+- Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
+- Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; still source-only, with NDIS initialization incomplete and WDK/Verifier validation pending.
 - ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
 - Software benchmark + benches (throughput.rs local work rate/per-call latency only; drr-bench, pacing-bench, crypto-bench). Real network performance and G3/G4 acceptance remain pending.
 - SBOM + clean-machine test docs (sbom.sh SPDX 3.0, clean-machine-test.md offline bundle, rollback, HVCI trio)
@@ -21,10 +24,9 @@ Status: in progress, continuous development
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
 
-1. **Driver WDF control device + IOCTLs**: create WDFDEVICE in MiniportInitializeEx, implement `src/ioctl.c` with minimal IOCTLs (set MTU, inject NBL, query stats), length-validated, fuzzed same gate as tunnel. Build with WDK 10.0.22621+, test-signed install on Hyper-V VM with Driver Verifier.
-2. **S2b socket test through miniport**: same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path — service sends through miniport, relay receives, reorder, deliver.
-3. **Cargo.lock**: generate with `cargo generate-lockfile` once toolchain available, commit, audit checks lock file if present.
-4. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
+1. **Complete and build the driver source**: replace the NULL `NdisMSetMiniportAttributes` call with valid NDIS general attributes, finish control-device teardown/adapter lifetime handling, and build x64 + ARM64 using WDK 10.0.22621+ (not available in this sandbox).
+2. **S2b socket test through miniport**: only after a successful WDK build, run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on a test-signed Hyper-V VM with Driver Verifier and Memory Integrity configured.
+3. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 
 ## Next for G3 (gate: performance + HVCI)
 
@@ -42,9 +44,10 @@ Status: in progress, continuous development
 
 ## Known gaps (deliberate)
 
-- No Cargo.lock (toolchain not reachable in sandbox, crates.io blocked, only github/pypi/npm allowed) — must be generated first time toolchain available.
-- Simulated paths are not netem — S2c real measurements pending.
-- Miniport not in loop — driver is functional stub, not yet WDF control device.
+- `Cargo.lock` is committed and checked by the dependency audit.
+- Simulated paths are not netem — S2c/Rig B measurements remain pending; raw iperf3 link baselines are not end-to-end BalanciFy measurements.
+- Miniport source is not operational: NDIS attributes are not yet registered, and no WDK build/test-signed install/Verifier run has been completed.
+- The local service adapter uses loopback TCP only; production named-pipe ACLs and Windows caller authentication remain pending.
 - Single session per service default — multi-session demux exists but service opens one session unless per-flow/per-class toggled.
 - Flow-level capacity now counts flow packets + probes, but no explicit FlowData ACK.
 
