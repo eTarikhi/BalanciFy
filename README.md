@@ -28,6 +28,8 @@ Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/
 | 5 Hardening | **STARTED** — ETW 200/201/300/400/401/402/500/600, support bundle per-path ECN/delay + failover, relay ECN stats, driver WDF control + NBL pool, app relay & bundle + failover & soak, ECN bench, ETW uplink/bond, flow ACK, per-flow retx, flow ACK+driver S2b, HVCI+SBOM docs, driver packaging vcxproj+INF+README, installer SBOM sidecar, netem-rig safe dry-run + explicit live mode + analyze.py, soak harness, failover convergence tracking, throughput failover profile, crypto bench CPU/Gbit, clean-machine test updated |
 | 6-9 | Planned per roadmap rev 2 — G3 packet-path latency/CPU vs targets, G4 acceptance table on Rig B, G5 soak+Verifier+compat matrix, G6 compat matrix+external review, G7 RC+final attestation+SBOM/VEX+rollback drill, G8 GA+winget+status page |
 
+The lab `balancify-client` now fails closed unless a valid relay identity is configured. Its explicitly insecure test mode is debug-build-only and loopback-only; it is not a production packet adapter. See [ADR-0035](docs/decisions/ADR-0035-client-transport-fails-closed.md).
+
 ## Repository layout
 
 ```
