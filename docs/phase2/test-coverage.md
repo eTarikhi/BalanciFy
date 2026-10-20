@@ -36,7 +36,7 @@ Status: continuous, CI green ubuntu+windows
   - ECN: ack_with_ecn FLAG_ECN_CE=0x04
 - e2e: 9 tests (striped_flow_is_reordered_back_across_a_40ms_delay_gap, reinjection_recovers_a_lost_packet_inside_the_hold_cap, unplugging_an_uplink_mid_transfer_keeps_the_stream_alive, flow_level_mode_is_not_held_up_by_the_other_path, duplicate_mode_delivers_each_packet_once, shell_and_service_speak_contract_v1_over_a_stream, secure_handshake_over_real_udp_delivers_encrypted_stream, etc.)
 - fuzz: 6 tests (20k rounds each for datagram and IPC-frame loops, no panic, no invented payload, session and hold caps bound memory, length checks hold, replay cannot manufacture delivery)
-- client: 11 Linux / 10 Windows tests (missing identity fails closed, release builds reject insecure mode, debug lab requires explicit opt-in and loopback, pinned relay resolution, malformed/all-zero key rejection, per-user state-directory override and platform fallback selection)
+- client: 11 Linux / 10 Windows tests (missing identity fails closed, release builds reject insecure mode, debug lab requires explicit opt-in and loopback, pinned relay resolution, malformed/all-zero key rejection, per-user state-directory override, absolute-path validation, and platform fallback selection)
 - app: 0 tests (lab CLI)
 - installer: 4 tests (journaled transactional/dry-run plus required SBOM copy and missing-SBOM rejection)
 - SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
