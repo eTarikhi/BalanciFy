@@ -74,12 +74,26 @@ jobs:
           fi
 
       - run: cargo build --release --workspace
-      - name: validate SPDX inventory generation against locked graph
-        run: sh tools/ci/sbom.sh 0.1.0
-      - name: validate SPDX 2.3 document structure
+      - name: generate and validate SPDX 2.3 inventory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 -m pip install --disable-pip-version-check --no-input spdx-tools==0.8.5
-          python3 -m spdx_tools.spdx.clitools.pyspdxtools --infile sbom.spdx.json
+          LOG="$RUNNER_TEMP/sbom-validation.log"
+          if ! {
+            python3 -m pip install --disable-pip-version-check --no-input spdx-tools==0.8.5 &&
+            sh tools/ci/sbom.sh 0.1.0 &&
+            python3 -m spdx_tools.spdx.clitools.pyspdxtools --infile sbom.spdx.json
+          } >"$LOG" 2>&1; then
+            cat "$LOG"
+            SUMMARY="$(printf '### SPDX 2.3 generation/validation failed\n```\n%s\n```\n' "$(tail -n 200 "$LOG")")"
+            CRID=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "Rust workspace tests (ubuntu)") | .id][0] // empty' || true)
+            if [ -n "$CRID" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=SPDX 2.3 validation failed" -f "output[summary]=$SUMMARY" || true
+            fi
+            exit 1
+          fi
+          cat "$LOG"
 
   core-tests-windows:
     name: Rust workspace tests (windows)
