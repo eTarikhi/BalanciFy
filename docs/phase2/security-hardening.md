@@ -1,7 +1,7 @@
 # Security hardening — what is done, what remains
 
-Date: 2026-10-19
-Status: continuous, 215+ tests green
+Date: 2026-10-20
+Status: continuous; latest CI green on Ubuntu and Windows
 
 ## Done
 
@@ -19,7 +19,7 @@ Status: continuous, 215+ tests green
 - **Tampered input refused** (Sec.9.1b): under real AEAD, flipping any bit of frame's body or tag is refused and counted, nothing reaches inner stack (tunnel + service tests)
 - **Fuzz gate over untrusted-input paths** (Sec.4.7.4): 6 seeded, dependency-free generators (20k rounds each for datagram and IPC-frame loops): no panic, no invented payload, session and hold caps bound memory, length checks hold, replay cannot manufacture delivery
 - **Wintun fallback exception** (Sec.11.2): feature wintun-fallback, exception file check, raw FFI placeholder, flow-level only, must be retired next minor release, audit allows only when exception file exists (ADR-0009)
-- **ETW logging + support bundle redacted** (Sec.8.2, Sec.9.2): EtwProvider stub, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths+per_path, JSON redacted (no destinations, only counters, hashed flow keys)
+- **ETW logging + support bundle redacted** (Sec.8.2, Sec.9.2): EtwProvider stub, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths+per_path. Support-bundle JSON escapes strings and includes counters, uplink and per-path diagnostics, but never the configured relay endpoint; it reports only `relay_configured` plus aggregate failover counts.
 
 ## Remaining for Phase 4 / G3
 

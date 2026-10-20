@@ -1,11 +1,22 @@
 # Continuous development log — without stopping to report
 
-Date: 2026-10-19
-Status: continuous, CI green
+Date: 2026-10-20
+Status: continuous; latest CI green on Ubuntu and Windows
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
 This log records what was done while continuing without stopping, after ADR-0015.
+
+## Continuation (2026-10-20)
+
+- `7920e4a test service telemetry snapshots for IPC` — centralized warning + counter event composition in Service and tested the IPC payload. CI 39426255171 passed.
+- `5751d43 close idle unsubscribed IPC clients` — impose a 60-second idle limit for unsubscribed lab clients; retain long-lived event subscriptions. CI 39426687493 passed.
+- `93dc6ff refresh IPC coverage notes` and `5e15a4b document responsive service loop` — synchronized roadmap/test coverage with implemented behavior.
+- `a548fc2 keep the service dispatcher responsive to IPC` — make lab UDP sockets nonblocking so two-path polling cannot block IPC dispatch for up to 200ms. CI 39427278094 passed.
+- `6c1f19f redact relay endpoints from support bundles` — expose relay presence only, with a regression test proving that the relay address and port do not appear in the exported JSON. CI 39431889338 passed.
+- `0d0a580 serialize complete redacted support diagnostics` — serialize full counters, uplinks and per-path congestion measurements; add JSON string escaping and tests for control characters. CI 39432345360 passed.
+
+The latest CI also includes Ubuntu/Windows workspace tests, release build, lab safety tests, and dependency-policy audit. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
 ## Commits since last green 39209903149 (ADR-0020)
 
