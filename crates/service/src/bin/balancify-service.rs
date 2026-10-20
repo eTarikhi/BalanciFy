@@ -72,8 +72,10 @@ fn main() -> std::io::Result<()> {
     // Simulate two uplinks with bound sockets
     let sock0 = UdpSocket::bind("0.0.0.0:0")?;
     let sock1 = UdpSocket::bind("0.0.0.0:0")?;
-    sock0.set_read_timeout(Some(Duration::from_millis(100)))?;
-    sock1.set_read_timeout(Some(Duration::from_millis(100)))?;
+    // Keep the single-threaded service/IPC dispatcher responsive: blocking
+    // reads on both sockets could otherwise stall it for 200 ms per loop.
+    sock0.set_nonblocking(true)?;
+    sock1.set_nonblocking(true)?;
     let addrs = [sock0.local_addr()?, sock1.local_addr()?];
     println!("  uplink sockets: {:?} (simulating Ethernet + Wi-Fi)", addrs);
 
