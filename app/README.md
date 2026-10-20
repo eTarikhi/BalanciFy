@@ -5,7 +5,8 @@ Windows App SDK 2.5.1 NuGet + .NET 10 SDK (`dotnet build`).
 
 The lab CLI in `app/src/main.rs` uses IPC v1 over TCP. The service binary now
 serves request/response messages on `127.0.0.1:5000` by default; override the
-port with `BALANCIFY_IPC_PORT`. This listener refuses non-loopback addresses.
+port with `BALANCIFY_IPC_PORT`. This listener refuses non-loopback addresses
+and caps concurrent local IPC clients at 16.
 It is a development adapter, not a substitute for the production ACL-protected
 Windows named pipe and caller-identity authentication. The lab adapter supports
 v1 event push at the requested capped 1–10 Hz rate; the Home view still exits

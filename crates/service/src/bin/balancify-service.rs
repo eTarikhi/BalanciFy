@@ -14,7 +14,9 @@ use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
 use std::collections::BTreeMap;
 use std::net::{UdpSocket, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {
@@ -220,33 +222,65 @@ fn main() -> std::io::Result<()> {
     }
 }
 
+const MAX_IPC_CLIENTS: usize = 16;
+
 enum IpcCall {
     Request(Request, Sender<Response>),
     PollEvents(Sender<Vec<IpcEvent>>),
+}
+
+struct ActiveIpcClient(Arc<AtomicUsize>);
+
+impl Drop for ActiveIpcClient {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn reserve_ipc_client_slot(active: &AtomicUsize) -> bool {
+    active
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            if count < MAX_IPC_CLIENTS { Some(count + 1) } else { None }
+        })
+        .is_ok()
 }
 
 /// Start the lab TCP adapter on loopback. The actual product transport is an
 /// ACL-protected Windows named pipe; keeping this adapter local-only prevents
 /// accidental exposure of control operations to the LAN.
 fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
-    let port = std::env::var("BALANCIFY_IPC_PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(5000);
+    let port = match std::env::var("BALANCIFY_IPC_PORT") {
+        Ok(value) => value.parse::<u16>().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "BALANCIFY_IPC_PORT must be an integer in 0..=65535",
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotPresent => 5000,
+        Err(error) => return Err(error),
+    };
     let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
     let server = IpcServer::bind_loopback_at(bind_addr)?;
     let local_addr = server.addr();
     let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
+    let active_clients = Arc::new(AtomicUsize::new(0));
 
     std::thread::Builder::new()
         .name("balancify-ipc-accept".to_string())
         .spawn(move || loop {
             if let Some(stream) = server.accept() {
+                if !reserve_ipc_client_slot(&active_clients) {
+                    eprintln!("IPC client limit reached ({MAX_IPC_CLIENTS}); rejecting local connection");
+                    drop(stream);
+                    continue;
+                }
+                let slot = ActiveIpcClient(Arc::clone(&active_clients));
                 let requests = request_tx.clone();
                 let event_requests = request_tx.clone();
                 let _ = std::thread::Builder::new()
                     .name("balancify-ipc-client".to_string())
                     .spawn(move || {
+                        let _slot = slot;
                         let _ = balancify_service::ipc::server::handle_stream_with_events(
                             stream,
                             move |request| {
@@ -288,4 +322,24 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
         out.push(byte);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod ipc_capacity_tests {
+    use super::*;
+
+    #[test]
+    fn local_ipc_worker_slots_are_bounded_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        for _ in 0..MAX_IPC_CLIENTS {
+            assert!(reserve_ipc_client_slot(&active));
+        }
+        assert_eq!(active.load(Ordering::Acquire), MAX_IPC_CLIENTS);
+        assert!(!reserve_ipc_client_slot(&active));
+
+        drop(ActiveIpcClient(Arc::clone(&active)));
+        assert_eq!(active.load(Ordering::Acquire), MAX_IPC_CLIENTS - 1);
+        assert!(reserve_ipc_client_slot(&active));
+        assert_eq!(active.load(Ordering::Acquire), MAX_IPC_CLIENTS);
+    }
 }
