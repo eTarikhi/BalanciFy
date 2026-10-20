@@ -238,27 +238,43 @@ impl Drop for ActiveIpcClient {
 }
 
 fn reserve_ipc_client_slot(active: &AtomicUsize) -> bool {
-    active
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            if count < MAX_IPC_CLIENTS { Some(count + 1) } else { None }
-        })
-        .is_ok()
+    let mut count = active.load(Ordering::Acquire);
+    loop {
+        if count >= MAX_IPC_CLIENTS {
+            return false;
+        }
+        match active.compare_exchange_weak(
+            count,
+            count + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => count = observed,
+        }
+    }
 }
 
 /// Start the lab TCP adapter on loopback. The actual product transport is an
 /// ACL-protected Windows named pipe; keeping this adapter local-only prevents
 /// accidental exposure of control operations to the LAN.
 fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
-    let port = match std::env::var("BALANCIFY_IPC_PORT") {
-        Ok(value) => value.parse::<u16>().map_err(|_| {
-            std::io::Error::new(
+    let port_value = match std::env::var("BALANCIFY_IPC_PORT") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => "5000".to_string(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "BALANCIFY_IPC_PORT must be an integer in 0..=65535",
-            )
-        })?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotPresent => 5000,
-        Err(error) => return Err(error),
+                "BALANCIFY_IPC_PORT must be valid UTF-8",
+            ));
+        }
     };
+    let port = port_value.parse::<u16>().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "BALANCIFY_IPC_PORT must be an integer in 0..=65535",
+        )
+    })?;
     let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
     let server = IpcServer::bind_loopback_at(bind_addr)?;
     let local_addr = server.addr();
