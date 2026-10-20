@@ -669,7 +669,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use balancify_tunnel::{PassThrough, Sender, Sent};
+    use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
 
     #[test]
     fn two_paths_with_delay_gap_reassemble_in_order() {
