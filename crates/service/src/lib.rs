@@ -1080,6 +1080,10 @@ impl<C: Crypto + Clone> Service<C> {
                 self.policy.set_allow_metered(allowed);
                 Response::Ack
             }
+            Request::GetSupportBundle => {
+                let bundle = support::SupportBundle::collect(self, now);
+                Response::SupportBundle(bundle.to_json())
+            }
             Request::SubscribeEvents { interval_hz } => {
                 if interval_hz == 0 || interval_hz > 10 {
                     return Response::Error {
@@ -1770,6 +1774,29 @@ mod tests {
         let after = s.snapshot().view(probe.0).unwrap().rtt;
         assert!(after < before, "an 8 ms probe must pull a 10 ms+ estimate down ({after:?} vs {before:?})");
         assert!(s.snapshot().view(probe.0).unwrap().capacity_bps > 0);
+    }
+
+    #[test]
+    fn ipc_support_bundle_returns_complete_redacted_json_over_the_contract() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        s.set_relays("198.51.100.77:9443".parse().unwrap(), None);
+
+        let response = s.handle(ipc::Request::GetSupportBundle, now);
+        let ipc::Response::SupportBundle(json) = &response else {
+            panic!("expected a support bundle response");
+        };
+        assert!(json.contains("\"counters\":{"));
+        assert!(json.contains("\"uplinks\":[{"));
+        assert!(json.contains("\"per_path\":["));
+        assert!(json.contains("\"relay_configured\":true"));
+        assert!(!json.contains("198.51.100.77"));
+        assert!(!json.contains("9443"));
+
+        let frame = balancify_ipc::frame_response(&response);
+        let (kind, payload, _) = balancify_ipc::decode_frame(&frame).unwrap().unwrap();
+        assert_eq!(kind, balancify_ipc::FrameKind::Response);
+        assert_eq!(balancify_ipc::Response::decode(payload), Some(response));
     }
 
     #[test]

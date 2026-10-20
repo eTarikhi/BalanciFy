@@ -84,8 +84,8 @@ fn main() -> std::io::Result<()> {
             }
         }
         "bundle" => {
-            // Support bundle (Sec.8.2) — redacted, per-path ECN/delay, cwnd, etc.
-            send_request(&mut stream, &Request::GetStatus)?;
+            // Export the service's redacted support diagnostics over IPC v1.
+            send_request(&mut stream, &Request::GetSupportBundle)?;
             if let Some(resp) = recv_response(&mut stream)? {
                 render_bundle(resp);
             }
@@ -309,18 +309,11 @@ fn render_relay(resp: Response) {
 
 fn render_bundle(resp: Response) {
     match resp {
-        Response::Status(s) => {
-            println!("=== Support Bundle (redacted, Sec.8.2, Sec.9.2) ===");
-            println!("Version: {} policy_rev={} rules_rev={} active_flows={}", s.service_version, s.policy_revision, s.rules_revision, s.active_flows);
-            render_counters(&s.counters);
-            println!("Uplinks: {} total, {} eligible", s.uplinks.len(), s.uplinks.iter().filter(|u| u.eligible).count());
-            for u in &s.uplinks {
-                println!("  id={} state={} rtt={}ms loss={} per mille cap={}bps — cwnd/in_flight from support bundle", u.id, u.state, u.rtt_ms, u.loss_permille, u.capacity_bps);
-            }
-            println!("Bundle JSON includes: cwnd/in_flight per uplink, congestion diag loss/ecn/delay+paths, per_path Vec<PathCongestionDiag> cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, rekey diag, relay stats, ETW export, route table, adapter state, version/signing info, redaction (no destinations/content)");
-            println!("Redaction: no destinations, no content, only counters, error codes, hashed flow keys (Sec.9.2)");
+        Response::SupportBundle(json) => {
+            println!("=== Redacted Support Bundle (Sec.8.2, Sec.9.2) ===");
+            println!("{json}");
         }
-        _ => println!("Unexpected: {:?}", resp),
+        _ => println!("Unexpected support-bundle response: {:?}", resp),
     }
 }
 
