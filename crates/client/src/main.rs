@@ -450,6 +450,7 @@ mod tests {
         assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn unix_state_prefers_absolute_xdg_then_home_state_dir() {
         assert_eq!(
