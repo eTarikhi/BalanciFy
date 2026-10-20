@@ -39,7 +39,7 @@ fn main() -> std::io::Result<()> {
                         match recv_event(&mut stream)? {
                             Some(ev) => render_event(ev),
                             None => {
-                                println!("No event arrived before the IPC read timeout; the service currently exposes request/response IPC only.");
+                                println!("No event arrived before the IPC read timeout; the event stream may be idle or disconnected.");
                                 break;
                             }
                         }

@@ -7,9 +7,9 @@ The lab CLI in `app/src/main.rs` uses IPC v1 over TCP. The service binary now
 serves request/response messages on `127.0.0.1:5000` by default; override the
 port with `BALANCIFY_IPC_PORT`. This listener refuses non-loopback addresses.
 It is a development adapter, not a substitute for the production ACL-protected
-Windows named pipe and caller-identity authentication. Event push/subscription
-is not implemented by the lab adapter yet; the CLI reports the idle timeout
-without failing the rest of the Home view.
+Windows named pipe and caller-identity authentication. The lab adapter supports
+v1 event push at the requested capped 1–10 Hz rate; the Home view still exits
+gracefully if its event stream becomes idle or disconnects.
 
 Rules carried from the blueprint (§8):
 - The shell **never** opens sockets or touches the driver; it renders only

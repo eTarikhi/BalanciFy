@@ -5,11 +5,12 @@
 //! exact same binary framing and message encoding as the named-pipe adapter.
 
 use crate::{
-    decode_frame, encode_frame, FrameError, FrameKind, Request, Response, Status,
+    decode_frame, encode_frame, frame_event, Event, FrameError, FrameKind, Request, Response, Status,
     FRAME_HEADER_LEN, MAX_PAYLOAD,
 };
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::time::{Duration, Instant};
 
 /// Lab-only loopback server. The production Windows adapter must enforce the
 /// service's named-pipe ACL and authenticate the connecting Windows identity.
@@ -49,20 +50,47 @@ impl IpcServer {
     }
 }
 
-/// Serve requests until the peer closes the stream. Frames are read exactly,
-/// so TCP fragmentation and multiple requests in a single write are both
-/// handled. Malformed framing or a non-request frame terminates the connection;
-/// malformed request payloads receive `BadRequest` without invoking `handler`.
-pub fn handle_stream<F>(mut stream: TcpStream, mut handler: F) -> io::Result<()>
+/// Serve request/response frames until the peer closes the stream. Framing is
+/// exact, so TCP fragmentation and pipelined requests are supported.
+pub fn handle_stream<F>(stream: TcpStream, handler: F) -> io::Result<()>
 where
     F: FnMut(Request) -> Response,
 {
+    handle_stream_inner(stream, handler, || Vec::new(), false)
+}
+
+/// Serve IPC requests and push subscribed events while the client is idle.
+/// `poll_events` is called at the negotiated subscription rate; event frames
+/// are written on the same connection after the subscription Ack.
+pub fn handle_stream_with_events<F, E>(stream: TcpStream, handler: F, poll_events: E) -> io::Result<()>
+where
+    F: FnMut(Request) -> Response,
+    E: FnMut() -> Vec<Event>,
+{
+    handle_stream_inner(stream, handler, poll_events, true)
+}
+
+fn handle_stream_inner<F, E>(
+    mut stream: TcpStream,
+    mut handler: F,
+    mut poll_events: E,
+    events_enabled: bool,
+) -> io::Result<()>
+where
+    F: FnMut(Request) -> Response,
+    E: FnMut() -> Vec<Event>,
+{
+    const EVENT_READ_POLL: Duration = Duration::from_millis(100);
+    if events_enabled {
+        stream.set_read_timeout(Some(EVENT_READ_POLL))?;
+    }
+    let mut event_interval = None;
+    let mut next_event = Instant::now();
+
     loop {
-        let mut frame = [0u8; FRAME_HEADER_LEN].to_vec();
-        match stream.read_exact(&mut frame) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
-            Err(e) => return Err(e),
+        let mut frame = vec![0u8; FRAME_HEADER_LEN];
+        if !read_header(&mut stream, &mut frame, events_enabled, event_interval, &mut next_event, &mut poll_events)? {
+            return Ok(());
         }
 
         let len = u32::from_be_bytes([frame[2], frame[3], frame[4], frame[5]]) as usize;
@@ -79,7 +107,12 @@ where
             return Err(io::Error::new(io::ErrorKind::InvalidData, "expected one IPC request frame"));
         }
 
-        let response = match Request::decode(payload) {
+        let request = Request::decode(payload);
+        let requested_interval = match request.as_ref() {
+            Some(Request::SubscribeEvents { interval_hz }) => Some(*interval_hz),
+            _ => None,
+        };
+        let response = match request {
             Some(request) => handler(request),
             None => Response::Error {
                 status: Status::BadRequest,
@@ -90,7 +123,55 @@ where
         encode_frame(FrameKind::Response, &response.encode(), &mut out)
             .map_err(frame_error)?;
         stream.write_all(&out)?;
+
+        if let Some(interval_hz) = requested_interval {
+            event_interval = if response == Response::Ack && (1..=10).contains(&interval_hz) {
+                Some(Duration::from_millis(1000 / interval_hz as u64))
+            } else {
+                None
+            };
+            next_event = Instant::now();
+        }
     }
+}
+
+fn read_header<E>(
+    stream: &mut TcpStream,
+    header: &mut [u8],
+    events_enabled: bool,
+    event_interval: Option<Duration>,
+    next_event: &mut Instant,
+    poll_events: &mut E,
+) -> io::Result<bool>
+where
+    E: FnMut() -> Vec<Event>,
+{
+    let mut filled = 0;
+    while filled < header.len() {
+        match stream.read(&mut header[filled..]) {
+            Ok(0) if filled == 0 => return Ok(false),
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated IPC header")),
+            Ok(count) => filled += count,
+            Err(error)
+                if events_enabled
+                    && filled == 0
+                    && (error.kind() == io::ErrorKind::WouldBlock
+                        || error.kind() == io::ErrorKind::TimedOut) =>
+            {
+                if let Some(interval) = event_interval {
+                    let now = Instant::now();
+                    if now >= *next_event {
+                        for event in poll_events() {
+                            stream.write_all(&frame_event(&event))?;
+                        }
+                        *next_event = now + interval;
+                    }
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(true)
 }
 
 fn frame_error(error: FrameError) -> io::Error {
@@ -103,7 +184,7 @@ mod tests {
     use std::net::{Shutdown, TcpListener};
     use std::thread;
 
-    fn read_response(stream: &mut TcpStream) -> Response {
+    fn read_frame_payload(stream: &mut TcpStream, expected_kind: FrameKind) -> Vec<u8> {
         let mut header = [0u8; FRAME_HEADER_LEN];
         stream.read_exact(&mut header).unwrap();
         let len = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
@@ -111,9 +192,13 @@ mod tests {
         frame.resize(FRAME_HEADER_LEN + len, 0);
         stream.read_exact(&mut frame[FRAME_HEADER_LEN..]).unwrap();
         let (kind, payload, consumed) = decode_frame(&frame).unwrap().unwrap();
-        assert_eq!(kind, FrameKind::Response);
+        assert_eq!(kind, expected_kind);
         assert_eq!(consumed, frame.len());
-        Response::decode(payload).unwrap()
+        payload.to_vec()
+    }
+
+    fn read_response(stream: &mut TcpStream) -> Response {
+        Response::decode(&read_frame_payload(stream, FrameKind::Response)).unwrap()
     }
 
     #[test]
@@ -155,6 +240,29 @@ mod tests {
         assert_eq!(read_response(&mut client), Response::Pong { service_version: "test".into() });
         client.shutdown(Shutdown::Write).unwrap();
         assert_eq!(server.join().unwrap(), 3);
+    }
+
+    #[test]
+    fn pushes_event_frames_after_subscription_ack() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_stream_with_events(
+                stream,
+                |_| Response::Ack,
+                || vec![Event::Warning { code: crate::WARN_ALL_PATHS_DOWN }],
+            )
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        client.write_all(&crate::frame_request(&Request::SubscribeEvents { interval_hz: 1 })).unwrap();
+        assert_eq!(read_response(&mut client), Response::Ack);
+        let event = Event::decode(&read_frame_payload(&mut client, FrameKind::Event)).unwrap();
+        assert_eq!(event, Event::Warning { code: crate::WARN_ALL_PATHS_DOWN });
+        client.shutdown(Shutdown::Write).unwrap();
+        server.join().unwrap().unwrap();
     }
 
     #[test]

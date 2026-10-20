@@ -3,14 +3,14 @@
 //!
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
 //! (one per uplink), with secure handshake, pacing, congestion control, rekey,
-//! and dual-relay failover. It also serves IPC v1 request/response messages on
-//! a loopback-only TCP adapter for the lab; production uses an ACL-protected
+//! and dual-relay failover. It also serves IPC v1 request/response and
+//! subscribed event frames on a loopback-only TCP adapter for the lab; production uses an ACL-protected
 //! Windows named pipe. In production, packets come from the NDIS miniport.
 
 use balancify_core::{UplinkId, FlowKey};
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
 use balancify_service::ipc::server::IpcServer;
-use balancify_service::ipc::{Request, Response, Status};
+use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
 use std::collections::BTreeMap;
 use std::net::{UdpSocket, SocketAddr};
@@ -123,9 +123,18 @@ fn main() -> std::io::Result<()> {
 
         // Keep service state on this thread; the socket workers only decode
         // frames and forward requests through the channel.
-        while let Ok((request, reply)) = ipc_calls.try_recv() {
-            let response = svc.handle(request, now);
-            let _ = reply.send(response);
+        while let Ok(call) = ipc_calls.try_recv() {
+            match call {
+                IpcCall::Request(request, reply) => {
+                    let response = svc.handle(request, now);
+                    let _ = reply.send(response);
+                }
+                IpcCall::PollEvents(reply) => {
+                    let mut events = svc.poll_events();
+                    events.push(IpcEvent::Stats(svc.status_snapshot().counters));
+                    let _ = reply.send(events);
+                }
+            }
         }
 
         // Tick every 100ms
@@ -211,7 +220,10 @@ fn main() -> std::io::Result<()> {
     }
 }
 
-type IpcCall = (Request, Sender<Response>);
+enum IpcCall {
+    Request(Request, Sender<Response>),
+    PollEvents(Sender<Vec<IpcEvent>>),
+}
 
 /// Start the lab TCP adapter on loopback. The actual product transport is an
 /// ACL-protected Windows named pipe; keeping this adapter local-only prevents
@@ -231,22 +243,33 @@ fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
         .spawn(move || loop {
             if let Some(stream) = server.accept() {
                 let requests = request_tx.clone();
+                let event_requests = request_tx.clone();
                 let _ = std::thread::Builder::new()
                     .name("balancify-ipc-client".to_string())
                     .spawn(move || {
-                        let _ = balancify_service::ipc::server::handle_stream(stream, |request| {
-                            let (reply_tx, reply_rx) = mpsc::channel();
-                            if requests.send((request, reply_tx)).is_err() {
-                                return Response::Error {
+                        let _ = balancify_service::ipc::server::handle_stream_with_events(
+                            stream,
+                            move |request| {
+                                let (reply_tx, reply_rx) = mpsc::channel();
+                                if requests.send(IpcCall::Request(request, reply_tx)).is_err() {
+                                    return Response::Error {
+                                        status: Status::Unavailable,
+                                        message: "service IPC dispatcher stopped".to_string(),
+                                    };
+                                }
+                                reply_rx.recv().unwrap_or_else(|_| Response::Error {
                                     status: Status::Unavailable,
-                                    message: "service IPC dispatcher stopped".to_string(),
-                                };
-                            }
-                            reply_rx.recv().unwrap_or_else(|_| Response::Error {
-                                status: Status::Unavailable,
-                                message: "service did not return an IPC response".to_string(),
-                            })
-                        });
+                                    message: "service did not return an IPC response".to_string(),
+                                })
+                            },
+                            move || {
+                                let (reply_tx, reply_rx) = mpsc::channel();
+                                if event_requests.send(IpcCall::PollEvents(reply_tx)).is_err() {
+                                    return Vec::new();
+                                }
+                                reply_rx.recv().unwrap_or_default()
+                            },
+                        );
                     });
             } else {
                 std::thread::sleep(Duration::from_millis(10));
