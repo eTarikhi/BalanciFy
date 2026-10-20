@@ -7,7 +7,7 @@ Status: accepted
 
 Two remaining gaps from `docs/phase2/next-steps.md`:
 
-1. **Flow-level ACK**: `CapacityEstimator` had `on_flow_packet` (counts sent flow bytes) and new `on_flow_ack` (counts acked flow bytes) per ADR-0028, but `on_flow_ack` was not yet called from service. PolicyEngine had no wrapper for it. The flow lane (Sec.6.2) is non-striped, not sequenced, not retransmitted, so it had no ACK clock — capacity learned only from send rate + idle probes, less accurate than ACK pacing.
+1. **Flow-level ACK**: `CapacityEstimator` had `on_flow_packet` (counts sent flow bytes) and new `on_flow_ack` (counts acked flow bytes) per ADR-0028, but `on_flow_ack` was not yet called from service. PolicyEngine had no wrapper for it. The flow lane (Sec.6.2) is non-striped, not ordered in the shared Data sequence, and not retransmitted, so it has no ACK clock — capacity learns only from send rate + idle probes, less accurate than ACK pacing. Wire v1 adds a dedicated FlowData nonce/replay sequence, not an ACK sequence.
 
 2. **Driver S2b socket test through miniport**: `driver/src/ioctl.c` INJECT_NBL stub only counted rxPackets/rxBytes, did not allocate NBL/NB/MDL nor call `NdisMIndicateReceiveNetBufferLists`. Miniport had no NBL pool, so real injection via NDIS path was impossible. Blueprint Sec.6.1 TAP-like adapter, Sec.4.5 pause/resume, G2 S2b requires test-signed load with Driver Verifier and packet loopback through miniport.
 

@@ -22,12 +22,12 @@
 //! monotonic `now`, and return what to send. The I/O adapter (bound per-uplink
 //! sockets now, our miniport in Phase 3) is a separate, thin layer (Sec.4.7.4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 /// Wire format revision. Both ends must agree; a mismatch is dropped, not
 /// guessed at (Sec.9.2 "message schema versioned and length-checked").
-pub const WIRE_VERSION: u8 = 0;
+pub const WIRE_VERSION: u8 = 1;
 /// version u8 + kind u8 + path u8 + flags u8 + session u64 + seq u64
 pub const HEADER_LEN: usize = 20;
 
@@ -50,10 +50,10 @@ pub enum FrameKind {
     ProbeReply,
     /// Cumulative acknowledgement: `seq` is the highest contiguous seq seen.
     Ack,
-    /// Flow-level lane: one packet of a flow that is *not* striped. Delivered
-    /// immediately, without sequencing or reordering -- the flow lives on a
-    /// single path, so order is already preserved by that path (Sec.6.2 vs Sec.6.4).
-    /// Payload is the inner packet, forwarded as-is.
+    /// Flow-level lane: one packet of a flow that is *not* striped. It has a
+    /// dedicated per-session sequence for nonce uniqueness and replay rejection,
+    /// but is delivered immediately without cross-path reordering (Sec.6.2 vs
+    /// Sec.6.4). Payload is the inner packet, forwarded as-is.
     FlowData,
 }
 
@@ -233,8 +233,13 @@ pub struct Sender<C: Crypto> {
     drr: DeficitRoundRobin,
     retx: BTreeMap<(u64, u64), RetxEntry>, // (session, seq)
     retx_bytes: usize,
-    /// Per-session sequence counters for per-flow sessions (Sec.4.7.4)
+    /// Ordered Data sequence per session (Sec.4.7.4).
     session_seqs: BTreeMap<u64, u64>,
+    /// FlowData uses an independent sequence lane so these packets cannot leave
+    /// gaps in the ordered Data stream.
+    flow_seqs: BTreeMap<u64, u64>,
+    /// Keepalives also need fresh nonces despite carrying no application data.
+    keepalive_seq: u64,
     /// Paths that just lost a packet, drained by the control plane.
     losses: Vec<u8>,
     stats: BTreeMap<u8, PathStats>,
@@ -249,6 +254,8 @@ impl<C: Crypto> Sender<C> {
     pub fn with_config(session: u64, crypto: C, paths: Vec<(u8, u64)>, cfg: SenderConfig) -> Self {
         let mut seqs = BTreeMap::new();
         seqs.insert(session, 0);
+        let mut flow_seqs = BTreeMap::new();
+        flow_seqs.insert(session, 0);
         Self {
             session,
             next_probe_id: 0,
@@ -258,6 +265,8 @@ impl<C: Crypto> Sender<C> {
             retx: BTreeMap::new(),
             retx_bytes: 0,
             session_seqs: seqs,
+            flow_seqs,
+            keepalive_seq: 0,
             losses: Vec::new(),
             stats: BTreeMap::new(),
             counters: SenderCounters::default(),
@@ -265,9 +274,15 @@ impl<C: Crypto> Sender<C> {
     }
 
     fn next_seq_for(&mut self, session: u64) -> u64 {
-        // Per-session sequence space (ADR-0011): each session has its own counter,
-        // retx keyed by (session, seq). This enables true per-flow session demux.
+        // Per-session ordered Data sequence (ADR-0011).
         let entry = self.session_seqs.entry(session).or_insert(0);
+        let cur = *entry;
+        *entry += 1;
+        cur
+    }
+
+    fn next_flow_seq_for(&mut self, session: u64) -> u64 {
+        let entry = self.flow_seqs.entry(session).or_insert(0);
         let cur = *entry;
         *entry += 1;
         cur
@@ -353,20 +368,20 @@ impl<C: Crypto> Sender<C> {
     }
 
     /// Flow-level lane (Sec.6.2): send one packet of a non-striped flow on a
-    /// specific uplink. Not sequenced and not retransmitted: the flow stays on
-    /// one path, so that path's own ordering is enough, and cross-path
-    /// reordering must not be able to delay it.
+    /// specific uplink. It has a per-session FlowData sequence for nonce and
+    /// replay safety, but is not retransmitted or ordered with the Data lane.
     pub fn send_flow(&mut self, plain: &[u8], path: u8, _now: Instant) -> Option<Sent> {
         self.send_flow_with_session(plain, path, self.session, _now)
     }
 
     pub fn send_flow_with_session(&mut self, plain: &[u8], path: u8, session: u64, _now: Instant) -> Option<Sent> {
         if !self.paths().contains(&path) { return None; }
-        let bytes = self.frame_with_session(FrameKind::FlowData, path, session, 0, 0, plain);
+        let seq = self.next_flow_seq_for(session);
+        let bytes = self.frame_with_session(FrameKind::FlowData, path, session, seq, 0, plain);
         self.counters.flow_packets += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
-        Some(Sent { path, seq: 0, session, kind: FrameKind::FlowData, bytes })
+        Some(Sent { path, seq, session, kind: FrameKind::FlowData, bytes })
     }
 
     pub fn send_with_session(&mut self, plain: &[u8], session: u64, now: Instant) -> Option<Sent> {
@@ -384,11 +399,14 @@ impl<C: Crypto> Sender<C> {
         Some(Sent { path, seq, session, kind: FrameKind::Data, bytes })
     }
 
-    /// Per-path NAT keepalive (Sec.6.6). Consumes no sequence number.
+    /// Per-path NAT keepalive (Sec.6.6). Uses its own nonce sequence, separate
+    /// from ordered application Data.
     pub fn keepalive(&mut self, path: u8) -> Sent {
-        let bytes = self.frame(FrameKind::Keepalive, path, 0, 0, &[]);
+        let seq = self.keepalive_seq;
+        self.keepalive_seq += 1;
+        let bytes = self.frame(FrameKind::Keepalive, path, seq, 0, &[]);
         self.counters.keepalives += 1;
-        Sent { path, seq: 0, session: self.session, kind: FrameKind::Keepalive, bytes }
+        Sent { path, seq, session: self.session, kind: FrameKind::Keepalive, bytes }
     }
 
     /// Health / capacity probe (Sec.6.5 probes are tunnel control messages;
@@ -691,6 +709,8 @@ pub enum Event {
     Dropped { reason: DropReason },
 }
 
+const FLOW_REPLAY_WINDOW: u64 = 1024;
+
 #[derive(Debug, Clone)]
 pub struct ReceiverConfig {
     /// Reorder hold cap (Sec.6.4 rule 3: gap + 10 ms, hard cap proposed 80 ms).
@@ -731,6 +751,8 @@ struct SessionState {
     buf: ReorderBuffer,
     last_acked: Option<u64>,
     reported_ooo: u64,
+    flow_seen: BTreeSet<u64>,
+    highest_flow_seq: Option<u64>,
     last_activity: Instant,
     /// Path the last frame for this session arrived on; used for the ACK and
     /// for cap-expiry releases that happen on a timer tick.
@@ -770,6 +792,8 @@ impl<C: Crypto> Receiver<C> {
                 buf: ReorderBuffer::new(self.cfg.hold_cap),
                 last_acked: None,
                 reported_ooo: 0,
+                flow_seen: BTreeSet::new(),
+                highest_flow_seq: None,
                 last_activity: now,
                 last_path: 0,
             });
@@ -786,17 +810,7 @@ impl<C: Crypto> Receiver<C> {
         match hdr.kind {
             FrameKind::Keepalive => { self.counters.keepalives += 1; Vec::new() }
             FrameKind::Ack | FrameKind::ProbeReply => Vec::new(),
-            FrameKind::FlowData => match self.crypto.open(hdr.path, hdr.seq, &dg[..HEADER_LEN], body) {
-                Some(data) => {
-                    self.counters.delivered += 1;
-                    vec![Event::Payload { session: hdr.session, path: hdr.path, data }]
-                }
-                None => {
-                    self.counters.auth_failed += 1;
-                    self.counters.dropped += 1;
-                    vec![Event::Dropped { reason: DropReason::AuthFailed }]
-                }
-            },
+            FrameKind::FlowData => self.ingest_flow_data(hdr, &dg[..HEADER_LEN], body, now),
             FrameKind::Probe => {
                 self.counters.probes += 1;
                 vec![Event::ProbeEcho { session: hdr.session, path: hdr.path, seq: hdr.seq }]
@@ -843,6 +857,40 @@ impl<C: Crypto> Receiver<C> {
             .collect();
         for id in &stale { self.sessions.remove(id); }
         stale
+    }
+
+    fn ingest_flow_data(&mut self, hdr: Header, header_bytes: &[u8], body: &[u8], now: Instant) -> Vec<Event> {
+        if !self.sessions.contains_key(&hdr.session) {
+            if !self.cfg.auto_accept || self.sessions.len() >= self.cfg.max_sessions {
+                self.counters.dropped += 1;
+                let reason = if self.cfg.auto_accept { DropReason::SessionLimit } else { DropReason::UnknownSession };
+                return vec![Event::Dropped { reason }];
+            }
+            self.open_session(hdr.session, now);
+        }
+        let Some(plain) = self.crypto.open(hdr.path, hdr.seq, header_bytes, body) else {
+            self.counters.auth_failed += 1;
+            self.counters.dropped += 1;
+            return vec![Event::Dropped { reason: DropReason::AuthFailed }];
+        };
+
+        let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
+        state.last_activity = now;
+        state.last_path = hdr.path;
+        if state.highest_flow_seq
+            .map_or(false, |highest| hdr.seq < highest.saturating_sub(FLOW_REPLAY_WINDOW - 1))
+            || !state.flow_seen.insert(hdr.seq)
+        {
+            self.counters.duplicates += 1;
+            return Vec::new();
+        }
+        state.highest_flow_seq = Some(state.highest_flow_seq.map_or(hdr.seq, |seq| seq.max(hdr.seq)));
+        if let Some(highest) = state.highest_flow_seq {
+            let oldest = highest.saturating_sub(FLOW_REPLAY_WINDOW - 1);
+            state.flow_seen.retain(|seq| *seq >= oldest);
+        }
+        self.counters.delivered += 1;
+        vec![Event::Payload { session: hdr.session, path: hdr.path, data: plain }]
     }
 
     fn ingest_data(&mut self, hdr: Header, header_bytes: &[u8], body: &[u8], now: Instant) -> Vec<Event> {
@@ -942,7 +990,7 @@ mod tests {
 
     #[test]
     fn every_frame_kind_roundtrips() {
-        for kind in [FrameKind::Data, FrameKind::Keepalive, FrameKind::Probe, FrameKind::ProbeReply, FrameKind::Ack] {
+        for kind in [FrameKind::Data, FrameKind::Keepalive, FrameKind::Probe, FrameKind::ProbeReply, FrameKind::Ack, FrameKind::FlowData] {
             let mut buf = Vec::new();
             Header::new(kind, 7, 9, 1234).encode(&mut buf);
             let (d, _) = Header::decode(&buf).unwrap();
@@ -1204,10 +1252,12 @@ mod tests {
         let t0 = Instant::now();
         s.send(b"data".as_ref(), t0).unwrap();
         let k = s.keepalive(0);
+        let k2 = s.keepalive(0);
         let p = s.probe(0, 64);
         let r = s.probe_reply(0, p.seq);
         let a = s.ack(0, 0);
-        for f in [&k, &p, &r, &a] {
+        assert_ne!(k.seq, k2.seq, "successive keepalives must not reuse a nonce");
+        for f in [&k, &k2, &p, &r, &a] {
             let (h, _) = Header::decode(&f.bytes).unwrap();
             assert_ne!(h.kind, FrameKind::Data);
         }
@@ -1217,6 +1267,24 @@ mod tests {
         let (ph, pbody) = Header::decode(&p.bytes).unwrap();
         assert_eq!(ph.kind, FrameKind::Probe);
         assert_eq!(pbody.len(), 64, "probe padding is the granted probe size");
+    }
+
+    #[test]
+    fn flow_data_has_a_nonce_sequence_without_gapping_data_and_rejects_replay() {
+        let t0 = Instant::now();
+        let mut tx = Sender::new(51, PassThrough, vec![(0, 1000)]);
+        let flow0 = tx.send_flow(b"flow-0", 0, t0).unwrap();
+        let flow1 = tx.send_flow(b"flow-1", 0, t0).unwrap();
+        let data = tx.send(b"ordered", t0).unwrap();
+        assert_eq!((flow0.seq, flow1.seq), (0, 1));
+        assert_eq!(data.seq, 0, "FlowData does not create a missing Data sequence");
+
+        let mut rx = Receiver::with_defaults(PassThrough);
+        assert!(rx.ingest(&flow0.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow-0")));
+        assert!(rx.ingest(&flow0.bytes, t0).is_empty(), "a replay is not delivered twice");
+        assert!(rx.ingest(&flow1.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow-1")));
+        assert!(rx.ingest(&data.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"ordered")));
+        assert_eq!(rx.counters().duplicates, 1);
     }
 
     #[test]
@@ -1337,13 +1405,17 @@ mod tests {
         let mut s = Sender::new(31, PassThrough, vec![(0, 1000)]);
         let t0 = Instant::now();
         let f = s.send(b"x".as_ref(), t0).unwrap();
+        let flow = s.send_flow(b"flow", 0, t0).unwrap();
 
         let cfg = ReceiverConfig { auto_accept: false, ..ReceiverConfig::default() };
         let mut rx = Receiver::new(PassThrough, cfg);
         assert_eq!(rx.ingest(&f.bytes, t0), vec![Event::Dropped { reason: DropReason::UnknownSession }]);
+        assert_eq!(rx.ingest(&flow.bytes, t0), vec![Event::Dropped { reason: DropReason::UnknownSession }]);
         assert!(rx.open_session(31, t0));
         let events = rx.ingest(&f.bytes, t0);
         assert!(events.iter().any(|e| matches!(e, Event::Payload { .. })));
+        let flow_events = rx.ingest(&flow.bytes, t0);
+        assert!(flow_events.iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow")));
     }
 
     #[test]

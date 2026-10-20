@@ -60,7 +60,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 - **Support bundle (ADR-0022):** `support/mod.rs` `per_path Vec<PathCongestionDiag>` cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, JSON includes new fields, test `bundle_includes_per_path_ecn_delay`
 
 #### Crypto (balancify-crypto) — 36 tests
-- **AEAD (ADR-0006):** `TunnelCipher` ChaCha20Poly1305 0.11.0, nonce separated by path/seq/salt/key, header bound as AAD, 16B tag only overhead, 8 tests
+- **AEAD (ADR-0006):** `TunnelCipher` ChaCha20Poly1305 0.11.0, wire-v1 nonce separated by frame kind/path/seq/salt/key, header bound as AAD, 16B tag only overhead, 10 crypto unit tests
 - **Handshake (ADR-0007):** Noise_IK `-> e, es, s, ss` / `<- e, ee, se`, X25519 2.0.1, BLAKE2s 0.10.6, HKDF 0.12.4, 12 tests: same keys, pinned identity, every byte auth, prologue binds context, initiator static encrypted, fresh ephemeral → fresh session, out-of-order refused, truncations refused, pinning enforced, replay cache
 - **Key Management (ADR-0008):** StaticKeypair, Ephemeral zeroized on drop, PinnedKeys, OS RNG getrandom 0.2.15 distinct, memory/file store, zeroize 1.8.1
 - **Replay (Sec.11.4):** ReplayCache 5 tests

@@ -16,18 +16,19 @@
 //! counter that could be lost or reset:
 //!
 //! ```text
-//! nonce = salt[3] || path[1] || seq_be[8]          (12 bytes, RFC 8439 Sec.4)
+//! nonce = (salt[0] XOR frame-kind)[1] || salt[1..3] || path[1] || seq_be[8]
 //! ```
 //!
-//! * `seq` is the tunnel's per-session sequence number. The sender increments it
-//!   once per frame and never resets it, so two frames of one session cannot
-//!   collide. Reinjections and duplicate-mode copies reuse the *same* sequence
-//!   number -- which is exactly right, because they carry the same plaintext and
-//!   must produce the same ciphertext.
-//! * `path` separates the uplinks of one session. It is redundant for uniqueness
-//!   (the sequence space is shared) but it means a frame copied onto another
-//!   path fails to open, so path-swapping is detected rather than silently
-//!   accepted.
+//! * `seq` is unique within a frame-kind lane and session. Data frames use the
+//!   ordered stream sequence; FlowData, keepalive, and probe lanes have their
+//!   own counters. Reinjections and duplicate-mode copies reuse the *same*
+//!   sequence number because they carry the same plaintext and must produce the
+//!   same ciphertext.
+//! * `frame-kind` domain-separates those independent sequence spaces. Without
+//!   this, a FlowData sequence zero could reuse a Data or keepalive nonce.
+//! * `path` separates the uplinks of one session and means a frame copied onto
+//!   another path fails to open, so path-swapping is detected rather than
+//!   silently accepted.
 //! * `salt` separates sessions, so two sessions under one long-term key never
 //!   share a nonce even if their sequence counters start at the same value.
 //!
@@ -111,8 +112,14 @@ impl TunnelCipher {
     /// The nonce for one frame. Exposed because nonce uniqueness is the whole
     /// security argument and deserves a direct test.
     pub fn nonce_for(salt: [u8; SALT_LEN], path: u8, seq: u64) -> [u8; NONCE_LEN] {
+        Self::nonce_for_kind(salt, path, seq, 0)
+    }
+
+    /// Domain-separated nonce for the wire frame kind in the authenticated header.
+    pub fn nonce_for_kind(salt: [u8; SALT_LEN], path: u8, seq: u64, kind: u8) -> [u8; NONCE_LEN] {
         let mut nonce = [0u8; NONCE_LEN];
         nonce[..SALT_LEN].copy_from_slice(&salt);
+        nonce[0] ^= kind;
         nonce[SALT_LEN] = path;
         nonce[SALT_LEN + 1..].copy_from_slice(&seq.to_be_bytes());
         nonce
@@ -121,8 +128,9 @@ impl TunnelCipher {
     /// The same nonce in the cipher's own fixed-width type. `None` only if the
     /// length constant above ever stops matching the cipher's, which the test
     /// suite pins.
-    fn typed_nonce(&self, path: u8, seq: u64) -> Option<Nonce> {
-        Nonce::try_from(Self::nonce_for(self.salt, path, seq).as_slice()).ok()
+    fn typed_nonce(&self, path: u8, seq: u64, aad: &[u8]) -> Option<Nonce> {
+        let kind = *aad.get(1)?;
+        Nonce::try_from(Self::nonce_for_kind(self.salt, path, seq, kind).as_slice()).ok()
     }
 
     /// A salt folded from a session id, for the lab and for tests.
@@ -162,7 +170,7 @@ impl TunnelCipher {
 
 impl Crypto for TunnelCipher {
     fn seal(&self, path: u8, seq: u64, aad: &[u8], plain: &[u8], out: &mut Vec<u8>) {
-        let Some(nonce) = self.typed_nonce(path, seq) else { return; };
+        let Some(nonce) = self.typed_nonce(path, seq, aad) else { return; };
         let sealed = self.inner.encrypt(&nonce, Payload { msg: plain, aad });
         if let Ok(ciphertext) = sealed {
             out.extend_from_slice(&ciphertext);
@@ -170,7 +178,7 @@ impl Crypto for TunnelCipher {
     }
 
     fn open(&self, path: u8, seq: u64, aad: &[u8], cipher: &[u8]) -> Option<Vec<u8>> {
-        let nonce = self.typed_nonce(path, seq)?;
+        let nonce = self.typed_nonce(path, seq, aad)?;
         self.inner.decrypt(&nonce, Payload { msg: cipher, aad }).ok()
     }
 
@@ -263,6 +271,33 @@ mod tests {
         assert!(other_session.open(0, 7, &header, &sealed).is_none(), "another session's salt must not open it");
         let wrong_key = TunnelCipher::new(&[0x00u8; KEY_LEN], SALT).expect("key");
         assert!(wrong_key.open(0, 7, &header, &sealed).is_none(), "another key must not open it");
+    }
+
+    #[test]
+    fn frame_kind_domain_separates_independent_sequence_lanes() {
+        let data = TunnelCipher::nonce_for_kind(SALT, 0, 0, 0);
+        let flow = TunnelCipher::nonce_for_kind(SALT, 0, 0, 5);
+        let keepalive = TunnelCipher::nonce_for_kind(SALT, 0, 0, 1);
+        assert_ne!(data, flow);
+        assert_ne!(data, keepalive);
+        assert_ne!(flow, keepalive);
+    }
+
+    #[test]
+    fn frame_kind_is_in_the_nonce_domain_and_authenticated_header() {
+        let c = cipher();
+        let data_header = [0u8; HEADER_LEN];
+        let mut flow_header = [0u8; HEADER_LEN];
+        flow_header[1] = 5;
+        let mut data_sealed = Vec::new();
+        let mut flow_sealed = Vec::new();
+        c.seal(0, 0, &data_header, b"same", &mut data_sealed);
+        c.seal(0, 0, &flow_header, b"same", &mut flow_sealed);
+        assert_ne!(data_sealed, flow_sealed);
+        assert_eq!(c.open(0, 0, &data_header, &data_sealed).as_deref(), Some(&b"same"[..]));
+        assert_eq!(c.open(0, 0, &flow_header, &flow_sealed).as_deref(), Some(&b"same"[..]));
+        assert!(c.open(0, 0, &data_header, &flow_sealed).is_none());
+        assert!(c.open(0, 0, &flow_header, &data_sealed).is_none());
     }
 
     #[test]

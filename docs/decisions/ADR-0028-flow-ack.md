@@ -5,7 +5,7 @@ Status: accepted
 
 ## Context
 
-Capacity estimation (Sec.6.3) has two sources: (a) tunnel ACK pacing while loaded, (b) bounded idle probes while idle (64 KiB/min, 5s cadence). Flow-level lane (Sec.6.2) is non-striped, not sequenced, not retransmitted, so it had no ACK clock — it learned capacity only from `on_flow_packet` counting sent bytes into window_bytes, plus idle probes.
+Capacity estimation (Sec.6.3) has two sources: (a) tunnel ACK pacing while loaded, (b) bounded idle probes while idle (64 KiB/min, 5s cadence). Flow-level lane (Sec.6.2) is non-striped, not ordered in the shared Data sequence, and not retransmitted, so it has no ACK clock — it learns capacity only from `on_flow_packet` counting sent bytes into window_bytes, plus idle probes. Wire v1 adds a dedicated FlowData nonce/replay sequence, not an ACK sequence.
 
 Previously, `CapacityEstimator::on_flow_packet` counted flow packets when sent, not when acked, so capacity estimate was based on send rate, not ACK clock, less accurate.
 
@@ -16,7 +16,7 @@ Previously, `CapacityEstimator::on_flow_packet` counted flow packets when sent, 
   - `on_flow_packet(bytes, now)`: when flow packet sent, counts into window_bytes, rolls, notes traffic (suppresses idle probe) — existing
   - `on_flow_ack(bytes, now)`: when flow-level ACK arrives (explicit FlowData ACK or via probe reply), counts into window_bytes, rolls — new
   - `note_traffic(now)`: traffic suppresses idle probe — existing
-- Service integration: in `ingest_path`, when `FrameKind::FlowData`? Currently FlowData is not sequenced and not acked, but we can treat any payload from flow-level as implicit ACK for capacity? For now, `on_flow_packet` is called on send, `on_flow_ack` can be called on explicit ACK if added later. For now, `on_flow_ack` is available for future explicit FlowData ACK.
+- Service integration: `on_flow_packet` is still called on send; the wire-v1 FlowData sequence currently provides nonce uniqueness and replay rejection only. An explicit FlowData ACK and corresponding `on_flow_ack` call remain a later step.
 - Also fix non-ASCII Sec. markers in all crates (app, installer, core, relay, tunnel, ipc, client, crypto, service) — replace Sec., --, -, ..., ', ", *, ->, <-, <=, >=, -, <-> to avoid Rust 2021 prefix errors (previous CI failures 39232571739, 39233028939)
 - Tests: existing capacity tests still pass, no new failure
 

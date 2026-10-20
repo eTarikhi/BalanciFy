@@ -1,6 +1,6 @@
 # ADR-0003 — Tunnel wire v0: explicit frame kinds, reinjection, FlowData
 
-**Status:** Accepted (Phase 2/3 lab wire) · **Related:** ADR-0002, blueprint §6.4–§6.6
+**Status:** Accepted; wire v1 is current (2026-10-20) · **Related:** ADR-0002, ADR-0006, blueprint §6.4–§6.6
 
 ## Context
 
@@ -17,16 +17,18 @@ that never asked to be bonded.
 
 ## Decision
 
-1. **Wire v0 header, 20 bytes:** `version u8 | kind u8 | path u8 | flags u8 |
+1. **Wire v1 header, 20 bytes:** `version u8 | kind u8 | path u8 | flags u8 |
    session u64 | seq u64`. `version` is checked; an unknown version or kind is
    dropped, never guessed at (§9.2 "schema versioned and length-checked").
+   Version 1 domain-separates AEAD nonces by frame kind and must not interoperate
+   with the initial v0 nonce construction.
 2. **Frame kinds:** `Data` (sequenced, striped, reordered), `Keepalive`,
    `Probe`, `ProbeReply`, `Ack` (cumulative), `FlowData`.
-3. **`FlowData` is the flow-level lane (§6.2):** delivered immediately, not
-   sequenced, not retransmitted, not reordered. A flow that rides one uplink is
-   already ordered by that uplink; the inner TCP handles residual reordering.
-   This is what keeps flow-level traffic from paying a bonded-traffic latency
-   tax, and it is the lane a class falls back to under §6.4 rule 6.
+3. **`FlowData` is the flow-level lane (§6.2):** uses an independent per-session
+   sequence for nonce uniqueness and a bounded replay window, but is delivered
+   immediately, not retransmitted, and not reordered with `Data`. A flow that
+   rides one uplink is already ordered by that uplink; the inner TCP handles
+   residual reordering. This avoids both nonce reuse and bonded-traffic latency.
 4. **Reinjection:** the sender keeps a bounded retransmission window (proposed
    4 MiB), reinjects a packet that is unacknowledged past the RTO (proposed
    120 ms) on a *different* path, at most once per packet. Reinjection is
@@ -44,12 +46,14 @@ that never asked to be bonded.
 
 - The lane can carry health, keepalive and capacity signalling without a second
   protocol or an ICMP dependency.
-- Sequence numbers are only consumed by `Data`, so control traffic cannot open
-  gaps in the data stream.
+- Sequence spaces are separated by frame kind in the AEAD nonce; Data ordering,
+  FlowData replay protection, keepalives, and probes do not create gaps in one
+  another's counters. A version bump makes the nonce-domain change explicit.
 - The receiver needs session state (cap, idle eviction, verify-first), which is
   also the seam where the Phase-4 handshake plugs in.
-- v0 is a **lab wire**: it is not interoperable with anything and will change
-  when the handshake lands. No compatibility promise is made.
+- v0 was a lab wire. Current v1 remains an in-development contract; no
+  compatibility promise is made before a release, and unknown versions are
+  rejected rather than guessed.
 
 ## Rejected alternatives
 
