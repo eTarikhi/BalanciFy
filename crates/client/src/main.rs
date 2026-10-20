@@ -93,6 +93,51 @@ fn resolve_relay_public(
     }
 }
 
+fn choose_state_dir(
+    override_dir: Option<std::path::PathBuf>,
+    windows_local_app_data: Option<std::path::PathBuf>,
+    xdg_state_home: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+    is_windows: bool,
+) -> Result<std::path::PathBuf, std::io::Error> {
+    if let Some(path) = override_dir {
+        if path.as_os_str().is_empty() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "BALANCIFY_STATE_DIR cannot be empty"));
+        }
+        return Ok(path);
+    }
+    if is_windows {
+        if let Some(path) = windows_local_app_data {
+            return Ok(path.join("Balancify"));
+        }
+        return home
+            .map(|path| path.join("AppData").join("Local").join("Balancify"))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA or USERPROFILE is required"));
+    }
+    if let Some(path) = xdg_state_home.filter(|path| path.is_absolute()) {
+        return Ok(path.join("balancify"));
+    }
+    home.map(|path| path.join(".local").join("state").join("balancify"))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "XDG_STATE_HOME or HOME is required"))
+}
+
+fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
+    let override_dir = std::env::var_os("BALANCIFY_STATE_DIR").map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let windows_local_app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let windows_local_app_data = None;
+    #[cfg(not(windows))]
+    let xdg_state_home = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let xdg_state_home = None;
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    choose_state_dir(override_dir, windows_local_app_data, xdg_state_home, home, cfg!(windows))
+}
+
 fn validate_lab_target(mode: ConnectionMode, relay_addr: SocketAddr) -> Result<(), std::io::Error> {
     if mode == ConnectionMode::InsecureLab && !relay_addr.ip().is_loopback() {
         return Err(std::io::Error::new(
@@ -137,20 +182,9 @@ fn main() -> std::io::Result<()> {
         .unwrap_or(10);
 
     // Load or generate client static keypair
-    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
-        #[cfg(windows)]
-        {
-            std::env::var("ProgramData")
-                .map(|pd| format!("{}\\Balancify", pd))
-                .unwrap_or_else(|_| "/tmp/balancify_client".to_string())
-        }
-        #[cfg(not(windows))]
-        {
-            "/tmp/balancify_client".to_string()
-        }
-    });
-    let secret_path = std::path::Path::new(&state_dir).join("client_secret.key");
-    let pinned_path = std::path::Path::new(&state_dir).join("pinned_relays.keys");
+    let state_dir = default_state_dir()?;
+    let secret_path = state_dir.join("client_secret.key");
+    let pinned_path = state_dir.join("pinned_relays.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
     let keypair = store.load_or_generate().map_err(|e| {
         std::io::Error::other(format!("failed to load or persist client identity: {e}"))
@@ -377,6 +411,66 @@ mod tests {
         assert_eq!(
             resolve_relay_public(None, &PinnedKeys::from_iter([[0; 32]])).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn state_dir_override_has_highest_precedence() {
+        let chosen = choose_state_dir(
+            Some("/custom/state".into()),
+            Some("/local/app".into()),
+            Some("/xdg".into()),
+            Some("/home/user".into()),
+            false,
+        ).unwrap();
+        assert_eq!(chosen, std::path::PathBuf::from("/custom/state"));
+    }
+
+    #[test]
+    fn windows_state_prefers_per_user_local_app_data() {
+        let chosen = choose_state_dir(
+            None,
+            Some("C:/Users/test/AppData/Local".into()),
+            None,
+            Some("C:/Users/test".into()),
+            true,
+        ).unwrap();
+        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+    }
+
+    #[test]
+    fn windows_state_falls_back_to_user_profile_not_program_data() {
+        let chosen = choose_state_dir(
+            None,
+            None,
+            None,
+            Some("C:/Users/test".into()),
+            true,
+        ).unwrap();
+        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+    }
+
+    #[test]
+    fn unix_state_prefers_absolute_xdg_then_home_state_dir() {
+        assert_eq!(
+            choose_state_dir(None, None, Some("/run/user/1000/state".into()), Some("/home/test".into()), false).unwrap(),
+            std::path::PathBuf::from("/run/user/1000/state/balancify")
+        );
+        assert_eq!(
+            choose_state_dir(None, None, Some("relative".into()), Some("/home/test".into()), false).unwrap(),
+            std::path::PathBuf::from("/home/test/.local/state/balancify")
+        );
+    }
+
+    #[test]
+    fn state_dir_rejects_empty_override_and_missing_home() {
+        assert_eq!(
+            choose_state_dir(Some(std::path::PathBuf::new()), None, None, None, false).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            choose_state_dir(None, None, None, None, false).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
         );
     }
 

@@ -12,7 +12,7 @@ The lab CLI could silently fall back to a predictable zero-key `TunnelCipher` wh
 - Use the first stored relay pin when `BALANCIFY_RELAY_PUBLIC_KEY` is unset. If the variable is set, require valid non-zero 32-byte hex and require it to match a stored pin whenever pins exist.
 - Refuse startup when no authenticated relay identity is configured, unless `--insecure-lab` is explicitly requested.
 - Permit `--insecure-lab` only in debug builds and only for loopback relay addresses. Label this mode as insecure and test-only.
-- Treat key-store and pin-store errors as fatal; never replace a failed persistent identity with a newly generated ephemeral identity.
+- Treat key-store and pin-store errors as fatal; never replace a failed persistent identity with a newly generated ephemeral identity. Store client keys under `%LOCALAPPDATA%\Balancify` on Windows and `$XDG_STATE_HOME/balancify` (or `$HOME/.local/state/balancify`) on Unix, with `BALANCIFY_STATE_DIR` as an explicit override; do not place persistent identities under shared `ProgramData` or `/tmp` by default.
 - In secure mode, handshake timeout, unexpected source/framing, and authentication errors are fatal. Never resume with the dummy cipher.
 
 ## Consequences
@@ -23,7 +23,7 @@ The lab CLI could silently fall back to a predictable zero-key `TunnelCipher` wh
 
 ## Validation
 
-- Unit tests cover secure/default mode selection, debug-only lab opt-in, loopback restriction, malformed/zero relay keys, and pin matching.
+- Unit tests cover secure/default mode selection, debug-only lab opt-in, loopback restriction, malformed/zero relay keys, pin matching, and per-user state-directory precedence/fallbacks.
 - CI must pass on Ubuntu and Windows before this ADR is considered implemented.
 
 ## References
