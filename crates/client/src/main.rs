@@ -203,7 +203,7 @@ fn main() -> std::io::Result<()> {
     validate_lab_target(mode, relay_addr)?;
     let relay_public = relay_public.unwrap_or([0; 32]);
 
-    println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir, relay_addr, count);
+    println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir.display(), relay_addr, count);
     println!("  client public: {:02x?}...", &keypair.public_bytes()[..8]);
 
     // Create service core with dummy TunnelCipher, will be replaced after handshake
