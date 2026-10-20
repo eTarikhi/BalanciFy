@@ -16,6 +16,8 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `6c1f19f redact relay endpoints from support bundles` — expose relay presence only, with a regression test proving that the relay address and port do not appear in the exported JSON. CI 39431889338 passed.
 - `0d0a580 serialize complete redacted support diagnostics` — serialize full counters, uplinks and per-path congestion measurements; add JSON string escaping and tests for control characters. CI 39432345360 passed.
 - `8b61140 write key files through private unique temporaries` — replace predictable `.tmp` writes with collision-resistant sibling files opened using `create_new`, set mode 0600 at creation on Unix, sync before rename, and cover pre-created symlink behavior. CI 39433158496 passed.
+- `bd5ccec enable DPAPI for Windows key storage by default` — activate the first-party DPAPI wrapper in normal Windows builds, add raw-key migration coverage, and extend the policy audit. CI 39433909156 passed, including Windows tests.
+- `6749a0a zeroize plaintext key-store temporaries` and `5c23d1d zeroize temporary copies of stored secrets` — wipe DPAPI plaintext allocations, migration buffers, and temporary secret copies; audit the source guard. CI 39434291882 and 39434898635 passed.
 
 The latest CI also includes Ubuntu/Windows workspace tests, release build, lab safety tests, and dependency-policy audit. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
@@ -30,15 +32,14 @@ The latest CI also includes Ubuntu/Windows workspace tests, release build, lab s
 - `054481e docs: ADR-0022 support bundle per-path` — documented per-path diag.
 - `9084d95 docs: ADR-0023 relay ECN echo stats` — documented relay ECN stats.
 
-## Current CI
+## CI status at original snapshot
 
-- Last green 39234937199 (ADR-0023) — ubuntu+windows+audits success, 214+ tests (now 215 with bundle test), benches compile, docs.
+- The original ADR-0023 snapshot was green at run 39234937199. For later CI runs, see the continuation entry above.
 
 ## Next (still without stopping)
 
-- Driver WDF control device + IOCTLs (`driver/src/ioctl.c`) — create WDFDEVICE in MiniportInitializeEx, minimal IOCTLs (set MTU, inject NBL, query stats), length-validated, fuzzed same gate as tunnel, build with WDK 10.0.22621+, test-signed install on Hyper-V VM with Driver Verifier
-- S2b socket test through miniport — same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path
-- Cargo.lock generation — `cargo generate-lockfile` once toolchain available, commit, audit checks lock file if present
+- Driver validation remains blocked on WDK/Windows hardware: resolve NDIS adapter initialization and lifecycle, build x64/ARM64, then test-signed install, Driver Verifier/HVCI, and S2b socket path. Do not report the driver operational before those gates pass.
+- Cargo.lock is present and audited; regenerate only for an intentional pinned-dependency change.
 - Real netem S2c — replace simulated rig with `tools/lab/netem-rig.sh` profiles, record 10 reps median/p95/spread per Sec.10.1
 - Throughput rows on Rig B — run `throughput.rs` + iperf3 on real hardware, secure mode, pacing 80% capacity, per-flow off/on, measure aggregate/single-flow/failover/added delay (target <=3ms) + CPU/Gbit/s via crypto-bench + ETW
 - Driver packaging — bundle self-contained .NET 10 + WinAppSDK runtimes, transactional installer with atomic rollback, clean-machine offline test
