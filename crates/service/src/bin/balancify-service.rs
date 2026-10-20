@@ -131,7 +131,7 @@ fn main() -> std::io::Result<()> {
                 }
                 IpcCall::PollEvents(reply) => {
                     let mut events = svc.poll_events();
-                    events.push(IpcEvent::Stats(svc.status_snapshot().counters));
+                    events.push(IpcEvent::Stats(svc.counters().into()));
                     let _ = reply.send(events);
                 }
             }
