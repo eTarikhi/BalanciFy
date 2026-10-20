@@ -1,6 +1,9 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from sbom import build_document
+from sbom import build_document, write_atomic
 
 
 class SbomGenerationTests(unittest.TestCase):
@@ -93,6 +96,15 @@ class SbomGenerationTests(unittest.TestCase):
     def test_refuses_metadata_without_resolved_graph(self):
         with self.assertRaisesRegex(ValueError, "resolved dependency graph"):
             build_document({"workspace_members": [], "packages": [], "resolve": None})
+
+    def test_atomic_writer_creates_a_parseable_spdx_document(self):
+        document = build_document(self.metadata, namespace="https://example.test/spdx/test")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "sbom.spdx.json"
+            write_atomic(output, document)
+            parsed = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(parsed["spdxVersion"], "SPDX-2.3")
+            self.assertFalse(list(Path(directory).glob("*.tmp")))
 
 
 if __name__ == "__main__":
