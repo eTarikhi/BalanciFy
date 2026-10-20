@@ -1812,6 +1812,20 @@ mod tests {
         let actions = s.send_app_packet(&flow, None, b"data", now);
         assert_eq!(sends(&actions), vec![UplinkId(1)], "a pin is a placement, not a hint");
 
+        // SetFlowRule is an upsert: editing the same stable id replaces the
+        // prior rule instead of leaving an unreachable duplicate in the list.
+        let updated = ipc::FlowRule {
+            name: "pin-8443-updated".to_string(),
+            pinned_uplink: 0,
+            ..rule.clone()
+        };
+        assert_eq!(s.handle(ipc::Request::SetFlowRule(updated), now), ipc::Response::Ack);
+        assert_eq!(s.rules().rules().iter().filter(|r| r.id == 900).count(), 1);
+        assert_eq!(s.rules().rules().iter().find(|r| r.id == 900).unwrap().name, "pin-8443-updated");
+        assert_eq!(s.rules().classify(&flow, None), FlowClass::Pinned(UplinkId(0)));
+        let actions = s.send_app_packet(&flow, None, b"updated", now);
+        assert_eq!(sends(&actions), vec![UplinkId(0)]);
+
         // invalid input is rejected, not half-applied
         let inverted = ipc::FlowRule { id: 901, port_start: 100, port_end: 10, ..rule.clone() };
         assert!(matches!(
