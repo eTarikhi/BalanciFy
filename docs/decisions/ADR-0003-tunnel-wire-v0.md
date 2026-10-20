@@ -41,6 +41,10 @@ that never asked to be bonded.
 7. **Hold-cap release needs a timer tick.** `Receiver::drain(now)` is part of
    the contract: without it, a flow whose missing packet never returns stalls
    until the peer happens to send again.
+8. **Authenticate control before side effects.** ACK, probe, probe reply, and
+   keepalive frames must pass AEAD verification, session checks, and a bounded
+   per-kind replay window before they can update liveness, RTT, congestion, or
+   capacity state. ECN marks are applied only after frame authentication.
 
 ## Consequences
 
