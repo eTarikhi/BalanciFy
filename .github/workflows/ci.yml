@@ -72,6 +72,13 @@ jobs:
           fi
 
       - run: cargo build --release --workspace
+      # Temporary regeneration artifact while the committed lockfile is
+      # reconciled with the manifests; remove after Cargo.lock is refreshed.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resolved-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
 
   core-tests-windows:
     name: Rust workspace tests (windows)
