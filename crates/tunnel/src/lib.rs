@@ -25,9 +25,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-/// Wire format revision. Both ends must agree; a mismatch is dropped, not
-/// guessed at (Sec.9.2 "message schema versioned and length-checked").
-pub const WIRE_VERSION: u8 = 1;
+/// Wire format revision. Version 2 adds the selective FlowAck frame kind;
+/// both ends must agree and mismatches are dropped rather than guessed at
+/// (Sec.9.2 "message schema versioned and length-checked").
+pub const WIRE_VERSION: u8 = 2;
 /// version u8 + kind u8 + path u8 + flags u8 + session u64 + seq u64
 pub const HEADER_LEN: usize = 20;
 
@@ -55,6 +56,8 @@ pub enum FrameKind {
     /// but is delivered immediately without cross-path reordering (Sec.6.2 vs
     /// Sec.6.4). Payload is the inner packet, forwarded as-is.
     FlowData,
+    /// Selective acknowledgement for one frame in the independent FlowData lane.
+    FlowAck,
 }
 
 impl FrameKind {
@@ -66,6 +69,7 @@ impl FrameKind {
             FrameKind::ProbeReply => 3,
             FrameKind::Ack => 4,
             FrameKind::FlowData => 5,
+            FrameKind::FlowAck => 6,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -76,6 +80,7 @@ impl FrameKind {
             3 => FrameKind::ProbeReply,
             4 => FrameKind::Ack,
             5 => FrameKind::FlowData,
+            6 => FrameKind::FlowAck,
             _ => return None,
         })
     }
@@ -88,8 +93,8 @@ pub struct Header {
     pub path: u8,
     pub flags: u8,
     pub session: u64,
-    /// Data: packet sequence. Ack: highest contiguous seq. Probe/ProbeReply:
-    /// probe id (echoed). Keepalive: unused (0).
+    /// Data: packet sequence. Ack: highest contiguous seq. FlowAck: acknowledged
+    /// FlowData sequence. Probe/ProbeReply: probe id (echoed). Keepalive: unused (0).
     pub seq: u64,
 }
 
@@ -202,6 +207,7 @@ pub struct SenderCounters {
     pub probes: u64,
     pub bytes_sealed: u64,
     pub retx_evictions: u64,
+    pub flow_ack_evictions: u64,
 }
 
 /// One emitted frame: what to write, and where.
@@ -222,6 +228,11 @@ struct RetxEntry {
     session: u64,
 }
 
+struct FlowAckEntry {
+    path: u8,
+    bytes: usize,
+}
+
 /// Sender: numbers packets, selects the egress path per packet (Sec.6.4 rule 2),
 /// keeps a bounded retransmission window and reinjects on loss (Sec.6.4 rule 5).
 /// Retransmission is keyed by (session, seq) per Sec.4.7.4 ADR-0011.
@@ -238,6 +249,9 @@ pub struct Sender<C: Crypto> {
     /// FlowData uses an independent sequence lane so these packets cannot leave
     /// gaps in the ordered Data stream.
     flow_seqs: BTreeMap<u64, u64>,
+    /// Bounded send-side byte accounting for authenticated selective FlowAck.
+    flow_pending: BTreeMap<(u64, u64), FlowAckEntry>,
+    flow_pending_bytes: usize,
     /// Keepalives also need fresh nonces despite carrying no application data.
     keepalive_seq: u64,
     /// Paths that just lost a packet, drained by the control plane.
@@ -266,6 +280,8 @@ impl<C: Crypto> Sender<C> {
             retx_bytes: 0,
             session_seqs: seqs,
             flow_seqs,
+            flow_pending: BTreeMap::new(),
+            flow_pending_bytes: 0,
             keepalive_seq: 0,
             losses: Vec::new(),
             stats: BTreeMap::new(),
@@ -293,6 +309,7 @@ impl<C: Crypto> Sender<C> {
     pub fn paths(&self) -> Vec<u8> { self.drr.paths() }
     pub fn counters(&self) -> SenderCounters { self.counters }
     pub fn retx_bytes(&self) -> usize { self.retx_bytes }
+    pub fn flow_pending_bytes(&self) -> usize { self.flow_pending_bytes }
     /// Paths on which a packet was just declared lost, drained. The control
     /// plane feeds these to the per-path congestion controller (Sec.6.4 rule 4).
     pub fn drain_losses(&mut self) -> Vec<u8> { std::mem::take(&mut self.losses) }
@@ -313,17 +330,30 @@ impl<C: Crypto> Sender<C> {
                 self.retx_bytes = self.retx_bytes.saturating_sub(e.plain.len());
             }
         }
+        let stale_flow: Vec<(u64, u64)> = self
+            .flow_pending
+            .iter()
+            .filter(|(_, entry)| entry.path == path)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in &stale_flow {
+            if let Some(entry) = self.flow_pending.remove(key) {
+                self.flow_pending_bytes = self.flow_pending_bytes.saturating_sub(entry.bytes);
+            }
+        }
         self.stats.remove(&path);
-        stale.len() as u64
+        (stale.len() + stale_flow.len()) as u64
     }
 
-    /// Drop the whole retransmission window. Sleep/resume invalidates every
-    /// mapping at once (Sec.4.5); returning the count lets the caller report it.
+    /// Drop the whole retransmission and flow-ack windows. Sleep/resume
+    /// invalidates every mapping at once (Sec.4.5).
     pub fn drop_retx(&mut self) -> u64 {
-        let n = self.retx.len() as u64;
+        let n = self.retx.len() + self.flow_pending.len();
         self.retx.clear();
         self.retx_bytes = 0;
-        n
+        self.flow_pending.clear();
+        self.flow_pending_bytes = 0;
+        n as u64
     }
     pub fn in_flight(&self) -> usize { self.retx.len() }
     pub fn next_seq(&self) -> u64 {
@@ -381,6 +411,7 @@ impl<C: Crypto> Sender<C> {
         self.counters.flow_packets += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
+        self.remember_flow_ack(session, seq, path, plain.len());
         Some(Sent { path, seq, session, kind: FrameKind::FlowData, bytes })
     }
 
@@ -441,6 +472,11 @@ impl<C: Crypto> Sender<C> {
         Sent { path, seq: up_to, session, kind: FrameKind::Ack, bytes }
     }
 
+    pub fn flow_ack_for_session(&self, session: u64, path: u8, up_to: u64) -> Sent {
+        let bytes = self.frame_with_session(FrameKind::FlowAck, path, session, up_to, 0, &[]);
+        Sent { path, seq: up_to, session, kind: FrameKind::FlowAck, bytes }
+    }
+
     pub fn ack_with_ecn(&self, path: u8, up_to: u64) -> Sent {
         self.ack_with_flags(path, up_to, FLAG_ECN_CE)
     }
@@ -496,6 +532,23 @@ impl<C: Crypto> Sender<C> {
         per_path
     }
 
+    /// Apply a selective FlowAck to the independent FlowData sequence lane.
+    /// Returns the acknowledged payload bytes and original uplink for capacity
+    /// accounting. Pending state is bounded independently of retransmission.
+    pub fn on_flow_ack_for_session(&mut self, session: u64, up_to: u64) -> Vec<(u8, u64)> {
+        let Some(entry) = self.flow_pending.remove(&(session, up_to)) else { return Vec::new() };
+        self.flow_pending_bytes = self.flow_pending_bytes.saturating_sub(entry.bytes);
+        vec![(entry.path, entry.bytes as u64)]
+    }
+
+    /// Forget accounting for a FlowData frame that the adapter ultimately did
+    /// not transmit (for example, when the service rate limiter holds it).
+    pub fn forget_flow_ack_for_session(&mut self, session: u64, seq: u64) {
+        if let Some(entry) = self.flow_pending.remove(&(session, seq)) {
+            self.flow_pending_bytes = self.flow_pending_bytes.saturating_sub(entry.bytes);
+        }
+    }
+
     /// Reinjection timer (Sec.6.4 rule 5): packets unacknowledged past the RTO are
     /// re-sent on a *different* path. Returns the frames to emit.
     pub fn reinjections_due(&mut self, now: Instant) -> Vec<Sent> {
@@ -545,6 +598,19 @@ impl<C: Crypto> Sender<C> {
             let Some((_, oldest)) = self.retx.pop_first() else { break; };
             self.retx_bytes = self.retx_bytes.saturating_sub(oldest.plain.len());
             self.counters.retx_evictions += 1;
+        }
+    }
+
+    fn remember_flow_ack(&mut self, session: u64, seq: u64, path: u8, bytes: usize) {
+        if bytes > self.cfg.max_retx_bytes { return; }
+        self.flow_pending_bytes = self.flow_pending_bytes.saturating_add(bytes);
+        self.flow_pending.insert((session, seq), FlowAckEntry { path, bytes });
+        while self.flow_pending_bytes > self.cfg.max_retx_bytes
+            || self.flow_pending.len() > MAX_PENDING_FLOW_ACKS
+        {
+            let Some((_, oldest)) = self.flow_pending.pop_first() else { break; };
+            self.flow_pending_bytes = self.flow_pending_bytes.saturating_sub(oldest.bytes);
+            self.counters.flow_ack_evictions += 1;
         }
     }
 
@@ -702,14 +768,17 @@ pub enum DropReason {
 pub enum Event {
     /// In-order payload for the inner stack.
     Payload { session: u64, path: u8, data: Vec<u8> },
-    /// Send a cumulative ACK for `seq` back on `path`.
+    /// Send a cumulative ACK for the ordered Data lane.
     Ack { session: u64, path: u8, seq: u64 },
+    /// Send a selective ACK for one independent FlowData packet.
+    FlowAck { session: u64, path: u8, seq: u64 },
     /// A probe arrived; echo it with [`Sender::probe_reply`].
     ProbeEcho { session: u64, path: u8, seq: u64 },
     Dropped { reason: DropReason },
 }
 
 const REPLAY_WINDOW: u64 = 1024;
+const MAX_PENDING_FLOW_ACKS: usize = 4096;
 
 #[derive(Default)]
 struct ReplayWindow {
@@ -864,7 +933,7 @@ impl<C: Crypto> Receiver<C> {
         };
         self.counters.frames += 1;
         match hdr.kind {
-            FrameKind::Keepalive | FrameKind::Ack | FrameKind::ProbeReply => {
+            FrameKind::Keepalive | FrameKind::Ack | FrameKind::FlowAck | FrameKind::ProbeReply => {
                 match self.authenticate_control(hdr, &dg[..HEADER_LEN], body, now) {
                     Ok(true) => {
                         if hdr.kind == FrameKind::Keepalive { self.counters.keepalives += 1; }
@@ -904,6 +973,7 @@ impl<C: Crypto> Receiver<C> {
     pub fn reply_for(&self, ev: &Event) -> Option<Vec<u8>> {
         let (kind, session, path, seq) = match *ev {
             Event::Ack { session, path, seq } => (FrameKind::Ack, session, path, seq),
+            Event::FlowAck { session, path, seq } => (FrameKind::FlowAck, session, path, seq),
             Event::ProbeEcho { session, path, seq } => (FrameKind::ProbeReply, session, path, seq),
             _ => return None,
         };
@@ -934,7 +1004,7 @@ impl<C: Crypto> Receiver<C> {
         body: &[u8],
         now: Instant,
     ) -> Result<bool, DropReason> {
-        if !matches!(hdr.kind, FrameKind::Keepalive | FrameKind::Probe | FrameKind::ProbeReply | FrameKind::Ack) {
+        if !matches!(hdr.kind, FrameKind::Keepalive | FrameKind::Probe | FrameKind::ProbeReply | FrameKind::Ack | FrameKind::FlowAck) {
             self.counters.dropped += 1;
             return Err(DropReason::UnknownFrame);
         }
@@ -951,15 +1021,16 @@ impl<C: Crypto> Receiver<C> {
         self.accept_authenticated_session(hdr.session, now);
 
         let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
-        let accepted = if hdr.kind == FrameKind::Ack {
-            if state.last_peer_ack.map_or(false, |last| hdr.seq <= last) {
-                false
-            } else {
-                state.last_peer_ack = Some(hdr.seq);
-                true
+        let accepted = match hdr.kind {
+            FrameKind::Ack => {
+                if state.last_peer_ack.map_or(false, |last| hdr.seq <= last) {
+                    false
+                } else {
+                    state.last_peer_ack = Some(hdr.seq);
+                    true
+                }
             }
-        } else {
-            state.control_replay.entry(hdr.kind.as_u8()).or_default().accept(hdr.seq)
+            _ => state.control_replay.entry(hdr.kind.as_u8()).or_default().accept(hdr.seq),
         };
         if !accepted {
             self.counters.duplicates += 1;
@@ -984,12 +1055,15 @@ impl<C: Crypto> Receiver<C> {
         let state = self.sessions.get_mut(&hdr.session).expect("session accepted above");
         if !state.flow_replay.accept(hdr.seq) {
             self.counters.duplicates += 1;
-            return Vec::new();
+            return vec![Event::FlowAck { session: hdr.session, path: hdr.path, seq: hdr.seq }];
         }
         state.last_activity = now;
         state.last_path = hdr.path;
         self.counters.delivered += 1;
-        vec![Event::Payload { session: hdr.session, path: hdr.path, data: plain }]
+        vec![
+            Event::Payload { session: hdr.session, path: hdr.path, data: plain },
+            Event::FlowAck { session: hdr.session, path: hdr.path, seq: hdr.seq },
+        ]
     }
 
     fn ingest_data(&mut self, hdr: Header, header_bytes: &[u8], body: &[u8], now: Instant) -> Vec<Event> {
@@ -1077,6 +1151,10 @@ mod tests {
         Header::new(FrameKind::Data, 0, 1, 0).encode(&mut buf);
         buf[0] = WIRE_VERSION + 1;
         assert!(Header::decode(&buf).is_none(), "unknown wire version must be dropped, not guessed");
+        let mut legacy = Vec::new();
+        Header::new(FrameKind::Data, 0, 1, 0).encode(&mut legacy);
+        legacy[0] = 1;
+        assert!(Header::decode(&legacy).is_none(), "wire v1 peers must not misinterpret FlowAck-enabled v2 sessions");
         let mut buf = Vec::new();
         Header::new(FrameKind::Data, 0, 1, 0).encode(&mut buf);
         buf[1] = 99;
@@ -1085,7 +1163,7 @@ mod tests {
 
     #[test]
     fn every_frame_kind_roundtrips() {
-        for kind in [FrameKind::Data, FrameKind::Keepalive, FrameKind::Probe, FrameKind::ProbeReply, FrameKind::Ack, FrameKind::FlowData] {
+        for kind in [FrameKind::Data, FrameKind::Keepalive, FrameKind::Probe, FrameKind::ProbeReply, FrameKind::Ack, FrameKind::FlowData, FrameKind::FlowAck] {
             let mut buf = Vec::new();
             Header::new(kind, 7, 9, 1234).encode(&mut buf);
             let (d, _) = Header::decode(&buf).unwrap();
@@ -1376,7 +1454,9 @@ mod tests {
 
         let mut rx = Receiver::with_defaults(PassThrough);
         assert!(rx.ingest(&flow0.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow-0")));
-        assert!(rx.ingest(&flow0.bytes, t0).is_empty(), "a replay is not delivered twice");
+        let replay_events = rx.ingest(&flow0.bytes, t0);
+        assert!(!replay_events.iter().any(|e| matches!(e, Event::Payload { .. })), "a replay is not delivered twice");
+        assert!(replay_events.iter().any(|e| matches!(e, Event::FlowAck { seq: 0, .. })), "a replay elicits the original selective FlowAck");
         assert!(rx.ingest(&flow1.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow-1")));
         assert!(rx.ingest(&data.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"ordered")));
         assert_eq!(rx.counters().duplicates, 1);
@@ -1386,6 +1466,45 @@ mod tests {
         idle_rx.ingest(&flow0.bytes, t0);
         idle_rx.ingest(&flow0.bytes, t0 + Duration::from_secs(30));
         assert_eq!(idle_rx.sweep(t0 + Duration::from_secs(61)), vec![51], "a replay cannot refresh session liveness");
+    }
+
+    #[test]
+    fn flow_ack_is_selective_session_scoped_and_bounded() {
+        let now = Instant::now();
+        let cfg = SenderConfig { max_retx_bytes: 10, ..SenderConfig::default() };
+        let mut tx = Sender::with_config(52, PassThrough, vec![(0, 1000), (1, 1000)], cfg);
+        let a = tx.send_flow_with_session(b"a", 0, 52, now).unwrap();
+        let b = tx.send_flow_with_session(b"bb", 1, 52, now).unwrap();
+        let other_session = tx.send_flow_with_session(b"c", 0, 99, now).unwrap();
+        assert_eq!(tx.flow_pending_bytes(), 4);
+        let mut rx = Receiver::with_defaults(PassThrough);
+        let mut control_rx = Receiver::with_defaults(PassThrough);
+        control_rx.open_session(52, now);
+        let out_of_order = rx.ingest(&b.bytes, now);
+        let ack_b = out_of_order.into_iter().find(|ev| matches!(ev, Event::FlowAck { seq: 1, .. })).expect("independent FlowData packet can be acked immediately");
+        let ack_b_bytes = rx.reply_for(&ack_b).expect("FlowAck reply encoded");
+        let (ack_b_header, _) = Header::decode(&ack_b_bytes).expect("valid reply frame");
+        assert_eq!(ack_b_header.kind, FrameKind::FlowAck);
+        assert_eq!(control_rx.verify_control_frame(&ack_b_bytes, now), Ok(true));
+        assert_eq!(tx.on_flow_ack_for_session(ack_b_header.session, ack_b_header.seq), vec![(1, 2)]);
+
+        let events = rx.ingest(&a.bytes, now);
+        let ack_a = events.into_iter().find(|ev| matches!(ev, Event::FlowAck { seq: 0, .. })).expect("second packet acknowledged independently");
+        let ack_a_bytes = rx.reply_for(&ack_a).expect("FlowAck reply encoded");
+        let (ack_a_header, _) = Header::decode(&ack_a_bytes).expect("valid reply frame");
+        assert_eq!(control_rx.verify_control_frame(&ack_a_bytes, now), Ok(true));
+        assert_eq!(tx.on_flow_ack_for_session(ack_a_header.session, ack_a_header.seq), vec![(0, 1)]);
+        assert_eq!(tx.flow_pending_bytes(), 1, "an ACK in session 52 cannot release session 99 state");
+        assert_eq!(tx.on_flow_ack_for_session(99, other_session.seq), vec![(0, 1)]);
+        assert_eq!(tx.flow_pending_bytes(), 0);
+        assert_eq!(control_rx.verify_control_frame(&ack_a_bytes, now), Ok(false), "FlowAck replay is rejected");
+
+        let bounded_cfg = SenderConfig { max_retx_bytes: 2, ..SenderConfig::default() };
+        let mut bounded = Sender::with_config(53, PassThrough, vec![(0, 1000)], bounded_cfg);
+        for _ in 0..5 { let _ = bounded.send_flow(b"x", 0, now); }
+        assert!(bounded.flow_pending_bytes() <= 2);
+        assert!(bounded.flow_pending.len() <= 4096);
+        assert!(bounded.counters().flow_ack_evictions > 0);
     }
 
     #[test]
@@ -1412,6 +1531,11 @@ mod tests {
         let mut strict = Receiver::with_defaults(RejectAll);
         assert_eq!(strict.verify_control_frame(&ack.bytes, now), Err(DropReason::AuthFailed));
         assert_eq!(strict.counters().auth_failed, 1);
+
+        let flow_ack = tx.flow_ack_for_session(17, 0, 8);
+        let mut strict_flow_ack = Receiver::with_defaults(RejectAll);
+        assert_eq!(strict_flow_ack.verify_control_frame(&flow_ack.bytes, now), Err(DropReason::AuthFailed));
+        assert_eq!(strict_flow_ack.sessions(), 0, "an unauthenticated FlowAck cannot allocate a session");
 
         let probe = tx.probe(0, 24);
         let mut rx = Receiver::with_defaults(PassThrough);

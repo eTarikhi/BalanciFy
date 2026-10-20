@@ -230,14 +230,13 @@ impl RelaySession {
         for ev in self.rx.ingest(dg, now) {
             match ev {
                 Event::Payload { data, .. } => payloads.push(data),
-                Event::Ack { path, seq, .. } => {
-                    let sent = if simulate_ecn {
-                        self.ecn_echoed += 1;
-                        self.tx.ack_with_ecn(path, seq)
-                    } else {
-                        self.tx.ack(path, seq)
-                    };
-                    replies.push(sent.bytes);
+                Event::Ack { session, path, seq } => {
+                    if simulate_ecn { self.ecn_echoed += 1; }
+                    let flags = if simulate_ecn { balancify_tunnel::FLAG_ECN_CE } else { 0 };
+                    replies.push(self.tx.ack_for_session(session, path, seq, flags).bytes);
+                }
+                Event::FlowAck { session, path, seq } => {
+                    replies.push(self.tx.flow_ack_for_session(session, path, seq).bytes);
                 }
                 Event::ProbeEcho { path, seq, .. } => {
                     let sent = self.tx.probe_reply(path, seq);
@@ -259,14 +258,13 @@ impl RelaySession {
         for ev in self.rx.drain(now) {
             match ev {
                 Event::Payload { data, .. } => payloads.push(data),
-                Event::Ack { path, seq, .. } => {
-                    let sent = if simulate_ecn {
-                        self.ecn_echoed += 1;
-                        self.tx.ack_with_ecn(path, seq)
-                    } else {
-                        self.tx.ack(path, seq)
-                    };
-                    replies.push(sent.bytes);
+                Event::Ack { session, path, seq } => {
+                    if simulate_ecn { self.ecn_echoed += 1; }
+                    let flags = if simulate_ecn { balancify_tunnel::FLAG_ECN_CE } else { 0 };
+                    replies.push(self.tx.ack_for_session(session, path, seq, flags).bytes);
+                }
+                Event::FlowAck { session, path, seq } => {
+                    replies.push(self.tx.flow_ack_for_session(session, path, seq).bytes);
                 }
                 Event::ProbeEcho { path, seq, .. } => {
                     let sent = self.tx.probe_reply(path, seq);

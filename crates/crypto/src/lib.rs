@@ -277,10 +277,14 @@ mod tests {
     fn frame_kind_domain_separates_independent_sequence_lanes() {
         let data = TunnelCipher::nonce_for_kind(SALT, 0, 0, 0);
         let flow = TunnelCipher::nonce_for_kind(SALT, 0, 0, 5);
+        let flow_ack = TunnelCipher::nonce_for_kind(SALT, 0, 0, 6);
         let keepalive = TunnelCipher::nonce_for_kind(SALT, 0, 0, 1);
         assert_ne!(data, flow);
         assert_ne!(data, keepalive);
         assert_ne!(flow, keepalive);
+        assert_ne!(flow, flow_ack);
+        assert_ne!(data, flow_ack);
+        assert_ne!(keepalive, flow_ack);
     }
 
     #[test]

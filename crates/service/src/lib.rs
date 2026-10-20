@@ -619,12 +619,12 @@ impl<C: Crypto + Clone> Service<C> {
             return vec![Action::Refused { flow: flow.clone(), class }];
         };
         if !self.rate_limiter.try_send(sent.path, sent.bytes.len() as u64, now) {
+            self.tx.forget_flow_ack_for_session(sent.session, sent.seq);
             self.counters.held += 1;
             return vec![Action::Hold { flow: flow.clone(), data: payload.to_vec() }];
         }
         self.counters.packets_forwarded += 1;
-        // Flow-level capacity: count for estimator even without ACK clock (Sec.6.3)
-        self.policy.on_flow_packet(uplink, payload.len() as u64, now);
+        // Flow-level capacity is sampled when the authenticated FlowAck arrives.
         self.packets_since_rekey += 1;
         if self.last_rekey.is_none() {
             self.last_rekey = Some(now);
@@ -640,6 +640,26 @@ impl<C: Crypto + Clone> Service<C> {
         let is_flow_data = hdr.map_or(false, |h| h.kind == FrameKind::FlowData);
         if let Some(hdr) = hdr {
             match hdr.kind {
+                FrameKind::FlowAck => {
+                    match self.rx.verify_control_frame(dg, now) {
+                        Ok(true) => {}
+                        Ok(false) => return Vec::new(),
+                        Err(reason) => {
+                            if matches!(reason, balancify_tunnel::DropReason::AuthFailed) {
+                                self.counters.auth_failed += 1;
+                                self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
+                            }
+                            return Vec::new();
+                        }
+                    }
+                    self.record_ecn_ce(hdr.path, hdr.flags, uplink, now);
+                    for (path, bytes) in self.tx.on_flow_ack_for_session(hdr.session, hdr.seq) {
+                        if bytes == 0 { continue; }
+                        self.policy.on_flow_ack(UplinkId(path), bytes, now);
+                    }
+                    self.on_relay_ack(now);
+                    return Vec::new();
+                }
                 FrameKind::Ack | FrameKind::ProbeReply => {
                     match self.rx.verify_control_frame(dg, now) {
                         Ok(true) => {}
@@ -1156,9 +1176,13 @@ impl<C: Crypto + Clone> Service<C> {
                 self.counters.delivered += 1;
                 vec![Action::Deliver { data }]
             }
-            Event::Ack { path, seq, .. } => {
-                let sent = self.tx.ack(path, seq);
+            Event::Ack { session, path, seq } => {
+                let sent = self.tx.ack_for_session(session, path, seq, 0);
                 vec![Action::Send { uplink: UplinkId(sent.path), bytes: sent.bytes }]
+            }
+            Event::FlowAck { session, path, seq } => {
+                let sent = self.tx.flow_ack_for_session(session, path, seq);
+                vec![Action::Send { uplink: UplinkId(path), bytes: sent.bytes }]
             }
             Event::ProbeEcho { path, seq, .. } => {
                 let sent = self.tx.probe_reply(path, seq);
@@ -1522,6 +1546,31 @@ mod tests {
         }
         assert_eq!(used.len(), 1, "flow-level placement must not stripe: {used:?}");
         assert_eq!(s.counters().packets_forwarded, 20);
+    }
+
+    #[test]
+    fn flow_level_capacity_uses_peer_acknowledgements() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        s.handle(ipc::Request::SetBondMode { enabled: false }, now);
+        let flow = FlowKey::new(6, sa(5099), peer(443));
+        let actions = s.send_app_packet(&flow, None, &[7u8; 1200], now);
+        let sent_bytes = actions.iter().find_map(|action| match action {
+            Action::Send { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        }).expect("flow-level packet is sent");
+        let (header, _) = Header::decode(&sent_bytes).expect("flow frame header");
+        assert_eq!(header.kind, FrameKind::FlowData);
+        assert_eq!(s.tx.flow_pending_bytes(), 1200);
+        let before = s.snapshot().view(UplinkId(header.path)).unwrap().capacity_bps;
+
+        let later = now + Duration::from_secs(2);
+        let ack = s.tx.flow_ack_for_session(header.session, header.path, header.seq);
+        assert!(s.ingest_path(UplinkId(header.path), &ack.bytes, later).is_empty());
+        assert_eq!(s.tx.flow_pending_bytes(), 0, "authenticated peer ACK releases bounded accounting");
+        s.publish(later);
+        let after = s.snapshot().view(UplinkId(header.path)).unwrap().capacity_bps;
+        assert_ne!(after, before, "flow capacity changes only after the peer ACK is accounted");
     }
 
     #[test]
@@ -2383,6 +2432,11 @@ mod tests {
         // Second packet immediately should be held (rate limited)
         let actions2 = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
         assert!(actions2.iter().any(|a| matches!(a, Action::Hold { .. })), "second should be held due to rate limit");
+
+        svc.handle(ipc::Request::SetBondMode { enabled: false }, now);
+        let flow_actions = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
+        assert!(flow_actions.iter().any(|a| matches!(a, Action::Hold { .. })), "flow-lane packet should be held too");
+        assert_eq!(svc.tx.flow_pending_bytes(), 0, "a held FlowData frame must not remain pending for an ACK");
     }
 
     #[test]
