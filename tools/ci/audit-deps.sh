@@ -141,7 +141,10 @@ fi
 if ! grep -Fq 'fn CryptProtectData' crates/crypto/src/store.rs || ! grep -Fq 'fn CryptUnprotectData' crates/crypto/src/store.rs; then
     bad "Windows DPAPI protect/unprotect entry points must remain implemented"
 fi
-[ "$fail" -eq 0 ] && note "DPAPI is enabled by default; key files use create_new, Unix 0600, and atomic rename"
+if ! grep -Fq 'Zeroizing::new(keypair.secret_bytes())' crates/crypto/src/store.rs || ! grep -Fq 'data.zeroize();' crates/crypto/src/store.rs; then
+    bad "temporary key copies must be zeroized after use"
+fi
+[ "$fail" -eq 0 ] && note "DPAPI is enabled by default; key files use create_new, Unix 0600, atomic rename, and zeroized plaintext copies"
 
 if [ "$fail" -ne 0 ]; then
     echo

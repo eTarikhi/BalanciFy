@@ -20,7 +20,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -266,7 +266,8 @@ impl KeyStore for FileKeyStore {
             Ok(secret) => Ok(StaticKeypair::from_bytes(secret)),
             Err(StoreError::NotFound) => {
                 let kp = StaticKeypair::generate();
-                Self::write_secret_file(&self.secret_path, &kp.secret_bytes())?;
+                let secret = Zeroizing::new(kp.secret_bytes());
+                Self::write_secret_file(&self.secret_path, &secret)?;
                 Ok(kp)
             }
             Err(e) => Err(e),
@@ -274,7 +275,8 @@ impl KeyStore for FileKeyStore {
     }
 
     fn save(&mut self, keypair: &StaticKeypair) -> Result<(), StoreError> {
-        Self::write_secret_file(&self.secret_path, &keypair.secret_bytes())
+        let secret = Zeroizing::new(keypair.secret_bytes());
+        Self::write_secret_file(&self.secret_path, &secret)
     }
 
     fn load_pinned(&self) -> Result<PinnedKeys, StoreError> {
