@@ -1116,6 +1116,15 @@ impl<C: Crypto + Clone> Service<C> {
 
     pub fn event_interval_hz(&self) -> u8 { self.event_interval_hz }
 
+    /// Snapshot the current warning conditions and counters for a subscribed
+    /// IPC client. The transport controls cadence; this method is side-effect
+    /// free and suitable for caller-driven polling.
+    pub fn telemetry_events(&self) -> Vec<ipc::Event> {
+        let mut events = self.poll_events();
+        events.push(ipc::Event::Stats(self.counters().into()));
+        events
+    }
+
     // -------------------------------------------------------------- internals
 
     fn receiver_action(&mut self, ev: Event) -> Vec<Action> {
@@ -1902,6 +1911,21 @@ mod tests {
         ));
         assert_eq!(s.handle(ipc::Request::SubscribeEvents { interval_hz: 1 }, now), ipc::Response::Ack);
         assert_eq!(s.event_interval_hz(), 1);
+    }
+
+    #[test]
+    fn ipc_telemetry_snapshot_contains_warnings_and_counter_values() {
+        let now = Instant::now();
+        let mut s = Service::new(ServiceConfig::default(), PassThrough, PassThrough);
+        s.add_uplink(UplinkId(0), 100_000_000, false, 1500, now);
+        s.counters.packets_forwarded = 17;
+
+        let events = s.telemetry_events();
+        assert!(events.contains(&ipc::Event::Warning { code: ipc::WARN_ALL_PATHS_DOWN }));
+        assert_eq!(
+            events.last(),
+            Some(&ipc::Event::Stats(ipc::Counters { packets_forwarded: 17, ..Default::default() }))
+        );
     }
 
     #[test]

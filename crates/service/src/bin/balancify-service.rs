@@ -132,9 +132,7 @@ fn main() -> std::io::Result<()> {
                     let _ = reply.send(response);
                 }
                 IpcCall::PollEvents(reply) => {
-                    let mut events = svc.poll_events();
-                    events.push(IpcEvent::Stats(svc.counters().into()));
-                    let _ = reply.send(events);
+                    let _ = reply.send(svc.telemetry_events());
                 }
             }
         }
