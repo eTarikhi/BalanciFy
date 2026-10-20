@@ -3,7 +3,11 @@
 # Final summary — continuous development without stopping to report
 
 Date: 2026-10-19 → 2026-10-20
-Status: continuous, CI green 36d65eb (latest), 215+ tests, Cargo.lock vetted-only, driver vcxproj HVCI flags, SBOM/VEX SPDX3, throughput 9 profiles Rig B, app shell 9 modes, report with 5 visualizations green
+Status: historical baseline at 36d65eb; active Arena continuation and current gates are recorded below.
+
+## Active Arena continuation (2026-10-20)
+
+Branch `arena/6b225b20-balancify` has pushed authenticated tunnel control/replay protections, admission-before-session-allocation, relay idle-timer protections, per-session retransmission acknowledgements, and wire-v2 selective FlowAck for peer-receipt capacity sampling. Latest CI run 39476560004 passed Ubuntu/Windows tests and release build, lab safety tests, and dependency/crypto audit; current coverage is 218+ tests. WDK/NDIS build/runtime, HVCI, real netem/Rig B performance, production GUI/IPC, and standards-valid SPDX/VEX generation remain unverified or pending; do not infer completion from the historical baseline below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change to report. This is the third+ time user said it, so we continue even more. Latest: "Create a comprehensive development progress report that utilizes data visualizations" done (4feba2b green), then "Continue developing app" ongoing.
 

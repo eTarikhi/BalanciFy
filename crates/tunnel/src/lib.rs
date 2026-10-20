@@ -8,8 +8,9 @@
 //!
 //! Frame kinds cover the control traffic Sec.6.5/Sec.6.6 require *inside* the tunnel:
 //! authenticated health probes (not raw ICMP, so they survive CGNAT), per-path
-//! NAT keepalives (<= 25 s) and cumulative ACKs that drive capacity estimation
-//! (Sec.6.3) and reinjection (Sec.6.4 rule 5).
+//! NAT keepalives (<= 25 s), cumulative Data ACKs for reinjection, and
+//! authenticated selective FlowAck frames that drive flow-level capacity
+//! estimation (Sec.6.3).
 //!
 //! Crypto: the [`Crypto`] trait isolates the AEAD. Phase 2/3 tests use
 //! [`PassThrough`], which is compiled **only** under `cfg(test)` or the
@@ -399,7 +400,8 @@ impl<C: Crypto> Sender<C> {
 
     /// Flow-level lane (Sec.6.2): send one packet of a non-striped flow on a
     /// specific uplink. It has a per-session FlowData sequence for nonce and
-    /// replay safety, but is not retransmitted or ordered with the Data lane.
+    /// replay safety and receives a selective FlowAck, but is not retransmitted
+    /// or ordered with the Data lane.
     pub fn send_flow(&mut self, plain: &[u8], path: u8, _now: Instant) -> Option<Sent> {
         self.send_flow_with_session(plain, path, self.session, _now)
     }
@@ -968,8 +970,8 @@ impl<C: Crypto> Receiver<C> {
         out
     }
 
-    /// Build the reply frame an [`Event`] asks for (ACK, probe echo), sealed
-    /// with this endpoint's cipher. `None` for events that need no reply.
+    /// Build the reply frame an [`Event`] asks for (Data ACK, FlowAck, probe
+    /// echo), sealed with this endpoint's cipher. `None` for events that need no reply.
     pub fn reply_for(&self, ev: &Event) -> Option<Vec<u8>> {
         let (kind, session, path, seq) = match *ev {
             Event::Ack { session, path, seq } => (FrameKind::Ack, session, path, seq),

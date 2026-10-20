@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
-Date: 2026-10-19
-Status: continuous, CI green 39237431952, 215+ tests
+Date: 2026-10-20
+Status: continuous, CI green 39476560004, 218+ tests
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -15,27 +15,26 @@ User instruction: "continue the development process without stopping to report" 
 - App shell relay & bundle modes (Sec.8.2) — render relay stats, support bundle redacted, ECN/delay counters
 - ECN bench (cwnd 80% ECN vs 50% loss, delay 10% reduction, per-path ECN/delay/rtt_min/last)
 - Docs: ADR-0021 ETW wiring, ADR-0022 support bundle per-path, ADR-0023 relay ECN stats, ADR-0024 driver WDF control, ADR-0025 app shell relay & bundle, ADR-0026 ECN bench, plus continuous-development-log, security-hardening, test-coverage
+- Control-frame authentication/replay hardening and relay/session idle protections; wire v2 selective FlowAck for peer-receipt capacity sampling, with bounded per-session accounting and duplicate re-ACK (CI 39476560004).
 
 CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success per-path diag, 39234403709 success, 39234666177 success, 39234937199 success, 39235214291 success, 39235545738 success driver, 39235817239 success, 39236091314 success app, 39236360963 success, 39236639218 success ECN bench, 39236895693 success, 39237159469 success, 39237431952 success test coverage
 
 ## What remains (ordered, still without stopping)
 
-1. **Driver S2b socket test through miniport**: same as `ordered_stream_survives_a_real_udp_socket` but via NDIS path — service sends through miniport, relay receives, reorder, deliver. Requires test-signed load with Driver Verifier on Hyper-V VM, WDK 10.0.22621+, `driver/src/ioctl.c` INJECT_NBL already stubbed for loopback test.
-2. **Cargo.lock**: generate with `cargo generate-lockfile` once toolchain available (currently no toolchain in sandbox, crates.io blocked, only github/pypi/npm allowed), commit, audit checks lock file if present. `tools/ci/gen-lock.sh` already exists.
-3. **Real S2c/throughput validation:** run the explicitly confirmed netem runner on disposable Linux interfaces against a separate iperf3 server; raw link results alone are not BalanciFy bonding evidence. Add/run adapter-level traffic capture and record the 10-repetition statistics. No lab result is claimed; Rig B remains pending.
-4. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on real hardware (wired 1 Gbps, Wi-Fi 6 300 Mbit/s), secure mode, pacing 80% capacity, per-flow off/on, measure aggregate/single-flow/failover/added delay (target <=3ms) + CPU/Gbit/s via crypto-bench + ETW. The local service-path harness is not network evidence; all §10.3 throughput, added-delay, failover, and CPU/Gbit acceptance rows remain pending real Rig B measurement.
-5. **Driver packaging**: bundle self-contained .NET 10 + WinAppSDK runtimes, transactional installer with atomic rollback (`installer/src/main.rs` journaled 7 steps), clean-machine offline test per `clean-machine-test.md`, SBOM sidecar.
-6. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, run on VBS/Memory-Integrity machine (S15).
-7. **SBOM/VEX SPDX 3.0**: generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13 — stub exists, real generation needs cargo cyclonedx.
-8. **Client binary + GUI IPC**: wire Service handshake into CLI client (done lab mode `crates/client`), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10 — lab CLI `balancify-app` already mimics shell with home/rules/diagnostics/tray/relay/bundle modes, ECN/delay counters.
-9. **Per-flow session demux retx keyed by (session, seq)**: currently global unique seq for retx simplicity (next_seq_for returns global unique, session_seqs tracks per-session for telemetry), future per-session seq spaces for true per-session sequencing (ADR-0011).
-10. **Flow-level ACK**: add explicit FlowData ACK for capacity (done via on_flow_packet counting flow packets into window_bytes, suppresses idle probe, but explicit ACK could still be added for more accurate capacity).
-11. **More ETW events**: bond revert, uplink up/down already have IDs 200/201/300, but not yet wired in PolicyEngine publish.
+1. **Driver S2b socket test through miniport**: validate the existing real-UDP tunnel path through NDIS on a test-signed Hyper-V VM after a successful WDK build; requires Windows/WDK 10.0.22621+, Driver Verifier, and test hardware.
+2. **Real S2c/throughput validation**: use the explicitly confirmed netem runner only on disposable interfaces; raw link results alone are not BalanciFy bonding evidence. Add adapter-level capture and record 10-repetition statistics. No lab result is claimed; Rig B remains pending.
+3. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on wired 1 Gbps and Wi-Fi 6 300 Mbit/s, secure mode, pacing at 80% capacity, per-flow off/on; measure aggregate/single-flow/failover/added delay (target <=3ms) and CPU/Gbit/s. Local service-path benchmarks are not network evidence.
+4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
+5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
+6. **SBOM/VEX SPDX 3.0**: replace the current handwritten inventory/VEX placeholder with standards-valid generation from the locked dependency graph and audited vulnerability data, then publish the sidecar (S13).
+7. **Client binary + GUI IPC**: move from the lab CLI/loopback adapter to the planned WinUI 3 shell and production IPC transport/authentication.
+8. **FlowData reliability**: FlowAck now supports capacity estimation; selective retransmission/repair remains a possible future requirement if acceptance criteria require recovery on the non-striped lane.
+9. **More ETW events**: wire bond revert and uplink up/down events into PolicyEngine publication.
 
 ## Process
 
-- Keep CI green at all times: each push must pass ubuntu+windows+audits (211+ tests, now 215+)
-- Use `gh run list --limit 1 --branch arena/7abc96c8-balancify --json databaseId,conclusion` + `check-runs` to verify, with 90-120s wait for CI to start
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (218+ tests)
+- Use `gh run list --limit 1 --branch arena/6b225b20-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
 - Workspace dependency policy: `[workspace.dependencies]` intentionally empty per blueprint Sec.4.8 — do not add unpinned dependencies casually

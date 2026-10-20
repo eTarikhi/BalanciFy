@@ -23,6 +23,8 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `1153d7a authenticate tunnel control frames` and `96c9b9a make control-auth test cipher cloneable` — verify ACK/probe/probe-reply/keepalive tags and replay windows before relay liveness, RTT, congestion, or ECN state can change; add a forged-ACK regression test. Initial CI found a test-only Clone bound, corrected in `96c9b9a`; CI 39473880986 passed on Ubuntu and Windows.
 - `a1f674e ignore unauthenticated relay activity`, `b549ada import tunnel header in relay test`, and `880cf6c update invalid-frame session allocation test` — ensure relay idle timers and receiver session slots advance only for fresh authenticated frames, not garbage, invalid tags, or replay. CI 39474473731 caught missing test imports; 39474656908 then caught the now-invalid expectation that a bad tag allocates a session. CI 39474871649 passed on Ubuntu and Windows after both corrections.
 
+- `d96d656 add authenticated flow-level acknowledgements` — wire v2 adds selective FlowAck (kind 6) in its own nonce domain, bounded sender-side per-session byte/sequence state, authenticated replay-checked service handling, receiver duplicate re-ACK, and capacity sampling from peer receipt. Rate-limited unsent frames release their pending entry; the relay emits FlowAck with its transmit key. CI 39476560004 passed on Ubuntu and Windows.
+
 The latest CI also includes Ubuntu/Windows workspace tests, release build, lab safety tests, and dependency-policy audit. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
 ## Commits since last green 39209903149 (ADR-0020)
@@ -51,7 +53,7 @@ The latest CI also includes Ubuntu/Windows workspace tests, release build, lab s
 - SBOM/VEX SPDX 3.0 — generate via `sbom.sh` + cargo cyclonedx, publish sidecar, S13
 - Client binary + GUI IPC — wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10
 - Per-flow session demux retx keyed by (session, seq) — currently global unique seq for retx simplicity, future per-session seq spaces
-- Flow-level ACK — add explicit FlowData ACK for capacity (done via on_flow_packet, but could add explicit ACK)
+- FlowData retransmission/repair remains a possible extension; wire v2 selective FlowAck currently feeds capacity estimation but does not resend a lost non-striped packet.
 - ETW wiring already done, but could add more events (bond revert, uplink up/down)
 
 ## References

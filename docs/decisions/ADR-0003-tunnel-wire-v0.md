@@ -1,6 +1,6 @@
 # ADR-0003 — Tunnel wire v0: explicit frame kinds, reinjection, FlowData
 
-**Status:** Accepted; wire v1 is current (2026-10-20) · **Related:** ADR-0002, ADR-0006, blueprint §6.4–§6.6
+**Status:** Accepted; wire v2 is current (2026-10-20) · **Related:** ADR-0002, ADR-0006, blueprint §6.4–§6.6
 
 ## Context
 
@@ -20,10 +20,12 @@ that never asked to be bonded.
 1. **Wire v1 header, 20 bytes:** `version u8 | kind u8 | path u8 | flags u8 |
    session u64 | seq u64`. `version` is checked; an unknown version or kind is
    dropped, never guessed at (§9.2 "schema versioned and length-checked").
-   Version 1 domain-separates AEAD nonces by frame kind and must not interoperate
-   with the initial v0 nonce construction.
+   Version 1 introduced AEAD nonce separation by frame kind. Version 2 keeps
+   that construction and adds a selective FlowAck kind; peers require an exact
+   version match and must not interoperate with v1 or the initial v0 framing.
 2. **Frame kinds:** `Data` (sequenced, striped, reordered), `Keepalive`,
-   `Probe`, `ProbeReply`, `Ack` (cumulative), `FlowData`.
+   `Probe`, `ProbeReply`, `Ack` (cumulative), `FlowData`, and `FlowAck`
+   (authenticated selective receipt for one FlowData sequence).
 3. **`FlowData` is the flow-level lane (§6.2):** uses an independent per-session
    sequence for nonce uniqueness and a bounded replay window, but is delivered
    immediately, not retransmitted, and not reordered with `Data`. A flow that
@@ -55,9 +57,23 @@ that never asked to be bonded.
   another's counters. A version bump makes the nonce-domain change explicit.
 - The receiver needs session state (cap, idle eviction, verify-first), which is
   also the seam where the Phase-4 handshake plugs in.
-- v0 was a lab wire. Current v1 remains an in-development contract; no
-  compatibility promise is made before a release, and unknown versions are
-  rejected rather than guessed.
+- v0 and v1 were in-development contracts. Current v2 remains an in-development
+  contract; no compatibility promise is made before a release, and unknown
+  versions are rejected rather than guessed.
+
+## Wire v2 amendment (2026-10-20)
+
+- Added frame kind `FlowAck` (wire kind 6), with an independent nonce domain.
+  It selectively acknowledges one authenticated FlowData sequence; unlike the
+  ordered Data ACK it is not cumulative, because FlowData is intentionally not
+  reordered by the tunnel.
+- FlowData receivers acknowledge fresh frames and resend the same selective ACK
+  for authenticated duplicates. Send-side byte/path accounting is session-scoped,
+  capped by the existing retransmission byte budget and a 4096-entry limit, and
+  is removed on ACK, path loss, sleep/resume, or local rate-limit hold.
+- The service authenticates and replay-checks FlowAck before recording the
+  acknowledged payload bytes for capacity estimation. Wire version 2 explicitly
+  rejects v1 peers rather than silently losing ACK-based capacity samples.
 
 ## Rejected alternatives
 

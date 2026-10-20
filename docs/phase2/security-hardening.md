@@ -32,11 +32,11 @@ Status: continuous; latest CI green on Ubuntu and Windows
 - **Throughput rows on Rig B**: re-run Sec.10.3 aggregate/single-flow/failover with pacing enabled and secure mode, measure added delay and CPU/Gbit/s via crypto-bench + ETW — the local synthetic benchmark is not network evidence; real Rig B results pending
 - **Client binary + GUI IPC**: wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10 — lab CLI `balancify-app` already mimics shell with home/rules/diagnostics/tray/relay/bundle modes
 - **Per-flow session demux retx keyed by (session, seq)**: currently global unique seq for retx simplicity, future per-session seq spaces for true per-session sequencing
-- **Flow-level ACK**: add explicit FlowData ACK for capacity (done via on_flow_packet counting flow packets into window_bytes, suppresses idle probe, but explicit ACK could still be added)
+- **Flow-level ACK**: wire v2 uses a distinct AEAD nonce-domain `FlowAck` frame for selective FlowData receipt; service validates session/authentication/replay before crediting payload bytes to the sending uplink. Pending records are byte- and entry-bounded, removed on receipt/path loss/resume/rate-limit hold, and duplicate FlowData prompts another ACK without duplicate delivery.
 - **Driver WDF control device + IOCTLs**: source contains SET_MTU, GET_STATS, INJECT_NBL, SET_QUANTA and length validation, but `MiniportInitializeEx` still registers NULL NDIS adapter attributes. No WDK build, install, Driver Verifier, HVCI, or S2b miniport-path test has been performed; the driver is not operational.
 
 ## References
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio, C2/C4
 - ADRs 0003-0026
-- CI: 39474871649 success on Ubuntu and Windows, lab safety tests, release build, and dependency/crypto audit
+- CI: 39476560004 success on Ubuntu and Windows, lab safety tests, release build, and dependency/crypto audit

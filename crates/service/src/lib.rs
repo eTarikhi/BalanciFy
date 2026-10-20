@@ -637,7 +637,6 @@ impl<C: Crypto + Clone> Service<C> {
     /// One datagram received on an uplink's socket.
     pub fn ingest_path(&mut self, uplink: UplinkId, dg: &[u8], now: Instant) -> Vec<Action> {
         let hdr = Header::decode(dg).map(|(hdr, _)| hdr);
-        let is_flow_data = hdr.map_or(false, |h| h.kind == FrameKind::FlowData);
         if let Some(hdr) = hdr {
             match hdr.kind {
                 FrameKind::FlowAck => {
@@ -721,11 +720,6 @@ impl<C: Crypto + Clone> Service<C> {
             match &ev {
                 Event::Dropped { reason } if matches!(reason, balancify_tunnel::DropReason::AuthFailed) => {
                     self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
-                }
-                Event::Payload { data, .. } if is_flow_data => {
-                    // Explicit flow-level ACK (Sec.6.3): flow lane ACK clock
-                    self.policy.on_flow_ack(uplink, data.len() as u64, now);
-                    self.policy.on_ack(uplink, data.len() as u64, now);
                 }
                 _ => {}
             }

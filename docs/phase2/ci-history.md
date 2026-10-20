@@ -1,7 +1,8 @@
-# CI history — arena/7abc96c8-balancify
+# CI history — historical baseline and active Arena continuation
 
 Date: 2026-10-20
-Status: continuous, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests, 10 profiles throughput, 11 modes app, soak+failover, netem-rig 11 profiles + analyze.py
+Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
+Active continuation: `arena/6b225b20-balancify`; latest green run 39476560004 on Ubuntu and Windows, including FlowAck wire-v2 tests, lab analysis/safety, release build, and dependency/crypto audit. See `continuous-development-log.md` for current commits and hardware gates.
 
 ## Progression
 

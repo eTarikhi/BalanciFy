@@ -16,13 +16,14 @@ Previously, `CapacityEstimator::on_flow_packet` counted flow packets when sent, 
   - `on_flow_packet(bytes, now)`: when flow packet sent, counts into window_bytes, rolls, notes traffic (suppresses idle probe) — existing
   - `on_flow_ack(bytes, now)`: when flow-level ACK arrives (explicit FlowData ACK or via probe reply), counts into window_bytes, rolls — new
   - `note_traffic(now)`: traffic suppresses idle probe — existing
-- Service integration: `on_flow_packet` is still called on send; the wire-v1 FlowData sequence currently provides nonce uniqueness and replay rejection only. An explicit FlowData ACK and corresponding `on_flow_ack` call remain a later step.
+- Initial service integration was deferred at this ADR's creation. Follow-up commit `d96d656` replaces send-side-only capacity sampling in the Service flow lane with authenticated selective FlowAck accounting; `on_flow_packet` remains an estimator API but is no longer the Service's flow-level sampling path.
 - Also fix non-ASCII Sec. markers in all crates (app, installer, core, relay, tunnel, ipc, client, crypto, service) — replace Sec., --, -, ..., ', ", *, ->, <-, <=, >=, -, <-> to avoid Rust 2021 prefix errors (previous CI failures 39232571739, 39233028939)
 - Tests: existing capacity tests still pass, no new failure
 
 ## Consequences
 
-- Positive: flow-level capacity can be measured from ACK clock, not just send rate, more accurate; `on_flow_ack` available for future explicit FlowData ACK
+- Positive: Service flow-level capacity can be sampled from authenticated peer receipt rather than merely local sends.
+- Follow-up implementation is recorded above; frame kind `FlowAck` is part of wire v2 and v1 peers are explicitly rejected.
 - Negative: more methods, but same pattern as `on_ack`
 - Neutral: no change to DRR weights directly, but better capacity estimate improves DRR
 
@@ -30,5 +31,6 @@ Previously, `CapacityEstimator::on_flow_packet` counted flow packets when sent, 
 
 - Blueprint Sec.6.3 capacity, Sec.6.2 WRH, Sec.4.5 failover
 - Code: `crates/core/src/scoring.rs` `on_flow_ack`, `crates/core/src/policy.rs` wrapper (if needed), `crates/service/src/lib.rs` `send_app_packet` calls `on_flow_packet`
-- CI: 39267073764 success
-- ADR-0010 rate limiting+flow capacity, ADR-0018 flow-level capacity, ADR-0028 flow ACK
+- CI for original estimator work: 39267073764 success
+- Follow-up implementation (2026-10-20, commit `d96d656`): wire v2 adds authenticated selective `FlowAck` kind 6; sender tracks bounded per-session sequence/path/byte records, receiver ACKs fresh FlowData and re-ACKs duplicates, and service samples capacity only after authenticated peer receipt. Rate-limited unsent FlowData removes pending state. Wire v1 is rejected to avoid silent loss of ACK-based sampling. CI 39476560004 passed on Ubuntu and Windows.
+- ADR-0010 rate limiting+flow capacity, ADR-0018 flow-level capacity, ADR-0028 flow ACK, ADR-0003 wire v2 amendment

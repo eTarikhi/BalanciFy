@@ -10,7 +10,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - Per-class sessions (per_class_sessions toggle, class_sessions map, session_for_class FlowClass -> session)
 - Per-session seq tracking (session_seqs map, global unique seq for retx simplicity)
 - Rate limiting service egress (TokenBucket, RateLimiter per-uplink, try_send, delay_for, wired into send_app_packet -> Hold on limit)
-- Flow-level capacity (on_flow_packet counts flow packets into window_bytes, suppresses idle probe, policy wrapper)
+- Flow-level capacity uses authenticated per-packet FlowAck receipts in wire v2; sender-side pending ACK state is bounded and capacity samples are credited to the original uplink.
 - Wintun fallback ADR-0009 (feature-gated, exception file check, raw FFI placeholder)
 - Installer transactional (journaled, 7 steps, reverse rollback, dry-run, tests)
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
@@ -18,7 +18,8 @@ Status: in progress; software work continues, hardware gates remain pending
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
 - Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; still source-only, with NDIS initialization incomplete and WDK/Verifier validation pending.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
-- Tunnel wire v1 domain-separates AEAD nonces by frame kind; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
+- Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
+- Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
 - ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
 - Software benchmark + benches (throughput.rs local work rate/per-call latency only; drr-bench, pacing-bench, crypto-bench). Real network performance and G3/G4 acceptance remain pending.
 - SBOM + clean-machine test docs (sbom.sh SPDX 3.0, clean-machine-test.md offline bundle, rollback, HVCI trio)
@@ -40,8 +41,7 @@ Status: in progress; software work continues, hardware gates remain pending
 ## Next for Phase 4 (secure + GUI)
 
 1. **Client binary + GUI IPC**: wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10.
-2. **Flow-level ACK**: add an authenticated FlowData acknowledgement lane so flow-level capacity and congestion samples are based on peer receipt rather than local send-side estimates; bound pending ACK state and handle duplicates/reordering.
-3. **ETW coverage**: consider bond-revert and uplink up/down events beyond the existing ECN, delay, failover, rekey, and authentication events.
+2. **ETW coverage**: consider bond-revert and uplink up/down events beyond the existing ECN, delay, failover, rekey, and authentication events.
 
 ## Known gaps (deliberate)
 
@@ -50,7 +50,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - Miniport source is not operational: NDIS attributes are not yet registered, and no WDK build/test-signed install/Verifier run has been completed.
 - The local service adapter uses loopback TCP only; production named-pipe ACLs and Windows caller authentication remain pending.
 - Single session per service default — multi-session demux exists but service opens one session unless per-flow/per-class toggled.
-- Flow-level capacity now counts flow packets + probes, but no explicit FlowData ACK.
+- Flow-level ACK frames are supported in tunnel wire v2, but no FlowData retransmission/repair is provided: loss can suppress capacity samples while delivered payload remains unaffected.
 
 ## References
 
