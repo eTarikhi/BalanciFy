@@ -15,6 +15,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `a548fc2 keep the service dispatcher responsive to IPC` — make lab UDP sockets nonblocking so two-path polling cannot block IPC dispatch for up to 200ms. CI 39427278094 passed.
 - `6c1f19f redact relay endpoints from support bundles` — expose relay presence only, with a regression test proving that the relay address and port do not appear in the exported JSON. CI 39431889338 passed.
 - `0d0a580 serialize complete redacted support diagnostics` — serialize full counters, uplinks and per-path congestion measurements; add JSON string escaping and tests for control characters. CI 39432345360 passed.
+- `8b61140 write key files through private unique temporaries` — replace predictable `.tmp` writes with collision-resistant sibling files opened using `create_new`, set mode 0600 at creation on Unix, sync before rename, and cover pre-created symlink behavior. CI 39433158496 passed.
 
 The latest CI also includes Ubuntu/Windows workspace tests, release build, lab safety tests, and dependency-policy audit. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 

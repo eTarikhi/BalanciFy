@@ -22,7 +22,7 @@ Status: continuous, CI green ubuntu+windows
   - lib.rs: 8 tests (16-byte tag only overhead, plaintext absent from ciphertext, every bit position refused, header bound as AAD, nonce separated by path/seq/salt/key, 1024 nonces distinct, wrong-length key refused, 20-payload stream end-to-end)
   - handshake.rs: 12 tests (both sides derive same two keys, pinned relay identity authenticates, every byte of flight 1 authenticated, prologue binds context, initiator static travels encrypted, fresh ephemeral gives fresh session, flights out of order refused, truncations refused, negotiated keys drive tunnel lane, pinning enforced both sides, replay cache rejects second flight)
   - keys.rs: static keypair derives public, ephemeral zeroized on drop, pinned keys pin/unpin, OS RNG distinct
-  - store.rs: memory store generates/remembers, file store roundtrips, file store rejects corrupt
+  - store.rs: memory store generates/remembers, pinned keys roundtrip, file store roundtrips/rejects corrupt, private temporary permissions and pre-created symlink safety
   - replay.rs: 5 tests (new ephemeral not replay, same within window is replay, expired not replay, capacity evicts oldest, different ephemerals not replay)
   - lib.rs rekey: 3 tests (rekey changes key but keeps salt, rekey deterministic and one-way, transport keys rekey both directions)
 - ipc: 17 tests (wire contract, message round-trips, truncation/partial-frame handling, strict decoding, stable opcodes, loopback-only binding, fragmented/pipelined transport, event push, malformed-frame rejection, and 60-second timeout for idle unsubscribed clients)
