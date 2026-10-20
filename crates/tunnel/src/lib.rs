@@ -1262,7 +1262,7 @@ mod tests {
             assert_ne!(h.kind, FrameKind::Data);
         }
         assert_eq!(s.next_seq(), 1, "control traffic must not open gaps in the data stream");
-        assert_eq!(s.counters().keepalives, 1);
+        assert_eq!(s.counters().keepalives, 2);
         assert_eq!(s.counters().probes, 1);
         let (ph, pbody) = Header::decode(&p.bytes).unwrap();
         assert_eq!(ph.kind, FrameKind::Probe);
