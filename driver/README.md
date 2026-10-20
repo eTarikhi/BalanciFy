@@ -51,7 +51,8 @@ strings x64\Release\balancify.sys | findstr BlaB
 - G3 benchmark + HVCI trio documented in `docs/phase2/hvci-readiness.md` with date, Windows build, hardware, driver version
 
 **INF:**
-- `driver/balancify.inf` Universal, PnpLockdown=1, NDIS 6.8, MTU param 576..9000 default 1440, WDF verifier, PoolTag BlaB, SDDL, METHOD_BUFFERED, length validation, attestation signing
+- `driver/balancify.inf` Universal, PnpLockdown=1, NDIS 6.8, MTU param 576..9000 default 1440, WDF verifier, PoolTag BlaB, METHOD_BUFFERED, length validation, attestation signing
+- WDF control-device DACL grants access only to SYSTEM and Administrators; GET_STATS requires `FILE_READ_ACCESS`, and mutating IOCTLs require `FILE_WRITE_ACCESS`. The service must run with the required privileged identity; the desktop shell must never open this device directly. WDK build and ACL behavior still require validation on a Windows driver lab machine.
 - `driver/miniport.inf` legacy skeleton, use balancify.inf for new builds
 
 **vcxproj:**

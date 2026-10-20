@@ -15,7 +15,7 @@ fail=0
 note() { printf '  %s\n' "$1"; }
 bad() { printf '  POLICY VIOLATION: %s\n' "$1"; fail=1; }
 
-echo "1/4  runtime dependencies are first-party, or vetted and exactly pinned"
+echo "1/5  runtime dependencies are first-party, or vetted and exactly pinned"
 # Only [dependencies] and [build-dependencies] are runtime/build inputs of the
 # shipped product. [dev-dependencies] are lab/test tooling, which §4.8 treats as
 # build-time and therefore external by necessity.
@@ -57,7 +57,7 @@ for manifest in $(find crates -name Cargo.toml | sort); do
 done
 [ "$fail" -eq 0 ] && note "every non-path dependency is allowlisted and exactly pinned"
 
-echo "2/4  the lock file resolves nothing that is not allowlisted"
+echo "2/5  the lock file resolves nothing that is not allowlisted"
 # POSIX sh only: this script must not depend on bash.
 ALLOW_NAMES=$(sed 's/[[:space:]]*#.*$//' "$ALLOWLIST" | sed 's/[[:space:]]//g' | grep -v '^$')
 if [ -f Cargo.lock ]; then
@@ -73,7 +73,7 @@ else
     note "no Cargo.lock committed yet; regenerate the allowlist with 'cargo tree' once a toolchain is available"
 fi
 
-echo "3/4  the null cipher cannot reach a shipped build (ADR-0002)"
+echo "3/5  the null cipher cannot reach a shipped build (ADR-0002)"
 TUNNEL=crates/tunnel/src/lib.rs
 GATE='cfg(any(test, feature = "lab-crypto"))'
 for symbol in "pub struct PassThrough" "impl Crypto for PassThrough"; do
@@ -94,12 +94,30 @@ for src in $(grep -rl "PassThrough" crates --include=*.rs | sort); do
 done
 [ "$fail" -eq 0 ] && note "PassThrough is compiled only for tests / the lab-crypto feature"
 
-echo "4/4  the lab relay cannot be started in the clear"
+echo "4/5  the lab relay cannot be started in the clear"
 if ! grep -q 'not(feature = "lab-crypto")' crates/relay/src/main.rs; then
     bad "crates/relay/src/main.rs has no refusal path for builds without a cipher"
 else
     note "a release build of balancify-relay refuses to start (exit 2)"
 fi
+
+echo "5/5  the driver control device is not world-writable"
+IOCTL=driver/src/ioctl.c
+if grep -Eq 'FILE_ANY_ACCESS|SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R' "$IOCTL"; then
+    bad "$IOCTL contains world-accessible device permissions or FILE_ANY_ACCESS"
+fi
+if ! grep -Fq 'RtlInitUnicodeString(&deviceSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)")' "$IOCTL"; then
+    bad "$IOCTL must grant control-device access only to SYSTEM and Administrators"
+fi
+for operation in SET_MTU INJECT_NBL SET_QUANTA; do
+    if ! grep -q "#define IOCTL_BALANCIFY_${operation} .*FILE_WRITE_ACCESS" "$IOCTL"; then
+        bad "$IOCTL must require FILE_WRITE_ACCESS for ${operation}"
+    fi
+done
+if ! grep -q '#define IOCTL_BALANCIFY_GET_STATS .*FILE_READ_ACCESS' "$IOCTL"; then
+    bad "$IOCTL must require FILE_READ_ACCESS for GET_STATS"
+fi
+[ "$fail" -eq 0 ] && note "SYSTEM/Admin ACL and per-operation IOCTL access bits are enforced"
 
 if [ "$fail" -ne 0 ]; then
     echo

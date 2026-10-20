@@ -12,11 +12,11 @@
 #define BALANCIFY_DEVICE_NAME L"\\Device\\Balancify"
 #define BALANCIFY_DOS_NAME L"\\DosDevices\\Balancify"
 
-// IOCTLs (METHOD_BUFFERED, FILE_ANY_ACCESS, custom codes 0x800-0x8FF)
-#define IOCTL_BALANCIFY_SET_MTU CTL_CODE(FILE_DEVICE_NETWORK, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_BALANCIFY_INJECT_NBL CTL_CODE(FILE_DEVICE_NETWORK, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_BALANCIFY_SET_QUANTA CTL_CODE(FILE_DEVICE_NETWORK, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+// IOCTLs (METHOD_BUFFERED, explicit caller access rights, custom codes 0x800-0x8FF)
+#define IOCTL_BALANCIFY_SET_MTU CTL_CODE(FILE_DEVICE_NETWORK, 0x800, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_BALANCIFY_INJECT_NBL CTL_CODE(FILE_DEVICE_NETWORK, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_BALANCIFY_SET_QUANTA CTL_CODE(FILE_DEVICE_NETWORK, 0x803, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 // Input for SET_MTU: ULONG mtu
 // Input for GET_STATS: none, output: BALANCIFY_STATS
@@ -60,13 +60,16 @@ NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapt
     WDF_OBJECT_ATTRIBUTES deviceAttributes;
     WDF_IO_QUEUE_CONFIG queueConfig;
     WDF_FILEOBJECT_CONFIG fileConfig;
-    UNICODE_STRING deviceName, dosName;
+    UNICODE_STRING deviceName, dosName, deviceSddl;
     PBALANCIFY_CONTROL control;
 
     RtlInitUnicodeString(&deviceName, BALANCIFY_DEVICE_NAME);
     RtlInitUnicodeString(&dosName, BALANCIFY_DOS_NAME);
+    // Only SYSTEM and Administrators may open the driver control device. The
+    // unprivileged desktop shell must use the service's authenticated IPC.
+    RtlInitUnicodeString(&deviceSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
 
-    deviceInit = WdfControlDeviceInitAllocate(driver, &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
+    deviceInit = WdfControlDeviceInitAllocate(driver, &deviceSddl);
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
