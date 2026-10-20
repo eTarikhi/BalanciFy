@@ -40,7 +40,7 @@ Status: in progress; software work continues, hardware gates remain pending
 
 ## Next for Phase 4 (secure + GUI)
 
-1. **Client binary + GUI IPC**: wire Service handshake into CLI client (done lab mode), then WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray) via IPC v1, self-contained .NET 10.
+1. **Client binary + GUI IPC**: CLI now uses pinned authenticated Noise_IK or explicit debug-only loopback lab mode; remaining work is production packet-adapter integration, WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray), and authenticated production IPC.
 2. **ETW coverage**: consider bond-revert and uplink up/down events beyond the existing ECN, delay, failover, rekey, and authentication events.
 
 ## Known gaps (deliberate)

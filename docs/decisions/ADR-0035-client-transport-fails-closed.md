@@ -1,6 +1,6 @@
 # ADR-0035: Client transport fails closed without an authenticated relay identity
 
-Date: 2026-10-20
+Date: 2026-10-21
 Status: accepted
 
 ## Context

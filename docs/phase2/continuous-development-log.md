@@ -1,13 +1,13 @@
 # Continuous development log — without stopping to report
 
-Date: 2026-10-20
+Date: 2026-10-21
 Status: continuous; latest CI green on Ubuntu and Windows
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
 This log records what was done while continuing without stopping, after ADR-0015.
 
-## Continuation (2026-10-20)
+## Continuation (2026-10-20–2026-10-21)
 
 - `7920e4a test service telemetry snapshots for IPC` — centralized warning + counter event composition in Service and tested the IPC payload. CI 39426255171 passed.
 - `5751d43 close idle unsubscribed IPC clients` — impose a 60-second idle limit for unsubscribed lab clients; retain long-lived event subscriptions. CI 39426687493 passed.
@@ -27,7 +27,8 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 - `f712a97` — replaced handwritten SBOM/VEX JSON with SPDX 2.3 generation from `cargo metadata --locked`, refreshed the runner-resolved `Cargo.lock`, made installer sidecar copying fail closed, and corrected current documentation/runtime claims. CI first exposed a missing `os` import (`39482972727`), then the invalid Cargo license spelling `MIT/Apache-2.0` (`39483294083`).
 - `66d1da6` — restored atomic SBOM writing and added a writer regression test; `6f9d3cb` — preserve malformed Cargo license metadata in `licenseComments` and use `NOASSERTION` rather than inventing a valid expression; `9103cbc` — join registry SHA-256 checksums from `Cargo.lock` because Cargo metadata does not provide those checksums.
-- CI `39484151181` passed on Ubuntu and Windows. The Ubuntu job generated the SPDX inventory and validated it with pinned `spdx-tools` 0.8.5; lab/tool tests and the dependency/crypto audit also passed. SPDX 3.0/VEX remain pending. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
+- `8651def fail closed on unauthenticated client transport` — use stored relay pins by default, reject invalid/mismatched environment keys and identity-store failures, prohibit implicit zero-key fallback, and abort on handshake timeout, source/framing mismatch, or authentication failure. `--insecure-lab` now requires a debug build and loopback target. Six client policy/parser tests were added.
+- CI `39508334534` passed on Ubuntu and Windows, including FlowAck, six client regressions, seven SBOM tests, SPDX 2.3 generation/parser validation, lab tools, release build, and dependency/crypto audit. SPDX 3.0/VEX remain pending. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
 ## Commits since last green 39209903149 (ADR-0020)
 

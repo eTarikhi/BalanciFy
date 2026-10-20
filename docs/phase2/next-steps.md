@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
-Date: 2026-10-20
-Status: continuous, CI green 39476560004, 218+ tests
+Date: 2026-10-21
+Status: continuous, latest CI green 39508334534, 252 Rust tests + 7 SBOM tool tests
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -27,13 +27,13 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
 5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
 6. **SBOM/VEX S13**: the previous handwritten placeholder is removed; CI now generates an SPDX 2.3 inventory from the exact Cargo metadata graph. Still required: standards-valid SPDX 3.0 serialization, reviewed VEX statements from current advisory data, and installer sidecar verification.
-7. **Client binary + GUI IPC**: move from the lab CLI/loopback adapter to the planned WinUI 3 shell and production IPC transport/authentication.
+7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; move from the protocol/lab CLI and loopback adapter to the WinUI 3 shell and production IPC transport/authentication.
 8. **FlowData reliability**: FlowAck now supports capacity estimation; selective retransmission/repair remains a possible future requirement if acceptance criteria require recovery on the non-striped lane.
 9. **More ETW events**: wire bond revert and uplink up/down events into PolicyEngine publication.
 
 ## Process
 
-- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (218+ tests)
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (252 Rust tests; seven SBOM tests and SPDX parser also run)
 - Use `gh run list --limit 1 --branch arena/6b225b20-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)

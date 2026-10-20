@@ -2,12 +2,12 @@
 
 # Final summary — continuous development without stopping to report
 
-Date: 2026-10-19 → 2026-10-20
+Date: 2026-10-19 → 2026-10-21
 Status: historical baseline at 36d65eb; active Arena continuation and current gates are recorded below.
 
-## Active Arena continuation (2026-10-20)
+## Active Arena continuation (2026-10-21)
 
-Branch `arena/6b225b20-balancify` has pushed authenticated tunnel control/replay protections, admission-before-session-allocation, relay idle-timer protections, per-session retransmission acknowledgements, wire-v2 selective FlowAck, and an SPDX 2.3 locked-graph SBOM generator. Latest CI run 39484151181 passed Ubuntu/Windows tests, release build, lab/policy checks, and standards-parser validation of the generated SPDX 2.3 document. The generator joins registry checksums from `Cargo.lock`, preserves declared license metadata, and emits no VEX/vulnerability claims; SPDX 3.0/VEX remain pending. WDK/NDIS build/runtime, HVCI, real netem/Rig B performance, production GUI/IPC, and hardware gates remain unverified; do not infer completion from the historical baseline below.
+Branch `arena/6b225b20-balancify` has pushed authenticated tunnel control/replay protections, admission-before-session-allocation, relay idle-timer protections, per-session retransmission acknowledgements, wire-v2 selective FlowAck, an SPDX 2.3 locked-graph SBOM generator, and a client CLI that now fails closed on missing or invalid relay identities and handshake errors. Latest CI run 39508334534 passed Ubuntu/Windows tests, release build, lab/policy checks, and standards-parser validation of the generated SPDX 2.3 document. The generator joins registry checksums from `Cargo.lock`, preserves declared license metadata, and emits no VEX/vulnerability claims; SPDX 3.0/VEX remain pending. WDK/NDIS build/runtime, HVCI, real netem/Rig B performance, production GUI/IPC, and hardware gates remain unverified; do not infer completion from the historical baseline below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change to report. This is the third+ time user said it, so we continue even more. Latest: "Create a comprehensive development progress report that utilizes data visualizations" done (4feba2b green), then "Continue developing app" ongoing.
 
@@ -53,7 +53,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 ### Test coverage
 
-- 215+ tests, 0 failures, identical on Linux and Windows runners (windows had transient failures fixed: E0503 borrow checker in delay detection, E0063 Counters missing ecn_ce/delay_events, truncated test with optional tail, FlowClass vs BondClass, WindowsEtwHandle case, bench imports, rate limiter burst 1000<1036, non-ASCII Sec. markers, format! escaping, on_ack_with_rtt arg order, Service generic, PassThrough string in throughput.rs)
+- Latest CI run 39508334534 passed 252 Rust tests on Ubuntu/Windows, plus seven Python SBOM tests and SPDX 2.3 parser validation. Earlier Windows/Ubuntu runner failures were corrected (E0503 borrow checker, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, ACK argument order, Service generic, PassThrough audit guard).
 - Core: 85+ tests (bond, congestion 13, flowtable, health, keepalive, mtu, pacing 7, placement, policy, ratelimit 3, rules, scoring)
 - Crypto: 36 tests (AEAD 8, handshake 12, keys, store, replay 5, rekey 3)
 - IPC: 9 tests (contract v1, truncation, Counters 10 fields)

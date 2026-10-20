@@ -1,11 +1,11 @@
-# Test coverage — 218+ tests, what is covered
+# Test coverage — 252 Rust tests + 7 SBOM tool tests, what is covered
 
-Date: 2026-10-20
+Date: 2026-10-21
 Status: continuous, CI green ubuntu+windows
 
 ## Counts
 
-- core: 82 + 3 ratelimit + 3 ECN/delay already counted? Actually core has 85+? Let's list:
+- core: 83 tests
   - bond.rs: WRH minimal disruption, removing uplink moves only flows that were on it
   - congestion.rs: 13 tests (slow start, halving once per burst, floor, per-path independence, LIA, ECN 80% vs 50% loss, burst once, delay detection 10% reduction, ack_with_rtt, ecn_ce, delay_events_path, rtt_min/last)
   - flowtable.rs: flow affinity, eviction, etc.
@@ -18,7 +18,7 @@ Status: continuous, CI green ubuntu+windows
   - ratelimit.rs: TokenBucket allow within burst, hold when over, refill over time, 3 tests
   - rules.rs: FlowClass classification, curated defaults, duplicate eligible
   - scoring.rs: CapacityEstimator on_packet_sent, on_flow_packet, rolls window, notes traffic, suppresses idle probe, ACK pacing window, sleep/resume restarts window >90 Mbit/s vs stale <80
-- crypto: 38 tests
+- crypto: 39 tests
   - lib.rs: 10 tests (16-byte tag only overhead, plaintext absent from ciphertext, every bit position refused, header bound as AAD, nonce separated by frame kind/path/seq/salt/key, kind authenticated in the nonce and header, 1024 nonces distinct, wrong-length key refused, 20-payload stream end-to-end)
   - handshake.rs: 12 tests (both sides derive same two keys, pinned relay identity authenticates, every byte of flight 1 authenticated, prologue binds context, initiator static travels encrypted, fresh ephemeral gives fresh session, flights out of order refused, truncations refused, negotiated keys drive tunnel lane, pinning enforced both sides, replay cache rejects second flight)
   - keys.rs: static keypair derives public, ephemeral zeroized on drop, pinned keys pin/unpin, OS RNG distinct
@@ -36,11 +36,13 @@ Status: continuous, CI green ubuntu+windows
   - ECN: ack_with_ecn FLAG_ECN_CE=0x04
 - e2e: 9 tests (striped_flow_is_reordered_back_across_a_40ms_delay_gap, reinjection_recovers_a_lost_packet_inside_the_hold_cap, unplugging_an_uplink_mid_transfer_keeps_the_stream_alive, flow_level_mode_is_not_held_up_by_the_other_path, duplicate_mode_delivers_each_packet_once, shell_and_service_speak_contract_v1_over_a_stream, secure_handshake_over_real_udp_delivers_encrypted_stream, etc.)
 - fuzz: 6 tests (20k rounds each for datagram and IPC-frame loops, no panic, no invented payload, session and hold caps bound memory, length checks hold, replay cannot manufacture delivery)
+- client: 6 tests (missing identity fails closed, release builds reject insecure mode, debug lab requires explicit opt-in and loopback, pinned relay resolution, malformed/all-zero key rejection)
 - app: 0 tests (lab CLI)
-- installer: 2 tests (journaled transactional, dry-run)
+- installer: 4 tests (journaled transactional/dry-run plus required SBOM copy and missing-SBOM rejection)
+- SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-Total: 218+ tests, 0 failures, identical on Linux and Windows runners (windows had transient failures fixed: E0503 borrow checker in delay detection, E0063 Counters missing ecn_ce/delay_events, truncated test with optional tail, FlowClass vs BondClass, WindowsEtwHandle case, bench imports, rate limiter burst 1000<1036, non-ASCII Sec. markers, format! escaping, on_ack_with_rtt arg order)
+Total: 252 Rust tests passed on Linux and Windows in CI, plus 7 Python SBOM tests and standards-parser validation. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 
