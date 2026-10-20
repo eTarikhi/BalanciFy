@@ -26,8 +26,8 @@ platform's storage.
 **2. `KeyStore` trait with two implementations, now DPAPI-protected.**
 - `MemoryKeyStore` for tests and deterministic rigs.
 - `FileKeyStore` for lab and production: raw 32-byte secret in a file with 0600
-  perms, atomic write via temp+rename. On Windows, when the `dpapi` feature is
-  enabled, the file contents are DPAPI-protected blobs via **first-party FFI**
+  perms, atomic write via unique private temp+rename. Windows builds enable the
+  `dpapi` feature by default, protecting file contents via **first-party FFI**
   to `CryptProtectData`/`CryptUnprotectData` in `crypt32.dll` (no `windows` crate,
   no third-party dependency, so audit stays clean). The wrapper uses
   `CRYPTPROTECT_UI_FORBIDDEN` and `LocalFree`, handles migration (old raw 32-byte
@@ -89,8 +89,8 @@ DPAPI (first-party FFI).
 ## Consequences
 
 - Static keys can now be loaded/generated and pinned keys managed without
-  touching JSON. File store is DPAPI-protected on Windows with `dpapi` feature,
-  0600 on Unix, migration path for old raw files.
+  touching JSON. File store is DPAPI-protected on Windows by default, 0600 on
+  Unix, with migration path for old raw files.
 - Pinning enforced in Service and Relay: `auto_accept=false` when pinned set
   non-empty, `is_peer_allowed` checks, `establish_secure_session` verifies then
   applies keys and opens session. Prevents unpinned peers from auto-accepting.

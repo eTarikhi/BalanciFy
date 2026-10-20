@@ -8,8 +8,8 @@
 //! * `FileKeyStore` -- for lab use, storing keys as raw bytes in a file with
 //!   restrictive permissions (0600 on Unix). On Windows, when the `dpapi`
 //!   feature is enabled, the file contents are protected via
-//!   `CryptProtectData` (DPAPI). The DPAPI implementation is Windows-only and
-//!   behind a feature so the crate stays cross-platform.
+//!   `CryptProtectData` (DPAPI) by default on Windows. The DPAPI implementation
+//!   is cfg-gated so the crate stays cross-platform.
 //!
 //! The trait is sans-I/O in the sense that it takes paths as arguments; the
 //! actual I/O happens inside the implementation. That keeps the handshake and
@@ -114,7 +114,7 @@ impl KeyStore for MemoryKeyStore {
 }
 
 /// File-backed store. Lab form: raw 32-byte secret in a file with 0600
-/// permissions. Production form (Windows, `dpapi` feature): DPAPI-protected.
+/// permissions. On Windows the default `dpapi` feature protects files with DPAPI.
 #[derive(Debug, Clone)]
 pub struct FileKeyStore {
     secret_path: PathBuf,
@@ -439,6 +439,29 @@ mod tests {
         store.save_pinned(&pinned).unwrap();
         let loaded = store.load_pinned().unwrap();
         assert_eq!(loaded.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(all(windows, feature = "dpapi"))]
+    #[test]
+    fn windows_file_store_protects_legacy_raw_secret_on_save() {
+        let dir = std::env::temp_dir().join(format!("balancify-dpapi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        let legacy_secret = [42u8; 32];
+        std::fs::write(&secret_path, legacy_secret).unwrap();
+
+        let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+        let keypair = store.load_or_generate().expect("load legacy raw key");
+        assert_eq!(keypair.secret_bytes(), legacy_secret);
+        store.save(&keypair).expect("migrate to DPAPI blob");
+        let protected = std::fs::read(&secret_path).unwrap();
+        assert_ne!(protected.as_slice(), legacy_secret.as_slice());
+        let restored = store.load_or_generate().expect("unprotect migrated key");
+        assert_eq!(restored.public_bytes(), keypair.public_bytes());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
