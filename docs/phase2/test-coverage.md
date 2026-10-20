@@ -40,15 +40,15 @@ Status: continuous, CI green ubuntu+windows
 - installer: 2 tests (journaled transactional, dry-run)
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-Total: 215+ tests, 0 failures, identical on Linux and Windows runners (windows had transient failures fixed: E0503 borrow checker in delay detection, E0063 Counters missing ecn_ce/delay_events, truncated test with optional tail, FlowClass vs BondClass, WindowsEtwHandle case, bench imports, rate limiter burst 1000<1036, non-ASCII Sec. markers, format! escaping, on_ack_with_rtt arg order)
+Total: 216+ tests, 0 failures, identical on Linux and Windows runners (windows had transient failures fixed: E0503 borrow checker in delay detection, E0063 Counters missing ecn_ce/delay_events, truncated test with optional tail, FlowClass vs BondClass, WindowsEtwHandle case, bench imports, rate limiter burst 1000<1036, non-ASCII Sec. markers, format! escaping, on_ack_with_rtt arg order)
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 
-- No Cargo.lock yet (no toolchain in sandbox, crates.io blocked)
+- `Cargo.lock` is committed and checked by the dependency audit; no lockfile regeneration was needed for this phase.
 - Simulated paths are not netem (delay and loss applied to frames in discrete-time rig, S2c real measurements pending, harness exists netem-rig.sh + throughput.rs)
 - Miniport in the loop is functional stub + WDF control device, not yet S2b socket test through it (needs test-signed load with Driver Verifier)
 - Flow-level capacity now counts flow packets + probes, but no explicit FlowData ACK
-- Retx still keyed by seq only, not (session, seq) — per-flow/per-class sessions share global unique seq for retx simplicity
+- Retransmission entries and cumulative ACK matching are keyed by `(session, seq)`; per-session Data sequence spaces coexist with a shared bounded byte budget.
 - Wintun fallback is stub, not real Wintun.dll bundling (feature-gated, exception file check, ADR-0009)
 - Throughput rows simulated, not real Rig B (wired 1 Gbps, Wi-Fi 6 300 Mbit/s, secure mode, pacing 80% capacity, per-flow off/on, 10 reps, iperf3 pending)
 
