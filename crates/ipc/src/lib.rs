@@ -130,7 +130,14 @@ impl<'a> Reader<'a> {
         let b = self.take(2)?;
         Some(i16::from_be_bytes([b[0], b[1]]))
     }
-    pub fn bool(&mut self) -> Option<bool> { self.u8().map(|v| v != 0) }
+    /// Decode a canonical boolean. Values other than zero or one are malformed.
+    pub fn bool(&mut self) -> Option<bool> {
+        match self.u8()? {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
     pub fn string(&mut self) -> Option<String> {
         let n = self.u8()? as usize;
         let b = self.take(n)?;
@@ -443,7 +450,7 @@ impl Request {
     pub fn decode(payload: &[u8]) -> Option<Self> {
         let mut r = Reader::new(payload);
         let op = Opcode::from_u8(r.u8()?)?;
-        Some(match op {
+        let request = match op {
             Opcode::Ping => Request::Ping,
             Opcode::GetStatus => Request::GetStatus,
             Opcode::ListUplinks => Request::ListUplinks,
@@ -455,7 +462,10 @@ impl Request {
             Opcode::SubscribeEvents => Request::SubscribeEvents { interval_hz: r.u8()? },
             Opcode::RemoveFlowRule => Request::RemoveFlowRule { id: r.u32()? },
             Opcode::SetFlowRule => Request::SetFlowRule(decode_rule(&mut r)?),
-        })
+        };
+        // Reject extensions or garbage rather than interpreting only a prefix.
+        if !r.is_empty() { return None; }
+        Some(request)
     }
 }
 
@@ -637,31 +647,33 @@ impl Response {
 
     pub fn decode(payload: &[u8]) -> Option<Self> {
         let mut r = Reader::new(payload);
-        match r.u8()? {
-            RESP_PONG => Some(Response::Pong { service_version: r.string()? }),
-            RESP_STATUS => Some(Response::Status(decode_status(&mut r)?)),
+        let response = match r.u8()? {
+            RESP_PONG => Response::Pong { service_version: r.string()? },
+            RESP_STATUS => Response::Status(decode_status(&mut r)?),
             RESP_UPLINKS => {
                 let n = r.u32()? as usize;
                 if n > 256 { return None; }
                 let mut list = Vec::with_capacity(n);
                 for _ in 0..n { list.push(decode_uplink(&mut r)?); }
-                Some(Response::Uplinks(list))
+                Response::Uplinks(list)
             }
             RESP_FLOW_RULES => {
                 let n = r.u32()? as usize;
                 if n > 4096 { return None; }
                 let mut list = Vec::with_capacity(n);
                 for _ in 0..n { list.push(decode_rule(&mut r)?); }
-                Some(Response::FlowRules(list))
+                Response::FlowRules(list)
             }
-            RESP_ACK => Some(Response::Ack),
-            RESP_SELF_TEST => Some(Response::SelfTest { passed: r.bool()?, detail: r.string()? }),
-            RESP_ERROR => Some(Response::Error {
+            RESP_ACK => Response::Ack,
+            RESP_SELF_TEST => Response::SelfTest { passed: r.bool()?, detail: r.string()? },
+            RESP_ERROR => Response::Error {
                 status: Status::from_u8(r.u8()?)?,
                 message: r.string()?,
-            }),
-            _ => None,
-        }
+            },
+            _ => return None,
+        };
+        if !r.is_empty() { return None; }
+        Some(response)
     }
 }
 
@@ -697,14 +709,16 @@ impl Event {
 
     pub fn decode(payload: &[u8]) -> Option<Self> {
         let mut r = Reader::new(payload);
-        Some(match r.u8()? {
+        let event = match r.u8()? {
             EV_POLICY_CHANGED => Event::PolicyChanged { revision: r.u64()? },
             EV_UPLINK_STATE => Event::UplinkStateChanged { id: r.u8()?, state: r.u8()? },
             EV_BOND_REVERTED => Event::BondReverted { class: r.u8()?, gain_permille: r.i16()? },
             EV_STATS => Event::Stats(decode_counters(&mut r)?),
             EV_WARNING => Event::Warning { code: r.u8()? },
             _ => return None,
-        })
+        };
+        if !r.is_empty() { return None; }
+        Some(event)
     }
 }
 
@@ -868,6 +882,24 @@ mod tests {
         } else {
             panic!("expected status");
         }
+    }
+
+    #[test]
+    fn request_decoder_rejects_trailing_bytes_and_noncanonical_booleans() {
+        assert_eq!(Request::decode(&[Opcode::Ping.as_u8(), 0]), None);
+        assert_eq!(Request::decode(&[Opcode::SetBondMode.as_u8(), 2]), None);
+        assert_eq!(Request::decode(&[Opcode::SetBondMode.as_u8(), 1]), Some(Request::SetBondMode { enabled: true }));
+    }
+
+    #[test]
+    fn response_and_event_decoders_reject_trailing_bytes() {
+        let mut response = Response::Ack.encode();
+        response.push(0);
+        assert_eq!(Response::decode(&response), None);
+
+        let mut event = Event::Warning { code: WARN_ALL_PATHS_DOWN }.encode();
+        event.push(0);
+        assert_eq!(Event::decode(&event), None);
     }
 
     #[test]

@@ -5,7 +5,10 @@
 //! Enhanced with per-path ECN/delay, bond gain, uplink up/down, rekey, relay failover,
 //! per-flow sessions, Rig B throughput, HVCI, SBOM.
 
-use balancify_ipc::{Request, Response, Event, FrameKind, decode_frame, encode_frame, Counters};
+use balancify_ipc::{
+    decode_frame, encode_frame, Counters, Event, FrameKind, Request, Response,
+    FRAME_HEADER_LEN, MAX_PAYLOAD,
+};
 use std::io::{Read, Write};
 use std::net::{TcpStream, SocketAddr};
 use std::time::Duration;
@@ -135,38 +138,48 @@ fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
     Ok(())
 }
 
+fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
+    let mut header = [0u8; FRAME_HEADER_LEN];
+    // Distinguish clean EOF before a frame from a truncated frame header.
+    match stream.read(&mut header[..1])? {
+        0 => return Ok(None),
+        1 => {}
+        _ => unreachable!("one-byte read cannot exceed the buffer"),
+    }
+    stream.read_exact(&mut header[1..])?;
+    let len = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
+    if len > MAX_PAYLOAD {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "IPC frame exceeds maximum payload"));
+    }
+    let mut frame = header.to_vec();
+    frame.resize(FRAME_HEADER_LEN + len, 0);
+    stream.read_exact(&mut frame[FRAME_HEADER_LEN..])?;
+    let (kind, payload, consumed) = decode_frame(&frame)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "incomplete IPC frame"))?;
+    if consumed != frame.len() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "trailing bytes after IPC frame"));
+    }
+    Ok(Some((kind, payload.to_vec())))
+}
+
 fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
-    let mut buf = [0u8; 65536];
-    let n = stream.read(&mut buf)?;
-    if n == 0 {
-        return Ok(None);
+    match read_frame(stream)? {
+        None => Ok(None),
+        Some((FrameKind::Response, payload)) => Response::decode(&payload)
+            .map(Some)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid IPC response payload")),
+        Some(_) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "expected IPC response frame")),
     }
-    if let Ok(Some((kind, payload, _))) = decode_frame(&buf[..n]) {
-        if kind == FrameKind::Response {
-            if let Some(resp) = Response::decode(payload) {
-                return Ok(Some(resp));
-            }
-        }
-    }
-    Ok(None)
 }
 
 fn recv_event(stream: &mut TcpStream) -> std::io::Result<Option<Event>> {
-    let mut buf = [0u8; 65536];
-    match stream.read(&mut buf) {
-        Ok(0) => Ok(None),
-        Ok(n) => {
-            if let Ok(Some((kind, payload, _))) = decode_frame(&buf[..n]) {
-                if kind == FrameKind::Event {
-                    if let Some(ev) = Event::decode(payload) {
-                        return Ok(Some(ev));
-                    }
-                }
-            }
-            Ok(None)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Ok(None),
-        Err(e) => Err(e),
+    match read_frame(stream)? {
+        None => Ok(None),
+        Some((FrameKind::Event, payload)) => Event::decode(&payload)
+            .map(Some)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid IPC event payload")),
+        Some(_) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "expected IPC event frame")),
     }
 }
 
