@@ -16,7 +16,12 @@
 //! tunnel crates free of filesystem dependencies.
 
 use crate::keys::{PinnedKeys, StaticKeypair};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
@@ -147,19 +152,60 @@ impl FileKeyStore {
     }
 
     fn write_secret_file(path: &Path, secret: &[u8; 32]) -> Result<(), StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
-        }
         let protected = dpapi_protect(secret)?;
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, &protected).map_err(|e| StoreError::Io(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        Self::write_private_atomic(path, &protected)
+    }
+
+    fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<(), StoreError> {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| StoreError::Io("key file path has no filename".to_string()))?;
+        let file_name = file_name.to_string_lossy();
+
+        // Never reuse a predictable .tmp path: create_new refuses to follow or
+        // overwrite a pre-existing symlink/file. The unique sibling also keeps
+        // the final rename on the same filesystem.
+        for _ in 0..128 {
+            let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let temp_path = parent.join(format!(
+                ".{file_name}.{}.{}.tmp",
+                std::process::id(),
+                sequence,
+            ));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = match options.open(&temp_path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(StoreError::Io(error.to_string())),
+            };
+
+            let write_result = file.write_all(contents).and_then(|()| file.sync_all());
+            drop(file);
+            if let Err(error) = write_result {
+                let _ = fs::remove_file(&temp_path);
+                return Err(StoreError::Io(error.to_string()));
+            }
+            if let Err(error) = fs::rename(&temp_path, path) {
+                let _ = fs::remove_file(&temp_path);
+                return Err(StoreError::Io(error.to_string()));
+            }
+            return Ok(());
         }
-        std::fs::rename(&tmp, path).map_err(|e| StoreError::Io(e.to_string()))?;
-        Ok(())
+
+        Err(StoreError::Io(
+            "could not allocate a unique temporary key file".to_string(),
+        ))
     }
 
     fn read_pinned_file(path: &Path) -> Result<PinnedKeys, StoreError> {
@@ -194,21 +240,12 @@ impl FileKeyStore {
     }
 
     fn write_pinned_file(path: &Path, pinned: &PinnedKeys) -> Result<(), StoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
-        }
         let mut raw = Vec::with_capacity(pinned.len() * 32);
-        for k in pinned.iter() { raw.extend_from_slice(k); }
-        let protected = dpapi_protect(&raw)?;
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, &protected).map_err(|e| StoreError::Io(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        for key in pinned.iter() {
+            raw.extend_from_slice(key);
         }
-        std::fs::rename(&tmp, path).map_err(|e| StoreError::Io(e.to_string()))?;
-        Ok(())
+        let protected = dpapi_protect(&raw)?;
+        Self::write_private_atomic(path, &protected)
     }
 }
 
@@ -403,6 +440,34 @@ mod tests {
         let loaded = store.load_pinned().unwrap();
         assert_eq!(loaded.len(), 1);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_does_not_follow_precreated_temp_symlink_and_keeps_key_private() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!("balancify-temp-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        let victim_path = dir.join("victim");
+        std::fs::write(&victim_path, b"leave this file alone").unwrap();
+        symlink(&victim_path, secret_path.with_extension("tmp")).unwrap();
+
+        let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+        let keypair = StaticKeypair::generate();
+        let expected_secret = keypair.secret_bytes();
+        store.save(&keypair).unwrap();
+
+        assert_eq!(std::fs::read(&victim_path).unwrap(), b"leave this file alone");
+        assert_eq!(std::fs::read(&secret_path).unwrap(), expected_secret.to_vec());
+        assert_eq!(
+            std::fs::metadata(&secret_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
