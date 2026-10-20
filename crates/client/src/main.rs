@@ -149,6 +149,10 @@ fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
     choose_state_dir(override_dir, windows_local_app_data, xdg_state_home, home, cfg!(windows))
 }
 
+fn is_handshake_message2(datagram: &[u8]) -> bool {
+    datagram.len() >= 2 && datagram[0] == 0xFF && datagram[1] == 0x02
+}
+
 fn is_expected_relay_source(source: SocketAddr, relay_addr: SocketAddr) -> bool {
     source == relay_addr
 }
@@ -275,7 +279,7 @@ fn main() -> std::io::Result<()> {
                     format!("handshake response came from unexpected peer {from}"),
                 ));
             }
-            if n < 2 || buf[0] != 0xFF || buf[1] != 0x02 {
+            if !is_handshake_message2(&buf[..n]) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("unexpected handshake response framing: {:02x?}", &buf[..n.min(16)]),
@@ -337,16 +341,17 @@ fn main() -> std::io::Result<()> {
                         continue;
                     }
                     let now = Instant::now();
-                    // Try handshake or tunnel
-                    if n >= 2 && buf[0] == 0xFF && buf[1] == 0x02 {
-                        let _ = svc.handle_handshake_msg2(&buf[..n], now);
-                    } else {
-                        let actions = svc.ingest_path(UplinkId(0), &buf[..n], now);
-                        for a in actions {
-                            if let balancify_service::Action::Deliver { data } = a {
-                                println!("  [{}] delivered {} bytes: {:?}", i, data.len(), String::from_utf8_lossy(&data));
-                                delivered += 1;
-                            }
+                    if is_handshake_message2(&buf[..n]) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "unexpected handshake response after session establishment",
+                        ));
+                    }
+                    let actions = svc.ingest_path(UplinkId(0), &buf[..n], now);
+                    for a in actions {
+                        if let balancify_service::Action::Deliver { data } = a {
+                            println!("  [{}] delivered {} bytes: {:?}", i, data.len(), String::from_utf8_lossy(&data));
+                            delivered += 1;
                         }
                     }
                 }
@@ -437,6 +442,15 @@ mod tests {
             resolve_relay_public(None, &PinnedKeys::from_iter([[0; 32]])).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn handshake_response_framing_is_recognized_for_single_use_enforcement() {
+        assert!(is_handshake_message2(&[0xFF, 0x02]));
+        assert!(is_handshake_message2(&[0xFF, 0x02, 0x00]));
+        assert!(!is_handshake_message2(&[]));
+        assert!(!is_handshake_message2(&[0xFF]));
+        assert!(!is_handshake_message2(&[0xFF, 0x01]));
     }
 
     #[test]
