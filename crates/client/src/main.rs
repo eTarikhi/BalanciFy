@@ -149,6 +149,10 @@ fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
     choose_state_dir(override_dir, windows_local_app_data, xdg_state_home, home, cfg!(windows))
 }
 
+fn is_expected_relay_source(source: SocketAddr, relay_addr: SocketAddr) -> bool {
+    source == relay_addr
+}
+
 fn validate_lab_target(mode: ConnectionMode, relay_addr: SocketAddr) -> Result<(), std::io::Error> {
     if mode == ConnectionMode::InsecureLab && !relay_addr.ip().is_loopback() {
         return Err(std::io::Error::new(
@@ -305,8 +309,14 @@ fn main() -> std::io::Result<()> {
         for act in actions {
             match act {
                 balancify_service::Action::Send { uplink, bytes } => {
-                    let _ = sock.send_to(&bytes, relay_addr);
-                    println!("  [{}] sent {} bytes via uplink {}", i, bytes.len(), uplink.0);
+                    let sent = sock.send_to(&bytes, relay_addr)?;
+                    if sent != bytes.len() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            format!("short UDP datagram send: {sent}/{} bytes", bytes.len()),
+                        ));
+                    }
+                    println!("  [{}] sent {} bytes via uplink {}", i, sent, uplink.0);
                 }
                 balancify_service::Action::Hold { .. } => {
                     println!("  [{}] held (congestion)", i);
@@ -321,7 +331,11 @@ fn main() -> std::io::Result<()> {
         let mut buf = [0u8; 65535];
         loop {
             match sock.recv_from(&mut buf) {
-                Ok((n, _)) => {
+                Ok((n, from)) => {
+                    if !is_expected_relay_source(from, relay_addr) {
+                        eprintln!("  ignored datagram from unexpected peer {from}");
+                        continue;
+                    }
                     let now = Instant::now();
                     // Try handshake or tunnel
                     if n >= 2 && buf[0] == 0xFF && buf[1] == 0x02 {
@@ -423,6 +437,14 @@ mod tests {
             resolve_relay_public(None, &PinnedKeys::from_iter([[0; 32]])).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn data_plane_datagrams_must_come_from_the_configured_relay_endpoint() {
+        let relay = "127.0.0.1:4430".parse().unwrap();
+        assert!(is_expected_relay_source("127.0.0.1:4430".parse().unwrap(), relay));
+        assert!(!is_expected_relay_source("127.0.0.1:4431".parse().unwrap(), relay));
+        assert!(!is_expected_relay_source("127.0.0.2:4430".parse().unwrap(), relay));
     }
 
     #[test]
