@@ -824,6 +824,26 @@ impl<C: Crypto> Receiver<C> {
         true
     }
 
+    fn check_session_admission(&mut self, session: u64) -> Result<(), DropReason> {
+        if self.sessions.contains_key(&session) { return Ok(()); }
+        let reason = if !self.cfg.auto_accept {
+            DropReason::UnknownSession
+        } else if self.sessions.len() >= self.cfg.max_sessions {
+            DropReason::SessionLimit
+        } else {
+            return Ok(());
+        };
+        self.counters.dropped += 1;
+        Err(reason)
+    }
+
+    fn accept_authenticated_session(&mut self, session: u64, now: Instant) {
+        if !self.sessions.contains_key(&session) {
+            let opened = self.open_session(session, now);
+            debug_assert!(opened, "session admission was checked before authenticating");
+        }
+    }
+
     /// Authenticate a control datagram handled by a higher-level service path.
     /// The return value is `Ok(false)` for an authenticated replay; malformed,
     /// unknown-session, and unauthenticated frames return a drop reason.
@@ -918,13 +938,7 @@ impl<C: Crypto> Receiver<C> {
             self.counters.dropped += 1;
             return Err(DropReason::UnknownFrame);
         }
-        if !self.sessions.contains_key(&hdr.session) {
-            if !self.cfg.auto_accept || self.sessions.len() >= self.cfg.max_sessions {
-                self.counters.dropped += 1;
-                return Err(if self.cfg.auto_accept { DropReason::SessionLimit } else { DropReason::UnknownSession });
-            }
-            self.open_session(hdr.session, now);
-        }
+        self.check_session_admission(hdr.session)?;
         let Some(plain) = self.crypto.open(hdr.path, hdr.seq, header_bytes, body) else {
             self.counters.auth_failed += 1;
             self.counters.dropped += 1;
@@ -934,10 +948,9 @@ impl<C: Crypto> Receiver<C> {
             self.counters.dropped += 1;
             return Err(DropReason::UnknownFrame);
         }
+        self.accept_authenticated_session(hdr.session, now);
 
         let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
-        state.last_activity = now;
-        state.last_path = hdr.path;
         let accepted = if hdr.kind == FrameKind::Ack {
             if state.last_peer_ack.map_or(false, |last| hdr.seq <= last) {
                 false
@@ -948,18 +961,18 @@ impl<C: Crypto> Receiver<C> {
         } else {
             state.control_replay.entry(hdr.kind.as_u8()).or_default().accept(hdr.seq)
         };
-        if !accepted { self.counters.duplicates += 1; }
+        if !accepted {
+            self.counters.duplicates += 1;
+        } else {
+            state.last_activity = now;
+            state.last_path = hdr.path;
+        }
         Ok(accepted)
     }
 
     fn ingest_flow_data(&mut self, hdr: Header, header_bytes: &[u8], body: &[u8], now: Instant) -> Vec<Event> {
-        if !self.sessions.contains_key(&hdr.session) {
-            if !self.cfg.auto_accept || self.sessions.len() >= self.cfg.max_sessions {
-                self.counters.dropped += 1;
-                let reason = if self.cfg.auto_accept { DropReason::SessionLimit } else { DropReason::UnknownSession };
-                return vec![Event::Dropped { reason }];
-            }
-            self.open_session(hdr.session, now);
+        if let Err(reason) = self.check_session_admission(hdr.session) {
+            return vec![Event::Dropped { reason }];
         }
         let Some(plain) = self.crypto.open(hdr.path, hdr.seq, header_bytes, body) else {
             self.counters.auth_failed += 1;
@@ -967,25 +980,21 @@ impl<C: Crypto> Receiver<C> {
             return vec![Event::Dropped { reason: DropReason::AuthFailed }];
         };
 
-        let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
-        state.last_activity = now;
-        state.last_path = hdr.path;
+        self.accept_authenticated_session(hdr.session, now);
+        let state = self.sessions.get_mut(&hdr.session).expect("session accepted above");
         if !state.flow_replay.accept(hdr.seq) {
             self.counters.duplicates += 1;
             return Vec::new();
         }
+        state.last_activity = now;
+        state.last_path = hdr.path;
         self.counters.delivered += 1;
         vec![Event::Payload { session: hdr.session, path: hdr.path, data: plain }]
     }
 
     fn ingest_data(&mut self, hdr: Header, header_bytes: &[u8], body: &[u8], now: Instant) -> Vec<Event> {
-        if !self.sessions.contains_key(&hdr.session) {
-            if !self.cfg.auto_accept || self.sessions.len() >= self.cfg.max_sessions {
-                self.counters.dropped += 1;
-                let reason = if self.cfg.auto_accept { DropReason::SessionLimit } else { DropReason::UnknownSession };
-                return vec![Event::Dropped { reason }];
-            }
-            self.open_session(hdr.session, now);
+        if let Err(reason) = self.check_session_admission(hdr.session) {
+            return vec![Event::Dropped { reason }];
         }
         // Verified before anything is buffered: an unauthentic frame must not
         // be able to occupy reorder-buffer memory (Sec.9.1 adversary (b)).
@@ -995,10 +1004,9 @@ impl<C: Crypto> Receiver<C> {
             return vec![Event::Dropped { reason: DropReason::AuthFailed }];
         };
 
+        self.accept_authenticated_session(hdr.session, now);
         {
-            let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
-            state.last_activity = now;
-            state.last_path = hdr.path;
+            let state = self.sessions.get_mut(&hdr.session).expect("session accepted above");
             // A redundant copy is one whose seq we have already seen -- either
             // the duplicate-mode copy (Sec.6.4 rule 5) or a reinjected copy that
             // lost the race with the original. Count it once, when it is
@@ -1009,6 +1017,8 @@ impl<C: Crypto> Receiver<C> {
                 self.counters.duplicates += 1;
                 return Vec::new(); // duplicate of a held or already-delivered packet
             }
+            state.last_activity = now;
+            state.last_path = hdr.path;
         }
         self.release(hdr.session, hdr.path, now)
     }
@@ -1370,6 +1380,12 @@ mod tests {
         assert!(rx.ingest(&flow1.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow-1")));
         assert!(rx.ingest(&data.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"ordered")));
         assert_eq!(rx.counters().duplicates, 1);
+
+        let cfg = ReceiverConfig { idle_timeout: Duration::from_secs(60), ..ReceiverConfig::default() };
+        let mut idle_rx = Receiver::new(PassThrough, cfg);
+        idle_rx.ingest(&flow0.bytes, t0);
+        idle_rx.ingest(&flow0.bytes, t0 + Duration::from_secs(30));
+        assert_eq!(idle_rx.sweep(t0 + Duration::from_secs(61)), vec![51], "a replay cannot refresh session liveness");
     }
 
     #[test]
@@ -1516,6 +1532,7 @@ mod tests {
         assert_eq!(strict.ingest(&f.bytes, t0), vec![Event::Dropped { reason: DropReason::AuthFailed }]);
         assert_eq!(strict.counters().auth_failed, 1);
         assert_eq!(strict.counters().delivered, 0, "unauthentic data never reaches the inner stack");
+        assert_eq!(strict.sessions(), 0, "an unauthenticated frame cannot allocate a session");
     }
 
     #[test]

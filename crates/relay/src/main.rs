@@ -223,7 +223,7 @@ impl RelaySession {
     }
 
     fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        self.last_activity = now;
+        let before = self.rx.counters();
         let mut payloads = Vec::new();
         let mut replies = Vec::new();
         let simulate_ecn = std::env::var("BALANCIFY_SIMULATE_ECN").map(|v| v == "1").unwrap_or(false);
@@ -245,6 +245,10 @@ impl RelaySession {
                 }
                 _ => {}
             }
+        }
+        let after = self.rx.counters();
+        if after.frames > before.frames && after.dropped == before.dropped && after.duplicates == before.duplicates {
+            self.last_activity = now;
         }
         (payloads, replies)
     }
@@ -717,6 +721,32 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert!(second.is_empty());
         assert_eq!(ep2.duplicates_seen(), 1);
+    }
+
+    #[test]
+    fn relay_session_idle_timer_ignores_unauthenticated_datagrams() {
+        let now = Instant::now();
+        let key = [7u8; 32];
+        let salt = [3u8; 3];
+        let recv = balancify_crypto::TunnelCipher::new(&key, salt).unwrap();
+        let send = balancify_crypto::TunnelCipher::new(&key, salt).unwrap();
+        let addr = "127.0.0.1:9000".parse().unwrap();
+        let mut session = RelaySession::new(12, [0u8; 32], addr, recv, send, now);
+        let mut client = Sender::new(
+            12,
+            balancify_crypto::TunnelCipher::new(&key, salt).unwrap(),
+            vec![(0, 1000)],
+        );
+        let valid_time = now + Duration::from_secs(1);
+        let valid = client.send(b"accepted", valid_time).unwrap();
+        session.ingest(&valid.bytes, valid_time);
+        assert_eq!(session.last_activity, valid_time);
+
+        let replay_time = valid_time + Duration::from_secs(100);
+        let mut forged = Vec::new();
+        Header::new(FrameKind::Keepalive, 0, 12, 7).encode(&mut forged);
+        session.ingest(&forged, replay_time);
+        assert_eq!(session.last_activity, valid_time, "an invalid tag cannot keep the relay session alive");
     }
 
     #[test]

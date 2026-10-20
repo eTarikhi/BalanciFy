@@ -18,7 +18,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
 - Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; still source-only, with NDIS initialization incomplete and WDK/Verifier validation pending.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
-- Tunnel wire v1 domain-separates AEAD nonces by frame kind; FlowData has its own bounded replay-protected sequence lane, and keepalives no longer repeat sequence zero.
+- Tunnel wire v1 domain-separates AEAD nonces by frame kind; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, and control frames must authenticate and pass replay checks before changing service state.
 - ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
 - Software benchmark + benches (throughput.rs local work rate/per-call latency only; drr-bench, pacing-bench, crypto-bench). Real network performance and G3/G4 acceptance remain pending.
 - SBOM + clean-machine test docs (sbom.sh SPDX 3.0, clean-machine-test.md offline bundle, rollback, HVCI trio)
