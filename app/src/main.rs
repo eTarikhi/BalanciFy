@@ -32,10 +32,20 @@ fn main() -> std::io::Result<()> {
             }
             // Subscribe to events at 1 Hz
             send_request(&mut stream, &Request::SubscribeEvents { interval_hz: 1 })?;
+            if let Some(response) = recv_response(&mut stream)? {
+                if response != Response::Ack {
+                    println!("Event subscription was not accepted: {:?}", response);
+                    break;
+                }
+            }
             println!("Subscribed to events at 1 Hz, listening for 5 events...");
             for _ in 0..5 {
-                if let Some(ev) = recv_event(&mut stream)? {
-                    render_event(ev);
+                match recv_event(&mut stream)? {
+                    Some(ev) => render_event(ev),
+                    None => {
+                        println!("No event arrived before the IPC read timeout; the service currently exposes request/response IPC only.");
+                        break;
+                    }
                 }
             }
         }
@@ -174,7 +184,17 @@ fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
 }
 
 fn recv_event(stream: &mut TcpStream) -> std::io::Result<Option<Event>> {
-    match read_frame(stream)? {
+    let frame = match read_frame(stream) {
+        Ok(frame) => frame,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock
+                || error.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    match frame {
         None => Ok(None),
         Some((FrameKind::Event, payload)) => Event::decode(&payload)
             .map(Some)

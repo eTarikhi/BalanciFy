@@ -20,7 +20,17 @@ pub struct IpcServer {
 
 impl IpcServer {
     pub fn bind_loopback() -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
+        Self::bind_loopback_at("127.0.0.1:0".parse().expect("valid loopback address"))
+    }
+
+    /// Bind a fixed loopback endpoint for the local service/client adapter.
+    /// Non-loopback addresses are rejected so this lab transport cannot expose
+    /// the control plane to the network; production uses an ACL'd named pipe.
+    pub fn bind_loopback_at(addr: std::net::SocketAddr) -> io::Result<Self> {
+        if !addr.ip().is_loopback() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "IPC TCP listener must bind to loopback"));
+        }
+        let listener = TcpListener::bind(addr)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         Ok(Self { listener, addr })
@@ -104,6 +114,13 @@ mod tests {
         assert_eq!(kind, FrameKind::Response);
         assert_eq!(consumed, frame.len());
         Response::decode(payload).unwrap()
+    }
+
+    #[test]
+    fn fixed_listener_rejects_non_loopback_addresses() {
+        let addr = "0.0.0.0:5000".parse().unwrap();
+        let result = IpcServer::bind_loopback_at(addr);
+        assert!(matches!(result, Err(ref error) if error.kind() == io::ErrorKind::InvalidInput));
     }
 
     #[test]

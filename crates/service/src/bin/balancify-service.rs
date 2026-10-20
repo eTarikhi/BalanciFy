@@ -3,14 +3,18 @@
 //!
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
 //! (one per uplink), with secure handshake, pacing, congestion control, rekey,
-//! and dual-relay failover. In production, the packet source would be the
-//! NDIS miniport; here we use a simple echo of stdin or a TUN-like loop.
+//! and dual-relay failover. It also serves IPC v1 request/response messages on
+//! a loopback-only TCP adapter for the lab; production uses an ACL-protected
+//! Windows named pipe. In production, packets come from the NDIS miniport.
 
 use balancify_core::{UplinkId, FlowKey};
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
+use balancify_service::ipc::server::IpcServer;
+use balancify_service::ipc::{Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
 use std::collections::BTreeMap;
 use std::net::{UdpSocket, SocketAddr};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {
@@ -80,6 +84,9 @@ fn main() -> std::io::Result<()> {
     }
     svc.publish(now);
 
+    let (ipc_calls, ipc_addr) = start_ipc_listener()?;
+    println!("  IPC v1 loopback listener: {}", ipc_addr);
+
     // Handshake
     let relay_public = std::env::var("BALANCIFY_RELAY_PUBLIC_KEY").ok().and_then(|hex| {
         let bytes = hex_decode(&hex)?;
@@ -113,6 +120,14 @@ fn main() -> std::io::Result<()> {
 
     loop {
         let now = Instant::now();
+
+        // Keep service state on this thread; the socket workers only decode
+        // frames and forward requests through the channel.
+        while let Ok((request, reply)) = ipc_calls.try_recv() {
+            let response = svc.handle(request, now);
+            let _ = reply.send(response);
+        }
+
         // Tick every 100ms
         if now.duration_since(last_tick) >= Duration::from_millis(100) {
             let actions = svc.tick(now);
@@ -194,6 +209,51 @@ fn main() -> std::io::Result<()> {
 
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+type IpcCall = (Request, Sender<Response>);
+
+/// Start the lab TCP adapter on loopback. The actual product transport is an
+/// ACL-protected Windows named pipe; keeping this adapter local-only prevents
+/// accidental exposure of control operations to the LAN.
+fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
+    let port = std::env::var("BALANCIFY_IPC_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(5000);
+    let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let server = IpcServer::bind_loopback_at(bind_addr)?;
+    let local_addr = server.addr();
+    let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
+
+    std::thread::Builder::new()
+        .name("balancify-ipc-accept".to_string())
+        .spawn(move || loop {
+            if let Some(stream) = server.accept() {
+                let requests = request_tx.clone();
+                let _ = std::thread::Builder::new()
+                    .name("balancify-ipc-client".to_string())
+                    .spawn(move || {
+                        let _ = balancify_service::ipc::server::handle_stream(stream, |request| {
+                            let (reply_tx, reply_rx) = mpsc::channel();
+                            if requests.send((request, reply_tx)).is_err() {
+                                return Response::Error {
+                                    status: Status::Unavailable,
+                                    message: "service IPC dispatcher stopped".to_string(),
+                                };
+                            }
+                            reply_rx.recv().unwrap_or_else(|_| Response::Error {
+                                status: Status::Unavailable,
+                                message: "service did not return an IPC response".to_string(),
+                            })
+                        });
+                    });
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })?;
+
+    Ok((request_rx, local_addr))
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
