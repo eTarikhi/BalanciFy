@@ -636,53 +636,55 @@ impl<C: Crypto + Clone> Service<C> {
 
     /// One datagram received on an uplink's socket.
     pub fn ingest_path(&mut self, uplink: UplinkId, dg: &[u8], now: Instant) -> Vec<Action> {
-        let mut is_flow_data = false;
-        if let Some((hdr, _)) = Header::decode(dg) {
-            // ECN CE mark on any frame (Sec.6.4 rule 4)
-            if hdr.flags & balancify_tunnel::FLAG_ECN_CE != 0 {
-                let before = self.cc.ecn_events();
-                self.cc.on_ecn(hdr.path, now);
-                if self.cc.ecn_events() > before {
-                    self.counters.ecn_ce += 1;
-                    self.etw.info(
-                        etw::EVT_ECN_CE,
-                        &format!("ECN CE on path {} uplink {:?} cwnd={}", hdr.path, uplink, self.cc.window(hdr.path)),
-                    );
-                }
-            }
-            is_flow_data = hdr.kind == FrameKind::FlowData;
+        let hdr = Header::decode(dg).map(|(hdr, _)| hdr);
+        let is_flow_data = hdr.map_or(false, |h| h.kind == FrameKind::FlowData);
+        if let Some(hdr) = hdr {
             match hdr.kind {
-                FrameKind::Ack => {
-                    for (path, bytes) in self.tx.on_ack_for_session(hdr.session, hdr.seq, now) {
-                        if bytes == 0 { continue; }
-                        self.policy.on_ack(UplinkId(path), bytes, now);
-                        let before_delay = self.cc.delay_events();
-                        self.cc.on_ack_with_rtt(path, bytes, None, now);
-                        if self.cc.delay_events() > before_delay {
-                            self.counters.delay_events += 1;
-                            self.etw.info(
-                                etw::EVT_DELAY_CONGESTION,
-                                &format!("delay congestion on path {} uplink {:?}", path, uplink),
-                            );
+                FrameKind::Ack | FrameKind::ProbeReply => {
+                    match self.rx.verify_control_frame(dg, now) {
+                        Ok(true) => {}
+                        Ok(false) => return Vec::new(),
+                        Err(reason) => {
+                            if matches!(reason, balancify_tunnel::DropReason::AuthFailed) {
+                                self.counters.auth_failed += 1;
+                                self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
+                            }
+                            return Vec::new();
                         }
                     }
-                    self.on_relay_ack(now);
-                    return Vec::new();
-                }
-                FrameKind::ProbeReply => {
-                    if let Some((sent_at, size)) = self.probes.remove(&(hdr.path, hdr.seq)) {
-                        let rtt = now.duration_since(sent_at);
-                        self.tx.on_probe_reply(hdr.path, rtt, EWMA_ALPHA);
-                        self.policy.on_idle_probe(uplink, size, rtt, now);
-                        let before = self.cc.delay_events();
-                        self.cc.on_rtt(hdr.path, rtt, now);
-                        if self.cc.delay_events() > before {
-                            self.counters.delay_events += 1;
-                            self.etw.info(
-                                etw::EVT_DELAY_CONGESTION,
-                                &format!("delay congestion via probe path {} rtt={:?}", hdr.path, rtt),
-                            );
+                    self.record_ecn_ce(hdr.path, hdr.flags, uplink, now);
+                    if hdr.kind == FrameKind::Ack {
+                        for (path, bytes) in self.tx.on_ack_for_session(hdr.session, hdr.seq, now) {
+                            if bytes == 0 { continue; }
+                            self.policy.on_ack(UplinkId(path), bytes, now);
+                            let before_delay = self.cc.delay_events();
+                            self.cc.on_ack_with_rtt(path, bytes, None, now);
+                            if self.cc.delay_events() > before_delay {
+                                self.counters.delay_events += 1;
+                                self.etw.info(
+                                    etw::EVT_DELAY_CONGESTION,
+                                    &format!("delay congestion on path {} uplink {:?}", path, uplink),
+                                );
+                            }
                         }
+                        self.on_relay_ack(now);
+                        return Vec::new();
+                    }
+
+                    let Some((sent_at, size)) = self.probes.remove(&(hdr.path, hdr.seq)) else {
+                        return Vec::new();
+                    };
+                    let rtt = now.duration_since(sent_at);
+                    self.tx.on_probe_reply(hdr.path, rtt, EWMA_ALPHA);
+                    self.policy.on_idle_probe(uplink, size, rtt, now);
+                    let before_delay = self.cc.delay_events();
+                    self.cc.on_rtt(hdr.path, rtt, now);
+                    if self.cc.delay_events() > before_delay {
+                        self.counters.delay_events += 1;
+                        self.etw.info(
+                            etw::EVT_DELAY_CONGESTION,
+                            &format!("delay congestion via probe path {} rtt={:?}", hdr.path, rtt),
+                        );
                     }
                     self.on_relay_ack(now);
                     return Vec::new();
@@ -690,8 +692,12 @@ impl<C: Crypto + Clone> Service<C> {
                 _ => {}
             }
         }
+        let events = self.rx.ingest(dg, now);
+        if !events.iter().any(|ev| matches!(ev, Event::Dropped { .. })) {
+            if let Some(hdr) = hdr { self.record_ecn_ce(hdr.path, hdr.flags, uplink, now); }
+        }
         let mut out = Vec::new();
-        for ev in self.rx.ingest(dg, now) {
+        for ev in events {
             match &ev {
                 Event::Dropped { reason } if matches!(reason, balancify_tunnel::DropReason::AuthFailed) => {
                     self.etw.error(etw::EVT_AUTH_FAILED, &format!("auth failed on uplink {:?}", uplink));
@@ -1130,6 +1136,19 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     // -------------------------------------------------------------- internals
+
+    fn record_ecn_ce(&mut self, path: u8, flags: u8, uplink: UplinkId, now: Instant) {
+        if flags & balancify_tunnel::FLAG_ECN_CE == 0 { return; }
+        let before = self.cc.ecn_events();
+        self.cc.on_ecn(path, now);
+        if self.cc.ecn_events() > before {
+            self.counters.ecn_ce += 1;
+            self.etw.info(
+                etw::EVT_ECN_CE,
+                &format!("ECN CE on path {} uplink {:?} cwnd={}", path, uplink, self.cc.window(path)),
+            );
+        }
+    }
 
     fn receiver_action(&mut self, ev: Event) -> Vec<Action> {
         match ev {
@@ -1774,6 +1793,31 @@ mod tests {
         let after = s.snapshot().view(probe.0).unwrap().rtt;
         assert!(after < before, "an 8 ms probe must pull a 10 ms+ estimate down ({after:?} vs {before:?})");
         assert!(s.snapshot().view(probe.0).unwrap().capacity_bps > 0);
+    }
+
+    #[test]
+    fn forged_ack_does_not_refresh_relay_liveness() {
+        struct RejectAll;
+        impl balancify_tunnel::Crypto for RejectAll {
+            fn seal(&self, _path: u8, _seq: u64, _aad: &[u8], plain: &[u8], out: &mut Vec<u8>) {
+                out.extend_from_slice(plain);
+            }
+            fn open(&self, _path: u8, _seq: u64, _aad: &[u8], _cipher: &[u8]) -> Option<Vec<u8>> { None }
+        }
+
+        let now = Instant::now();
+        let mut svc = Service::new(ServiceConfig::default(), RejectAll, RejectAll);
+        svc.set_relays("10.0.0.1:4430".parse().unwrap(), None);
+        svc.on_relay_ack(now);
+        let mut forged = Vec::new();
+        Header::new(FrameKind::Ack, 0, svc.config().session, 0)
+            .with_flags(balancify_tunnel::FLAG_ECN_CE)
+            .encode(&mut forged);
+
+        let later = now + Duration::from_secs(9);
+        assert!(svc.ingest_path(UplinkId(0), &forged, later).is_empty());
+        assert_eq!(svc.relay_last_ack, Some(now), "unauthenticated ACK cannot keep a relay alive");
+        assert_eq!(svc.counters().auth_failed, 1);
     }
 
     #[test]

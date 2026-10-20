@@ -709,7 +709,29 @@ pub enum Event {
     Dropped { reason: DropReason },
 }
 
-const FLOW_REPLAY_WINDOW: u64 = 1024;
+const REPLAY_WINDOW: u64 = 1024;
+
+#[derive(Default)]
+struct ReplayWindow {
+    highest: Option<u64>,
+    seen: BTreeSet<u64>,
+}
+
+impl ReplayWindow {
+    fn accept(&mut self, seq: u64) -> bool {
+        if self.highest.map_or(false, |highest| seq < highest.saturating_sub(REPLAY_WINDOW - 1))
+            || !self.seen.insert(seq)
+        {
+            return false;
+        }
+        self.highest = Some(self.highest.map_or(seq, |highest| highest.max(seq)));
+        if let Some(highest) = self.highest {
+            let oldest = highest.saturating_sub(REPLAY_WINDOW - 1);
+            self.seen.retain(|seen| *seen >= oldest);
+        }
+        true
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ReceiverConfig {
@@ -751,8 +773,9 @@ struct SessionState {
     buf: ReorderBuffer,
     last_acked: Option<u64>,
     reported_ooo: u64,
-    flow_seen: BTreeSet<u64>,
-    highest_flow_seq: Option<u64>,
+    flow_replay: ReplayWindow,
+    control_replay: BTreeMap<u8, ReplayWindow>,
+    last_peer_ack: Option<u64>,
     last_activity: Instant,
     /// Path the last frame for this session arrived on; used for the ACK and
     /// for cap-expiry releases that happen on a timer tick.
@@ -792,12 +815,25 @@ impl<C: Crypto> Receiver<C> {
                 buf: ReorderBuffer::new(self.cfg.hold_cap),
                 last_acked: None,
                 reported_ooo: 0,
-                flow_seen: BTreeSet::new(),
-                highest_flow_seq: None,
+                flow_replay: ReplayWindow::default(),
+                control_replay: BTreeMap::new(),
+                last_peer_ack: None,
                 last_activity: now,
                 last_path: 0,
             });
         true
+    }
+
+    /// Authenticate a control datagram handled by a higher-level service path.
+    /// The return value is `Ok(false)` for an authenticated replay; malformed,
+    /// unknown-session, and unauthenticated frames return a drop reason.
+    pub fn verify_control_frame(&mut self, dg: &[u8], now: Instant) -> Result<bool, DropReason> {
+        let Some((hdr, body)) = Header::decode(dg) else {
+            self.counters.dropped += 1;
+            return Err(DropReason::BadHeader);
+        };
+        self.counters.frames += 1;
+        self.authenticate_control(hdr, &dg[..HEADER_LEN], body, now)
     }
 
     /// Feed one tunnel datagram.
@@ -808,13 +844,25 @@ impl<C: Crypto> Receiver<C> {
         };
         self.counters.frames += 1;
         match hdr.kind {
-            FrameKind::Keepalive => { self.counters.keepalives += 1; Vec::new() }
-            FrameKind::Ack | FrameKind::ProbeReply => Vec::new(),
-            FrameKind::FlowData => self.ingest_flow_data(hdr, &dg[..HEADER_LEN], body, now),
-            FrameKind::Probe => {
-                self.counters.probes += 1;
-                vec![Event::ProbeEcho { session: hdr.session, path: hdr.path, seq: hdr.seq }]
+            FrameKind::Keepalive | FrameKind::Ack | FrameKind::ProbeReply => {
+                match self.authenticate_control(hdr, &dg[..HEADER_LEN], body, now) {
+                    Ok(true) => {
+                        if hdr.kind == FrameKind::Keepalive { self.counters.keepalives += 1; }
+                        Vec::new()
+                    }
+                    Ok(false) => Vec::new(),
+                    Err(reason) => vec![Event::Dropped { reason }],
+                }
             }
+            FrameKind::FlowData => self.ingest_flow_data(hdr, &dg[..HEADER_LEN], body, now),
+            FrameKind::Probe => match self.authenticate_control(hdr, &dg[..HEADER_LEN], body, now) {
+                Ok(true) => {
+                    self.counters.probes += 1;
+                    vec![Event::ProbeEcho { session: hdr.session, path: hdr.path, seq: hdr.seq }]
+                }
+                Ok(false) => Vec::new(),
+                Err(reason) => vec![Event::Dropped { reason }],
+            },
             FrameKind::Data => self.ingest_data(hdr, &dg[..HEADER_LEN], body, now),
         }
     }
@@ -859,6 +907,51 @@ impl<C: Crypto> Receiver<C> {
         stale
     }
 
+    fn authenticate_control(
+        &mut self,
+        hdr: Header,
+        header_bytes: &[u8],
+        body: &[u8],
+        now: Instant,
+    ) -> Result<bool, DropReason> {
+        if !matches!(hdr.kind, FrameKind::Keepalive | FrameKind::Probe | FrameKind::ProbeReply | FrameKind::Ack) {
+            self.counters.dropped += 1;
+            return Err(DropReason::UnknownFrame);
+        }
+        if !self.sessions.contains_key(&hdr.session) {
+            if !self.cfg.auto_accept || self.sessions.len() >= self.cfg.max_sessions {
+                self.counters.dropped += 1;
+                return Err(if self.cfg.auto_accept { DropReason::SessionLimit } else { DropReason::UnknownSession });
+            }
+            self.open_session(hdr.session, now);
+        }
+        let Some(plain) = self.crypto.open(hdr.path, hdr.seq, header_bytes, body) else {
+            self.counters.auth_failed += 1;
+            self.counters.dropped += 1;
+            return Err(DropReason::AuthFailed);
+        };
+        if hdr.kind != FrameKind::Probe && !plain.is_empty() {
+            self.counters.dropped += 1;
+            return Err(DropReason::UnknownFrame);
+        }
+
+        let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
+        state.last_activity = now;
+        state.last_path = hdr.path;
+        let accepted = if hdr.kind == FrameKind::Ack {
+            if state.last_peer_ack.map_or(false, |last| hdr.seq <= last) {
+                false
+            } else {
+                state.last_peer_ack = Some(hdr.seq);
+                true
+            }
+        } else {
+            state.control_replay.entry(hdr.kind.as_u8()).or_default().accept(hdr.seq)
+        };
+        if !accepted { self.counters.duplicates += 1; }
+        Ok(accepted)
+    }
+
     fn ingest_flow_data(&mut self, hdr: Header, header_bytes: &[u8], body: &[u8], now: Instant) -> Vec<Event> {
         if !self.sessions.contains_key(&hdr.session) {
             if !self.cfg.auto_accept || self.sessions.len() >= self.cfg.max_sessions {
@@ -877,17 +970,9 @@ impl<C: Crypto> Receiver<C> {
         let state = self.sessions.get_mut(&hdr.session).expect("session ensured above");
         state.last_activity = now;
         state.last_path = hdr.path;
-        if state.highest_flow_seq
-            .map_or(false, |highest| hdr.seq < highest.saturating_sub(FLOW_REPLAY_WINDOW - 1))
-            || !state.flow_seen.insert(hdr.seq)
-        {
+        if !state.flow_replay.accept(hdr.seq) {
             self.counters.duplicates += 1;
             return Vec::new();
-        }
-        state.highest_flow_seq = Some(state.highest_flow_seq.map_or(hdr.seq, |seq| seq.max(hdr.seq)));
-        if let Some(highest) = state.highest_flow_seq {
-            let oldest = highest.saturating_sub(FLOW_REPLAY_WINDOW - 1);
-            state.flow_seen.retain(|seq| *seq >= oldest);
         }
         self.counters.delivered += 1;
         vec![Event::Payload { session: hdr.session, path: hdr.path, data: plain }]
@@ -1285,6 +1370,39 @@ mod tests {
         assert!(rx.ingest(&flow1.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow-1")));
         assert!(rx.ingest(&data.bytes, t0).iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"ordered")));
         assert_eq!(rx.counters().duplicates, 1);
+    }
+
+    #[test]
+    fn control_frames_require_authentication_and_reject_replay() {
+        struct RejectAll;
+        impl Crypto for RejectAll {
+            fn seal(&self, _path: u8, _seq: u64, _aad: &[u8], plain: &[u8], out: &mut Vec<u8>) {
+                out.extend_from_slice(plain);
+            }
+            fn open(&self, _path: u8, _seq: u64, _aad: &[u8], _cipher: &[u8]) -> Option<Vec<u8>> { None }
+        }
+
+        let now = Instant::now();
+        let mut tx = Sender::new(17, PassThrough, vec![(0, 1000)]);
+        let ack = tx.ack(0, 12);
+        let mut rx = Receiver::with_defaults(PassThrough);
+        assert_eq!(rx.verify_control_frame(&ack.bytes, now), Ok(true));
+        assert_eq!(rx.verify_control_frame(&ack.bytes, now), Ok(false), "an authenticated ACK replay is ignored");
+        let newer_ack = tx.ack(0, 13);
+        assert_eq!(rx.verify_control_frame(&newer_ack.bytes, now), Ok(true));
+        assert_eq!(rx.verify_control_frame(&ack.bytes, now), Ok(false), "a stale cumulative ACK is ignored");
+        assert_eq!(rx.counters().duplicates, 2);
+
+        let mut strict = Receiver::with_defaults(RejectAll);
+        assert_eq!(strict.verify_control_frame(&ack.bytes, now), Err(DropReason::AuthFailed));
+        assert_eq!(strict.counters().auth_failed, 1);
+
+        let probe = tx.probe(0, 24);
+        let mut rx = Receiver::with_defaults(PassThrough);
+        assert!(rx.ingest(&probe.bytes, now).iter().any(|event| matches!(event, Event::ProbeEcho { .. })));
+        assert!(rx.ingest(&probe.bytes, now).is_empty(), "a replayed probe cannot cause another response");
+        let mut strict = Receiver::with_defaults(RejectAll);
+        assert_eq!(strict.ingest(&probe.bytes, now), vec![Event::Dropped { reason: DropReason::AuthFailed }]);
     }
 
     #[test]
