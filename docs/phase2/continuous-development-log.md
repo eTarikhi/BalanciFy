@@ -25,7 +25,9 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 - `d96d656 add authenticated flow-level acknowledgements` — wire v2 adds selective FlowAck (kind 6) in its own nonce domain, bounded sender-side per-session byte/sequence state, authenticated replay-checked service handling, receiver duplicate re-ACK, and capacity sampling from peer receipt. Rate-limited unsent frames release their pending entry; the relay emits FlowAck with its transmit key. CI 39476560004 passed on Ubuntu and Windows.
 
-The latest CI also includes Ubuntu/Windows workspace tests, release build, lab safety tests, and dependency-policy audit. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
+- `f712a97` — replaced handwritten SBOM/VEX JSON with SPDX 2.3 generation from `cargo metadata --locked`, refreshed the runner-resolved `Cargo.lock`, made installer sidecar copying fail closed, and corrected current documentation/runtime claims. CI first exposed a missing `os` import (`39482972727`), then the invalid Cargo license spelling `MIT/Apache-2.0` (`39483294083`).
+- `66d1da6` — restored atomic SBOM writing and added a writer regression test; `6f9d3cb` — preserve malformed Cargo license metadata in `licenseComments` and use `NOASSERTION` rather than inventing a valid expression; `9103cbc` — join registry SHA-256 checksums from `Cargo.lock` because Cargo metadata does not provide those checksums.
+- CI `39484151181` passed on Ubuntu and Windows. The Ubuntu job generated the SPDX inventory and validated it with pinned `spdx-tools` 0.8.5; lab/tool tests and the dependency/crypto audit also passed. SPDX 3.0/VEX remain pending. Hardware-dependent WDK/NDIS, Driver Verifier, HVCI, and Rig B measurements remain pending.
 
 ## Commits since last green 39209903149 (ADR-0020)
 
