@@ -175,7 +175,7 @@ VOID BalancifyEvtIoDeviceControl(
         stats->txBytes = adapter->txBytes;
         stats->rxBytes = adapter->rxBytes;
         stats->mtu = adapter->mtu;
-        stats->paused = adapter->paused;
+        stats->paused = (BOOLEAN)adapter->rxPause.paused;
         NdisReleaseSpinLock(&adapter->lock);
         bytesReturned = sizeof(BALANCIFY_STATS);
         status = STATUS_SUCCESS;
@@ -184,12 +184,13 @@ VOID BalancifyEvtIoDeviceControl(
     case IOCTL_BALANCIFY_INJECT_NBL: {
         ULONG mtu;
         BOOLEAN paused;
+        BOOLEAN canIndicate;
 
         // The public miniport MTU is the maximum raw IP packet length. Snapshot
         // it under the same lock used by SET_MTU and the miniport OID callbacks.
         NdisAcquireSpinLock(&adapter->lock);
         mtu = adapter->mtu;
-        paused = adapter->paused;
+        paused = (BOOLEAN)adapter->rxPause.paused;
         NdisReleaseSpinLock(&adapter->lock);
         if (paused) {
             status = STATUS_DEVICE_NOT_READY;
@@ -262,18 +263,19 @@ VOID BalancifyEvtIoDeviceControl(
         NBL_SET_PORT_NUMBER(nbl, 0);
 
         NdisAcquireSpinLock(&adapter->lock);
-        paused = adapter->paused;
-        if (!paused) {
+        paused = (BOOLEAN)adapter->rxPause.paused;
+        canIndicate = BalancifyRxTrackIndication(&adapter->rxPause) ? TRUE : FALSE;
+        if (canIndicate) {
             adapter->rxPackets++;
             adapter->rxBytes += inputBufferLength;
         }
         NdisReleaseSpinLock(&adapter->lock);
 
-        if (paused) {
+        if (!canIndicate) {
             NdisFreeNetBufferList(nbl);
             NdisFreeMdl(mdl);
             NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
-            status = STATUS_DEVICE_NOT_READY;
+            status = paused ? STATUS_DEVICE_NOT_READY : STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
 

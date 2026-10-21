@@ -307,12 +307,21 @@ VOID MiniportHaltEx(NDIS_HANDLE miniportAdapterContext, NDIS_HALT_ACTION haltAct
 _Use_decl_annotations_
 NDIS_STATUS MiniportPause(NDIS_HANDLE miniportAdapterContext, PNDIS_MINIPORT_PAUSE_PARAMETERS pauseParameters) {
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
+    NDIS_STATUS status;
+    ULONG outstandingRxNbls;
     UNREFERENCED_PARAMETER(pauseParameters);
+
     NdisAcquireSpinLock(&adapter->lock);
-    adapter->paused = TRUE;
+    outstandingRxNbls = adapter->rxPause.outstandingRxNbls;
+    status = BalancifyRxBeginPause(&adapter->rxPause)
+        ? NDIS_STATUS_SUCCESS
+        : NDIS_STATUS_PENDING;
     NdisReleaseSpinLock(&adapter->lock);
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportPause (Sec.4.5 sleep)\n"));
-    return NDIS_STATUS_SUCCESS;
+
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+        "Balancify: MiniportPause outstandingRx=%lu status=0x%x\n",
+        outstandingRxNbls, status));
+    return status;
 }
 
 _Use_decl_annotations_
@@ -322,7 +331,7 @@ NDIS_STATUS MiniportRestart(
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
     UNREFERENCED_PARAMETER(restartParameters);
     NdisAcquireSpinLock(&adapter->lock);
-    adapter->paused = FALSE;
+    BalancifyRxRestart(&adapter->rxPause);
     NdisReleaseSpinLock(&adapter->lock);
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportRestart (Sec.4.5 resume)\n"));
     return NDIS_STATUS_SUCCESS;
@@ -390,9 +399,15 @@ VOID MiniportReturnNetBufferLists(
             context->packetLength = 0;
         }
         NdisFreeNetBufferList(curr);
+
+        BOOLEAN completePause;
+        NdisAcquireSpinLock(&adapter->lock);
+        completePause = BalancifyRxReturnNbl(&adapter->rxPause) ? TRUE : FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
+
         curr = next;
     }
-    UNREFERENCED_PARAMETER(adapter);
     UNREFERENCED_PARAMETER(returnFlags);
 }
 

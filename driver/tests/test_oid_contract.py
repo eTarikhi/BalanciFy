@@ -5,6 +5,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MINIPORT_C = (ROOT / "driver/src/miniport.c").read_text(encoding="utf-8")
+IOCTL_C = (ROOT / "driver/src/ioctl.c").read_text(encoding="utf-8")
 INF = (ROOT / "driver/balancify.inf").read_text(encoding="utf-8")
 
 
@@ -40,6 +41,14 @@ class NdisOidContractTests(unittest.TestCase):
         registration_set = MINIPORT_C.index("(PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&registration")
         mtu_read = MINIPORT_C.index("adapter->mtu = MiniportReadConfiguredMtu")
         self.assertLess(registration_set, mtu_read)
+
+    def test_receive_pause_waits_for_returned_nbls(self):
+        self.assertIn("BalancifyRxBeginPause(&adapter->rxPause)", MINIPORT_C)
+        self.assertIn("BalancifyRxReturnNbl(&adapter->rxPause)", MINIPORT_C)
+        self.assertRegex(MINIPORT_C, r"if\s*\(completePause\)\s*NdisMPauseComplete\(")
+        track = IOCTL_C.index("BalancifyRxTrackIndication(&adapter->rxPause)")
+        indicate = IOCTL_C.index("NdisMIndicateReceiveNetBufferLists(")
+        self.assertLess(track, indicate)
 
     def test_raw_ip_inf_and_ndis_attributes_agree(self):
         self.assertRegex(INF, r"(?m)^\*MediaType\s*=\s*19\s*;\s*NdisMediumIP")

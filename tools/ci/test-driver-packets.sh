@@ -13,5 +13,9 @@ ${CC:-cc} -std=c11 -pedantic -Wall -Wextra -Wconversion -Wsign-conversion -Werro
     "$repo_root/driver/tests/test_mtu_config.c" \
     -o "$tmp_dir/test_mtu_config"
 "$tmp_dir/test_mtu_config"
+${CC:-cc} -std=c11 -pedantic -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+    "$repo_root/driver/tests/test_rx_pause_state.c" \
+    -o "$tmp_dir/test_rx_pause_state"
+"$tmp_dir/test_rx_pause_state"
 python3 "$repo_root/driver/tests/test_oid_contract.py"
 printf '%s\n' 'driver packet and OID contract tests passed'

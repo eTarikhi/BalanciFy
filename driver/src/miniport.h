@@ -4,6 +4,7 @@
 #include <wdf.h>
 
 #include "config_validation.h"
+#include "rx_pause_state.h"
 
 #define BALANCIFY_TAG 'laBB' // 'BBal' reversed
 #define BALANCIFY_POOL_TAG BALANCIFY_TAG
@@ -14,7 +15,7 @@ typedef struct _BALANCIFY_ADAPTER {
     NDIS_HANDLE netBufferPool;
     WDFDEVICE controlDevice;
     NDIS_SPIN_LOCK lock;
-    BOOLEAN paused;
+    BALANCIFY_RX_PAUSE_STATE rxPause;
     ULONG mtu;
     ULONG lookaheadSize;
     ULONG packetFilter;
