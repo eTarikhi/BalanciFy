@@ -137,6 +137,9 @@ impl InstallJournal {
     }
 
     pub fn save(&self, path: &PathBuf) -> std::io::Result<()> {
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
         let entries = self.entries.iter().enumerate().map(|(sequence, entry)| {
             let rollback = entry
                 .rollback
@@ -515,8 +518,7 @@ mod tests {
     #[test]
     fn journal_serializes_step_and_rollback_details_with_json_escaping() {
         let root = std::env::temp_dir().join(format!("balancify-journal-json-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let journal_path = root.join("journal.json");
+        let journal_path = root.join("nested").join("journal.json");
         let inventory_path = PathBuf::from("inventory\".spdx.json");
         let mut journal = InstallJournal::default();
         journal.push(
