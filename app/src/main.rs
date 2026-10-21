@@ -75,30 +75,30 @@ fn main() -> std::io::Result<()> {
                                 render_event(ev);
                             }
                             Ok(None) => {
-                                println!("No event arrived before the IPC read timeout; showing cached status as stale.");
-                                if let Some(cache) = last_good.as_mut() {
-                                    cache.mark_connection_stale();
-                                    render_stale_home(cache, Instant::now());
-                                } else {
-                                    println!("No last-known-good service snapshot is available.");
-                                }
+                                render_connection_stale_home(
+                                    last_good.as_mut(),
+                                    "No event arrived before the IPC read timeout; showing cached status as stale.",
+                                );
                                 break;
                             }
                             Err(error) => {
-                                eprintln!("IPC event stream failed: {error}; showing cached status as stale.");
-                                if let Some(cache) = last_good.as_mut() {
-                                    cache.mark_connection_stale();
-                                    render_stale_home(cache, Instant::now());
-                                } else {
-                                    println!("No last-known-good service snapshot is available.");
-                                }
+                                render_connection_stale_home(
+                                    last_good.as_mut(),
+                                    &format!("IPC event stream failed: {error}; showing cached status as stale."),
+                                );
                                 break;
                             }
                         }
                     }
                 }
-                Some(response) => println!("Event subscription was not accepted: {:?}", response),
-                None => println!("Service closed the IPC connection before acknowledging the event subscription."),
+                Some(response) => render_connection_stale_home(
+                    last_good.as_mut(),
+                    &format!("Event subscription was not accepted: {:?}; showing cached status as stale.", response),
+                ),
+                None => render_connection_stale_home(
+                    last_good.as_mut(),
+                    "Service closed the IPC connection before acknowledging the event subscription; showing cached status as stale.",
+                ),
             }
         }
         "rules" => {
@@ -265,6 +265,16 @@ fn render_stale_home(cache: &LastKnownGoodHome, now: Instant) {
         reason
     );
     render_home(Response::Status(cache.snapshot.clone()));
+}
+
+fn render_connection_stale_home(cache: Option<&mut LastKnownGoodHome>, message: &str) {
+    eprintln!("{message}");
+    if let Some(cache) = cache {
+        cache.mark_connection_stale();
+        render_stale_home(cache, Instant::now());
+    } else {
+        println!("No last-known-good service snapshot is available.");
+    }
 }
 
 fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
@@ -667,6 +677,14 @@ mod tests {
         assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
         cache.refresh_status(snapshot(), now + Duration::from_secs(2));
         assert_eq!(cache.stale_reason(), None);
+    }
+
+    #[test]
+    fn subscription_failure_renders_and_marks_the_cached_home_stale() {
+        let now = Instant::now();
+        let mut cache = LastKnownGoodHome::new(snapshot(), now);
+        render_connection_stale_home(Some(&mut cache), "subscription rejected");
+        assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
     }
 
     #[test]
