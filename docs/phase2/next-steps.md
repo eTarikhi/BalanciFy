@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous; client-hardening PR #6 and FlowData-repair PR #7 are merged. Follow-up documentation and an explicit uplink-loss test are on the active branch. CI 39531428626 passed (261 Linux / 260 Windows Rust tests), including SPDX 2.3 validation and lab/policy checks.
+Status: continuous on `arena/e323e7b5-balancify`; client-hardening PR #6 and FlowData-repair PR #7 are merged. The current unit adds NDIS registration/general attributes and a minimal OID surface at source level; it still requires WDK and Windows validation. CI 39531428626 passed (261 Linux / 260 Windows Rust tests), including SPDX 2.3 validation and lab/policy checks.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -24,7 +24,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 ## What remains (ordered, still without stopping)
 
-1. **Driver S2b socket test through miniport**: validate the existing real-UDP tunnel path through NDIS on a test-signed Hyper-V VM after a successful WDK build; requires Windows/WDK 10.0.22621+, Driver Verifier, and test hardware.
+1. **Driver S2b socket test through miniport**: compile the source-level NDIS initialization/OID work with WDK, complete remaining adapter lifecycle and data-path work, then validate the real-UDP tunnel path through NDIS on a test-signed Hyper-V VM; requires Windows/WDK 10.0.22621+, Driver Verifier, and test hardware.
 2. **Real S2c/throughput validation**: use the explicitly confirmed netem runner only on disposable interfaces; raw link results alone are not BalanciFy bonding evidence. Add adapter-level capture and record 10-repetition statistics. No lab result is claimed; Rig B remains pending.
 3. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on wired 1 Gbps and Wi-Fi 6 300 Mbit/s, secure mode, pacing at 80% capacity, per-flow off/on; measure aggregate/single-flow/failover/added delay (target <=3ms) and CPU/Gbit/s. Local service-path benchmarks are not network evidence.
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
@@ -35,7 +35,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 ## Process
 
 - Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; seven SBOM tests and SPDX parser also run)
-- Use `gh run list --limit 1 --branch arena/73af0098-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
+- Use `gh run list --limit 1 --branch arena/e323e7b5-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
 - Workspace dependency policy: `[workspace.dependencies]` intentionally empty per blueprint Sec.4.8 — do not add unpinned dependencies casually

@@ -1,6 +1,6 @@
 # Roadmap next — what remains for G2/G3
 
-Date: 2026-10-20
+Date: 2026-10-21
 Status: in progress; software work continues, hardware gates remain pending
 
 ## Completed since last green (39191895800)
@@ -16,7 +16,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
-- Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; still source-only, with NDIS initialization incomplete and WDK/Verifier validation pending.
+- Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` now registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. The control-device symbolic link call now uses the KMDF API, and adapter cleanup purges the control queue before freeing context. This remains source-only and unbuilt; WDK/Verifier validation is pending.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
 - Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
@@ -27,7 +27,7 @@ Status: in progress; software work continues, hardware gates remain pending
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
 
-1. **Complete and build the driver source**: replace the NULL `NdisMSetMiniportAttributes` call with valid NDIS general attributes, finish control-device teardown/adapter lifetime handling, and build x64 + ARM64 using WDK 10.0.22621+ (not available in this sandbox).
+1. **Complete and build the driver source**: source now submits registration attributes before valid NDIS general attributes, exposes a minimal OID set, uses the KMDF symbolic-link API, and synchronously purges the control queue before adapter teardown. Review remaining NDIS/WDF lifecycle details and build x64 + ARM64 using WDK 10.0.22621+ (not available in this sandbox).
 2. **S2b socket test through miniport**: only after a successful WDK build, run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on a test-signed Hyper-V VM with Driver Verifier and Memory Integrity configured.
 3. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 
@@ -47,7 +47,7 @@ Status: in progress; software work continues, hardware gates remain pending
 
 - `Cargo.lock` is committed and checked by the dependency audit.
 - Simulated paths are not netem — S2c/Rig B measurements remain pending; raw iperf3 link baselines are not end-to-end BalanciFy measurements.
-- Miniport source is not operational: NDIS attributes are not yet registered, and no WDK build/test-signed install/Verifier run has been completed.
+- Miniport source is not operational: NDIS attributes are now registered in source, but no WDK build, test-signed install, or Verifier run has been completed.
 - The local service adapter uses loopback TCP only; production named-pipe ACLs and Windows caller authentication remain pending.
 - Single session per service default — multi-session demux exists but service opens one session unless per-flow/per-class toggled.
 - Flow-level ACK frames are supported in tunnel wire v2, but no FlowData retransmission/repair is provided: loss can suppress capacity samples while delivered payload remains unaffected.

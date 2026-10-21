@@ -2,10 +2,10 @@
 
 This directory contains first-party NDIS miniport and WDF control-device source for the planned packet path (Sec.4.8, Sec.5, Sec.7). No third-party kernel component is used in the intended data path (C2).
 
-**Status:** source-level scaffold only. No WDK build, test-signed installation, Driver Verifier run, HVCI test, or packet-path validation is claimed. `MiniportInitializeEx` still has a TODO where valid NDIS adapter attributes must be registered, so this is not an installable/functional driver. The lab prototype continues to use bound UDP sockets (S2a); G2 requires completing the initialization and lifecycle work, then validating on a Windows test rig.
+**Status:** source-level scaffold only. `MiniportInitializeEx` now submits NDIS registration attributes followed by revision-2 general attributes, publishes its supported OID list, and unwinds resources if initialization fails. This source has not been built with WDK or test-signed; no Driver Verifier, HVCI, or packet-path validation is claimed, and the miniport is still not a functional service data path. The lab prototype continues to use bound UDP sockets (S2a); G2 still requires a WDK build, completion of the adapter/data-path lifecycle, and validation on a Windows test rig.
 
 **Structure:**
-- `src/miniport.c` + `src/miniport.h` -- NDIS 6.8 callback skeleton and shared adapter/NBL ownership definitions. Initialization attributes, adapter lifecycle, and actual packet path remain incomplete.
+- `src/miniport.c` + `src/miniport.h` -- NDIS 6.8 callback skeleton, registration/general attributes, a minimal supported OID surface, and shared adapter/NBL ownership definitions. The actual packet path and runtime lifecycle remain incomplete and unvalidated.
 - `src/ioctl.c` -- source implementation of a minimal WDF IOCTL surface: set MTU, inject NBL, query stats, and set quanta. Injected packets are copied to owned nonpaged memory and released when NDIS returns the NBL; this source has not yet been built or verified with WDK/Verifier.
 - `balancify.inf` -- INF for PnP install, `*IfType = IF_TYPE_PROP_VIRTUAL (53)`, `*MediaType = NdisMedium802_3`.
 - `driver.vcxproj` -- WDK 10.0.22621+ build.

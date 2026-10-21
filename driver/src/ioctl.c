@@ -100,14 +100,13 @@ NTSTATUS BalancifyCreateControlDevice(WDFDRIVER driver, PBALANCIFY_ADAPTER adapt
         return status;
     }
 
-    WdfControlFinishInitializing(device);
-
-    status = WdfSymlinkCreate(&dosName, &deviceName);
+    status = WdfDeviceCreateSymbolicLink(device, &dosName);
     if (!NT_SUCCESS(status)) {
         WdfObjectDelete(device);
         return status;
     }
 
+    WdfControlFinishInitializing(device);
     adapter->controlDevice = device;
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: Control device created %wZ\n", &deviceName));
