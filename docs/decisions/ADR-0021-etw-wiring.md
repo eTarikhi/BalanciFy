@@ -17,13 +17,13 @@ Previously, service had eprintln for failover only, no ETW.
 - `ingest_path`: when `Event::Dropped AuthFailed`, log `EVT_AUTH_FAILED (600)` with uplink
 - `tick`: when `should_rekey` triggers `maybe_rekey`, log `EVT_REKEY (400)` with session and time
 - `tick`: when `check_relay_failover` returns new relay, log `EVT_RELAY_FAILOVER (500)` with old->new and count, plus existing eprintln
-- `crates/service/src/etw.rs`: already has event IDs 100-600, `EtwProvider::new`, `info/warn/error/verbose` that eprintln on non-Windows, EventRegister/EventWrite on Windows (stub)
+- `crates/service/src/etw.rs`: event IDs 100-600; Windows `EventRegister`/`EventEnabled`/`EventWrite`/`EventUnregister` use a stable provider GUID, nonzero level/keyword, and bounded UTF-16 payloads; non-Windows and Windows API failure paths log to stderr. No provider manifest is installed, so useful Windows trace decoding still needs runtime validation.
 - Tests: existing ETW test `etw_provider_logs` still passes, no new failure
 
 ## Consequences
 
 - Positive: diagnostics include ECN/delay/rekey/failover/auth via ETW, visible in support bundle and shell
-- Negative: ETW stub on non-Windows is eprintln, not real ETW — acceptable for lab, real ETW needs Windows build
+- Negative: non-Windows uses stderr; Windows ETW code is compiled by CI but has not been exercised against a live trace session, and no manifest is installed for high-level decoding.
 - Neutral: no change to data path, only logging
 
 ## References

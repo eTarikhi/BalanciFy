@@ -95,7 +95,7 @@ extern "system" {
     fn EventEnabled(
         registration_handle: u64,
         event_descriptor: *const EventDescriptor,
-    ) -> u32;
+    ) -> u8;
     fn EventWrite(
         registration_handle: u64,
         event_descriptor: *const EventDescriptor,
@@ -190,20 +190,38 @@ impl EtwProvider {
     }
 }
 
+const MAX_MESSAGE_UTF16_UNITS: usize = 8 * 1024;
+
+fn etw_level_code(level: EtwLevel) -> u8 {
+    match level {
+        EtwLevel::Error => 2,
+        EtwLevel::Warning => 3,
+        EtwLevel::Info => 4,
+        EtwLevel::Verbose => 5,
+    }
+}
+
+fn encode_etw_message(provider_name: &str, message: &str) -> Vec<u16> {
+    let message = format!("{provider_name}: {message}");
+    let mut payload: Vec<u16> = message
+        .encode_utf16()
+        .take(MAX_MESSAGE_UTF16_UNITS - 1)
+        .collect();
+    if matches!(payload.last(), Some(unit) if (0xD800..=0xDBFF).contains(unit)) {
+        payload.pop();
+    }
+    payload.push(0);
+    payload
+}
+
 #[cfg(windows)]
 fn write_windows_event(handle: u64, provider_name: &str, event: &EtwEvent) -> bool {
-    const MAX_MESSAGE_UTF16_UNITS: usize = 8 * 1024;
     const BALANCIFY_KEYWORD: u64 = 1;
     let descriptor = EventDescriptor {
         id: event.id,
         version: 0,
         channel: 0,
-        level: match event.level {
-            EtwLevel::Error => 2,
-            EtwLevel::Warning => 3,
-            EtwLevel::Info => 4,
-            EtwLevel::Verbose => 5,
-        },
+        level: etw_level_code(event.level),
         opcode: 0,
         task: 0,
         keyword: BALANCIFY_KEYWORD,
@@ -212,12 +230,7 @@ fn write_windows_event(handle: u64, provider_name: &str, event: &EtwEvent) -> bo
         return true;
     }
 
-    let message = format!("{provider_name}: {}", event.message);
-    let mut payload: Vec<u16> = message
-        .encode_utf16()
-        .take(MAX_MESSAGE_UTF16_UNITS - 1)
-        .collect();
-    payload.push(0);
+    let payload = encode_etw_message(provider_name, &event.message);
     let data = EventDataDescriptor {
         ptr: payload.as_ptr() as usize as u64,
         size: (payload.len() * std::mem::size_of::<u16>()) as u32,
@@ -250,6 +263,24 @@ mod tests {
         provider.warn(EVT_UPLINK_DOWN, "uplink down");
         provider.error(EVT_AUTH_FAILED, "auth failed");
         provider.verbose(EVT_SERVICE_STOP, "service stop");
+    }
+
+    #[test]
+    fn event_levels_use_windows_etw_level_codes() {
+        assert_eq!(etw_level_code(EtwLevel::Error), 2);
+        assert_eq!(etw_level_code(EtwLevel::Warning), 3);
+        assert_eq!(etw_level_code(EtwLevel::Info), 4);
+        assert_eq!(etw_level_code(EtwLevel::Verbose), 5);
+    }
+
+    #[test]
+    fn event_message_is_terminated_and_truncation_keeps_valid_utf16() {
+        let prefix_units = "provider: ".encode_utf16().count();
+        let filler = "a".repeat(MAX_MESSAGE_UTF16_UNITS - 1 - prefix_units - 1);
+        let payload = encode_etw_message("provider", &format!("{filler}😀"));
+        assert_eq!(payload.last(), Some(&0));
+        assert!(payload.len() <= MAX_MESSAGE_UTF16_UNITS);
+        assert!(!matches!(payload.get(payload.len() - 2), Some(unit) if (0xD800..=0xDBFF).contains(unit)));
     }
 
     #[test]

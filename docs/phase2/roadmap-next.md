@@ -12,7 +12,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - Rate limiting service egress (TokenBucket, RateLimiter per-uplink, try_send, delay_for, wired into send_app_packet -> Hold on limit)
 - Flow-level capacity uses authenticated per-packet FlowAck receipts in wire v2; sender-side pending ACK state is bounded and capacity samples are credited to the original uplink.
 - Wintun fallback ADR-0009 (feature-gated, exception file check, raw FFI placeholder)
-- Installer transactional (journaled, 7 steps, reverse rollback, dry-run, tests)
+- Installer transactional (journaled, 9 steps including SPDX 2.3 + 3.0.1 sidecars, reverse rollback, dry-run, tests)
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
@@ -20,9 +20,9 @@ Status: in progress; software work continues, hardware gates remain pending
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
 - Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
-- ETW stub + support bundle enhanced (EtwProvider, event IDs 100-600, UplinkDiag cwnd/in_flight, CongestionDiag loss/ecn/delay+paths, JSON)
+- ETW diagnostics write through Windows EventRegister/EventWrite using a stable provider GUID, nonzero level/keyword, event IDs 100-600 and bounded UTF-16 payloads; non-Windows uses stderr. Support bundle includes UplinkDiag cwnd/in_flight and CongestionDiag loss/ecn/delay+paths. Actual Windows trace collection/decoding remains unvalidated; no manifest is installed.
 - Software benchmark + benches (throughput.rs local work rate/per-call latency only; drr-bench, pacing-bench, crypto-bench). Real network performance and G3/G4 acceptance remain pending.
-- SPDX 2.3 remains the compatibility inventory; this follow-up adds a parallel SPDX 3.0.1 JSON-LD generator for the same Cargo-locked production graph, an official JSON Schema + SHACL CI validation gate, and installer copy/rollback for both sidecars. Reviewed VEX and actual clean-machine installation remain pending.
+- SPDX 2.3 remains the compatibility inventory; commit `d86ad4f` adds a parallel SPDX 3.0.1 JSON-LD generator for the same Cargo-locked production graph, official JSON Schema + SHACL CI validation, artifact publication, and installer copy/rollback for both sidecars. CI `39600224242` passed; reviewed VEX and actual clean-machine installation remain pending.
 - ADRs: 0009 Wintun fallback, 0010 rate limiting+flow capacity, 0011 per-session sequencing, 0012 ETW+support bundle, 0013 per-class sessions, 0014 throughput harness, 0015 continuous development
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
@@ -41,7 +41,7 @@ Status: in progress; software work continues, hardware gates remain pending
 ## Next for Phase 4 (secure + GUI)
 
 1. **Client binary + GUI IPC**: CLI now uses pinned authenticated Noise_IK or explicit debug-only loopback lab mode; remaining work is production packet-adapter integration, WinUI 3 shell (Home, Rules, Relay & account, Diagnostics, tray), and authenticated production IPC.
-2. **ETW coverage**: consider bond-revert and uplink up/down events beyond the existing ECN, delay, failover, rekey, and authentication events.
+2. **ETW trace validation**: the Windows EventRegister/EventWrite sink and event IDs are implemented; validate collection and useful decoding on a Windows service install, then decide whether a manifest/TraceLogging schema is needed. This cannot be verified in the current sandbox.
 
 ## Known gaps (deliberate)
 
