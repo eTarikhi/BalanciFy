@@ -12,7 +12,7 @@ permissions:
 jobs:
   policy-audit:
     name: Dependency + crypto policy audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
       # ADR-0002 / blueprint §11.5 criteria C2 and C4: no third-party runtime
@@ -22,7 +22,7 @@ jobs:
 
   lab-tool-tests:
     name: Lab analysis tool tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
       - name: test analyzer
@@ -36,7 +36,7 @@ jobs:
 
   core-tests-linux:
     name: Rust workspace tests (ubuntu)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
