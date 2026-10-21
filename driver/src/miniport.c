@@ -29,6 +29,39 @@ MINIPORT_DEVICE_PNP_EVENT_NOTIFY MiniportDevicePnPEventNotify;
 static NDIS_HANDLE gDriverHandle = NULL;
 static NDIS_HANDLE gNdisDriverContext = NULL;
 
+// This scaffold configures one virtual adapter instance with a locally
+// administered unicast address. Production multi-instance addressing requires
+// a per-instance registry/persistent identity policy.
+static const UCHAR gPermanentMacAddress[ETH_LENGTH_OF_ADDRESS] = {
+    0x02, 0xBA, 0x1F, 0x00, 0x00, 0x01
+};
+
+static const NDIS_OID gSupportedOids[] = {
+    OID_GEN_SUPPORTED_LIST,
+    OID_GEN_MEDIA_SUPPORTED,
+    OID_GEN_MEDIA_IN_USE,
+    OID_GEN_MAXIMUM_FRAME_SIZE,
+    OID_GEN_MAXIMUM_TOTAL_SIZE,
+    OID_GEN_CURRENT_PACKET_FILTER,
+    OID_GEN_STATISTICS,
+    OID_802_3_PERMANENT_ADDRESS,
+    OID_802_3_CURRENT_ADDRESS,
+};
+
+static VOID MiniportFreeAdapter(PBALANCIFY_ADAPTER adapter) {
+    if (!adapter) return;
+    if (adapter->controlDevice) {
+        WdfObjectDelete(adapter->controlDevice);
+        adapter->controlDevice = NULL;
+    }
+    if (adapter->netBufferListPool) {
+        NdisFreeNetBufferListPool(adapter->netBufferListPool);
+        adapter->netBufferListPool = NULL;
+    }
+    NdisFreeSpinLock(&adapter->lock);
+    NdisFreeMemory(adapter, sizeof(BALANCIFY_ADAPTER), 0);
+}
+
 // Miniport characteristics
 static NDIS_MINIPORT_DRIVER_CHARACTERISTICS gCharacteristics = {
     .Header = { .Type = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS,
@@ -98,8 +131,12 @@ NDIS_STATUS MiniportInitializeEx(
     NDIS_HANDLE miniportAdapterHandle,
     NDIS_HANDLE miniportDriverContext,
     PNDIS_MINIPORT_INIT_PARAMETERS miniportInitParameters) {
-    PBALANCIFY_ADAPTER adapter = NULL;
-    NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+    PBALANCIFY_ADAPTER adapter;
+    NDIS_STATUS status;
+    NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES registration;
+    NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES general;
+    ULONG linkSpeed = 1000000000UL;
+
     UNREFERENCED_PARAMETER(miniportDriverContext);
     UNREFERENCED_PARAMETER(miniportInitParameters);
 
@@ -110,9 +147,35 @@ NDIS_STATUS MiniportInitializeEx(
     NdisZeroMemory(adapter, sizeof(BALANCIFY_ADAPTER));
     adapter->miniportAdapterHandle = miniportAdapterHandle;
     adapter->mtu = 1440; // Sec.6.1 default, updated from service via IOCTL
+    adapter->packetFilter = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
+    NdisMoveMemory(adapter->permanentAddress, gPermanentMacAddress, ETH_LENGTH_OF_ADDRESS);
+    NdisMoveMemory(adapter->currentAddress, gPermanentMacAddress, ETH_LENGTH_OF_ADDRESS);
     NdisAllocateSpinLock(&adapter->lock);
 
-    // Create NBL pool for RX injection (S2b INJECT_NBL -> NdisMIndicateReceiveNetBufferLists)
+    // NDIS requires the registration attributes before general attributes.
+    // Publish the adapter context first so callbacks have a valid context once
+    // registration succeeds. Any subsequent initialization failure is unwound
+    // here because NDIS does not call Halt for a failed initialization.
+    NdisZeroMemory(&registration, sizeof(registration));
+    registration.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES;
+    registration.Header.Revision = NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_1;
+    registration.Header.Size = NDIS_SIZEOF_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_1;
+    registration.MiniportAdapterContext = adapter;
+    registration.AttributeFlags = NDIS_MINIPORT_ATTRIBUTES_SURPRISE_REMOVE_OK;
+    registration.CheckForHangTimeInSeconds = 0;
+    registration.InterfaceType = NdisInterfaceInternal;
+
+    status = NdisMSetMiniportAttributes(
+        miniportAdapterHandle,
+        (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&registration);
+    if (status != NDIS_STATUS_SUCCESS) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "Balancify: registration attributes failed 0x%x\n", status));
+        MiniportFreeAdapter(adapter);
+        return status;
+    }
+
+    // Create the receive NBL pool used by the controlled INJECT_NBL path.
     {
         NET_BUFFER_LIST_POOL_PARAMETERS nblParams;
         NdisZeroMemory(&nblParams, sizeof(nblParams));
@@ -126,26 +189,74 @@ NDIS_STATUS MiniportInitializeEx(
         nblParams.DataSize = 0;
         adapter->netBufferListPool = NdisAllocateNetBufferListPool(miniportAdapterHandle, &nblParams);
         if (!adapter->netBufferListPool) {
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Balancify: NdisAllocateNetBufferListPool failed\n"));
-            // Non-fatal for skeleton, but injection will fail
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                "Balancify: NdisAllocateNetBufferListPool failed\n"));
+            status = NDIS_STATUS_RESOURCES;
+            goto InitializeFailure;
         }
     }
 
-    // Create WDF control device for IOCTLs (Sec.8.2, G2 S2b)
-    // In real driver, we need WDFDRIVER handle -- get via WdfGetDriver()
+    // Create the privileged WDF control device before exposing the miniport.
     {
-        WDFDRIVER wdfDriver = WdfGetDriver();
-        NTSTATUS wdfStatus = BalancifyCreateControlDevice(wdfDriver, adapter);
+        NTSTATUS wdfStatus = BalancifyCreateControlDevice(WdfGetDriver(), adapter);
         if (!NT_SUCCESS(wdfStatus)) {
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Balancify: Control device creation failed 0x%x\n", wdfStatus));
-            // Non-fatal for skeleton: continue without control device
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                "Balancify: Control device creation failed 0x%x\n", wdfStatus));
+            status = NDIS_STATUS_FAILURE;
+            goto InitializeFailure;
         }
     }
 
-    NdisMSetMiniportAttributes(miniportAdapterHandle,
-        (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)NULL); // TODO: set registration attributes
+    NdisZeroMemory(&general, sizeof(general));
+    general.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES;
+    general.Header.Revision = NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2;
+    general.Header.Size = NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2;
+    general.MediaType = NdisMedium802_3;
+    general.PhysicalMediumType = NdisPhysicalMedium802_3;
+    general.MtuSize = adapter->mtu;
+    general.MaxXmitLinkSpeed = (ULONG64)linkSpeed;
+    general.XmitLinkSpeed = (ULONG64)linkSpeed;
+    general.MaxRcvLinkSpeed = (ULONG64)linkSpeed;
+    general.RcvLinkSpeed = (ULONG64)linkSpeed;
+    general.MediaConnectState = MediaConnectStateConnected;
+    general.MediaDuplexState = MediaDuplexStateFull;
+    general.LookaheadSize = adapter->mtu;
+    general.MacOptions = NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
+        NDIS_MAC_OPTION_TRANSFERS_NOT_PEND | NDIS_MAC_OPTION_NO_LOOPBACK;
+    general.SupportedPacketFilters = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
+    general.MaxMulticastListSize = 0;
+    general.MacAddressLength = ETH_LENGTH_OF_ADDRESS;
+    NdisMoveMemory(general.PermanentMacAddress, adapter->permanentAddress, ETH_LENGTH_OF_ADDRESS);
+    NdisMoveMemory(general.CurrentMacAddress, adapter->currentAddress, ETH_LENGTH_OF_ADDRESS);
+    general.AccessType = NET_IF_ACCESS_BROADCAST;
+    general.DirectionType = NET_IF_DIRECTION_SENDRECEIVE;
+    general.ConnectionType = NET_IF_CONNECTION_DEDICATED;
+    // Keep the NDIS interface type aligned with *IfType in the INF.
+    general.IfType = IF_TYPE_PROP_VIRTUAL;
+    general.IfConnectorPresent = FALSE;
+    general.SupportedStatistics = NDIS_STATISTICS_FLAGS_VALID_BYTES_RCV |
+        NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT;
+    general.SupportedPauseFunctions = NdisPauseFunctionsUnsupported;
+    general.DataBackFillSize = 0;
+    general.ContextBackFillSize = 0;
+    general.SupportedOidList = (PNDIS_OID)gSupportedOids;
+    general.SupportedOidListLength = sizeof(gSupportedOids);
 
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportInitializeEx mtu=%lu\n", adapter->mtu));
+    status = NdisMSetMiniportAttributes(
+        miniportAdapterHandle,
+        (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&general);
+    if (status != NDIS_STATUS_SUCCESS) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "Balancify: general attributes failed 0x%x\n", status));
+        goto InitializeFailure;
+    }
+
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+        "Balancify: MiniportInitializeEx mtu=%lu\n", adapter->mtu));
+    return NDIS_STATUS_SUCCESS;
+
+InitializeFailure:
+    MiniportFreeAdapter(adapter);
     return status;
 }
 
@@ -154,14 +265,7 @@ VOID MiniportHaltEx(NDIS_HANDLE miniportAdapterContext, NDIS_HALT_ACTION haltAct
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
     UNREFERENCED_PARAMETER(haltAction);
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportHaltEx\n"));
-    if (adapter) {
-        if (adapter->netBufferListPool) {
-            NdisFreeNetBufferListPool(adapter->netBufferListPool);
-            adapter->netBufferListPool = NULL;
-        }
-        NdisFreeSpinLock(&adapter->lock);
-        NdisFreeMemory(adapter, sizeof(BALANCIFY_ADAPTER), 0);
-    }
+    MiniportFreeAdapter(adapter);
 }
 
 _Use_decl_annotations_
@@ -261,33 +365,135 @@ NDIS_STATUS MiniportOidRequest(
     NDIS_HANDLE miniportAdapterContext,
     PNDIS_OID_REQUEST oidRequest) {
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
-    NDIS_STATUS status = NDIS_STATUS_NOT_SUPPORTED;
 
-    switch (oidRequest->DATA.QUERY_INFORMATION.Oid) {
-    case OID_GEN_MAXIMUM_FRAME_SIZE:
-        if (oidRequest->DATA.QUERY_INFORMATION.InformationBufferLength >= sizeof(ULONG)) {
-            *(PULONG)oidRequest->DATA.QUERY_INFORMATION.InformationBuffer = adapter->mtu;
-            oidRequest->DATA.QUERY_INFORMATION.BytesWritten = sizeof(ULONG);
-            status = NDIS_STATUS_SUCCESS;
+    if (oidRequest->RequestType == NdisRequestSetInformation) {
+        NDIS_OID oid = oidRequest->DATA.SET_INFORMATION.Oid;
+        PVOID buffer = oidRequest->DATA.SET_INFORMATION.InformationBuffer;
+        ULONG bufferLength = oidRequest->DATA.SET_INFORMATION.InformationBufferLength;
+        oidRequest->DATA.SET_INFORMATION.BytesRead = 0;
+        oidRequest->DATA.SET_INFORMATION.BytesNeeded = 0;
+
+        if (oid == OID_GEN_CURRENT_PACKET_FILTER) {
+            const ULONG supported = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
+            ULONG packetFilter;
+            if (bufferLength < sizeof(ULONG)) {
+                oidRequest->DATA.SET_INFORMATION.BytesNeeded = sizeof(ULONG);
+                return NDIS_STATUS_BUFFER_TOO_SHORT;
+            }
+            packetFilter = *(PULONG)buffer;
+            if (packetFilter & ~supported) return NDIS_STATUS_NOT_SUPPORTED;
+            NdisAcquireSpinLock(&adapter->lock);
+            adapter->packetFilter = packetFilter;
+            NdisReleaseSpinLock(&adapter->lock);
+            oidRequest->DATA.SET_INFORMATION.BytesRead = sizeof(ULONG);
+            return NDIS_STATUS_SUCCESS;
         }
-        break;
-    case OID_GEN_STATISTICS: {
-        // Return minimal stats
-        if (oidRequest->DATA.QUERY_INFORMATION.InformationBufferLength >= sizeof(NDIS_STATISTICS_INFO)) {
-            PNDIS_STATISTICS_INFO stats = (PNDIS_STATISTICS_INFO)oidRequest->DATA.QUERY_INFORMATION.InformationBuffer;
-            NdisZeroMemory(stats, sizeof(NDIS_STATISTICS_INFO));
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
+
+    if (oidRequest->RequestType != NdisRequestQueryInformation &&
+        oidRequest->RequestType != NdisRequestQueryStatistics) {
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
+
+    {
+        NDIS_OID oid = oidRequest->DATA.QUERY_INFORMATION.Oid;
+        PVOID buffer = oidRequest->DATA.QUERY_INFORMATION.InformationBuffer;
+        ULONG bufferLength = oidRequest->DATA.QUERY_INFORMATION.InformationBufferLength;
+        ULONG bytesWritten = 0;
+        ULONG bytesNeeded = 0;
+        ULONG mtu;
+        ULONG packetFilter;
+        ULONG64 rxBytes;
+        ULONG64 txBytes;
+
+        oidRequest->DATA.QUERY_INFORMATION.BytesWritten = 0;
+        oidRequest->DATA.QUERY_INFORMATION.BytesNeeded = 0;
+        NdisAcquireSpinLock(&adapter->lock);
+        mtu = adapter->mtu;
+        packetFilter = adapter->packetFilter;
+        rxBytes = adapter->rxBytes;
+        txBytes = adapter->txBytes;
+        NdisReleaseSpinLock(&adapter->lock);
+
+        switch (oid) {
+        case OID_GEN_SUPPORTED_LIST:
+            bytesNeeded = sizeof(gSupportedOids);
+            if (bufferLength >= bytesNeeded) {
+                NdisMoveMemory(buffer, gSupportedOids, bytesNeeded);
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_MEDIA_SUPPORTED:
+        case OID_GEN_MEDIA_IN_USE:
+            bytesNeeded = sizeof(NDIS_MEDIUM);
+            if (bufferLength >= bytesNeeded) {
+                *(PNDIS_MEDIUM)buffer = NdisMedium802_3;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_MAXIMUM_FRAME_SIZE:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = mtu;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_MAXIMUM_TOTAL_SIZE:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = mtu + ETH_LENGTH_OF_HEADER;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_CURRENT_PACKET_FILTER:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = packetFilter;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_802_3_PERMANENT_ADDRESS:
+            bytesNeeded = ETH_LENGTH_OF_ADDRESS;
+            if (bufferLength >= bytesNeeded) {
+                NdisMoveMemory(buffer, adapter->permanentAddress, bytesNeeded);
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_802_3_CURRENT_ADDRESS:
+            bytesNeeded = ETH_LENGTH_OF_ADDRESS;
+            if (bufferLength >= bytesNeeded) {
+                NdisMoveMemory(buffer, adapter->currentAddress, bytesNeeded);
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_STATISTICS: {
+            PNDIS_STATISTICS_INFO stats;
+            bytesNeeded = sizeof(NDIS_STATISTICS_INFO);
+            if (bufferLength < bytesNeeded) break;
+            stats = (PNDIS_STATISTICS_INFO)buffer;
+            NdisZeroMemory(stats, sizeof(*stats));
             stats->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
             stats->Header.Revision = NDIS_STATISTICS_INFO_REVISION_1;
             stats->Header.Size = NDIS_SIZEOF_STATISTICS_INFO_REVISION_1;
-            status = NDIS_STATUS_SUCCESS;
+            stats->SupportedStatistics = NDIS_STATISTICS_FLAGS_VALID_BYTES_RCV |
+                NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT;
+            stats->ifHCInOctets = rxBytes;
+            stats->ifHCOutOctets = txBytes;
+            bytesWritten = sizeof(*stats);
+            break;
         }
-        break;
+        default:
+            return NDIS_STATUS_NOT_SUPPORTED;
+        }
+
+        if (bytesWritten != 0) {
+            oidRequest->DATA.QUERY_INFORMATION.BytesWritten = bytesWritten;
+            return NDIS_STATUS_SUCCESS;
+        }
+        oidRequest->DATA.QUERY_INFORMATION.BytesNeeded = bytesNeeded;
+        return NDIS_STATUS_BUFFER_TOO_SHORT;
     }
-    default:
-        status = NDIS_STATUS_NOT_SUPPORTED;
-        break;
-    }
-    return status;
 }
 
 _Use_decl_annotations_
