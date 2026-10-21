@@ -12,10 +12,16 @@ Implements §4.8 rev 2.1 + §8.3. One signed offline bundle; zero user prerequis
 5. **Runtimes:** detect .NET Desktop Runtime 10 + Windows App SDK runtime;
    install bundled redistributables only if absent (or self-contained shell).
 6. **GUI + tray:** register start-up entries, firewall rules for tunnel UDP.
-7. **First-run self-test hook** (loop through embedded endpoint, local mode).
+7. **SPDX sidecars:** install the generated SPDX 2.3 and 3.0.1 inventories.
+   Each is copied to a same-directory staging file before replacement; any
+   pre-existing sidecar is preserved so a later step failure can restore it.
+8. **First-run self-test hook** (loop through embedded endpoint, local mode).
 
 Each step writes a journal entry; any failure executes the inverse operations
-in reverse order, including removal of runtimes we added.
+in reverse order, including removal of runtimes we added. Sidecar rollback
+restores prior files, while a successful installation discards their backups.
+The sidecar transaction protects against ordinary step failures; power-loss
+recovery and a production installer integration test remain separate work.
 
 ## Tooling
 

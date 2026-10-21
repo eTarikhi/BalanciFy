@@ -3,7 +3,11 @@
 //! Each step journals, any failure rolls back in reverse order.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -25,7 +29,7 @@ pub enum RollbackAction {
     RemoveAdapter,
     RemoveRuntimes { dotnet_added: bool, winappsdk_added: bool },
     RemoveGui,
-    RemoveFile { path: PathBuf },
+    RestoreFile { path: PathBuf, backup: Option<PathBuf> },
     RestoreRoutes,
 }
 
@@ -68,6 +72,58 @@ pub struct Installer {
     journal: InstallJournal,
     journal_path: PathBuf,
     dry_run: bool,
+}
+
+static SIDECAR_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_sidecar_sibling(path: &Path, suffix: &str) -> PathBuf {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("sbom"))
+        .to_string_lossy();
+    let sequence = SIDECAR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(
+        ".{name}.balancify-{}-{sequence}.{suffix}",
+        std::process::id()
+    ))
+}
+
+fn reserve_sidecar_backup(path: &Path) -> io::Result<PathBuf> {
+    loop {
+        let directory = unique_sidecar_sibling(path, "backup");
+        match fs::create_dir(&directory) {
+            Ok(()) => return Ok(directory.join("previous")),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn remove_sidecar_backup(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    if let Some(directory) = path.parent() {
+        match fs::remove_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn stage_sidecar_copy(src: &Path, temp: &Path) -> io::Result<()> {
+    let mut input = File::open(src)?;
+    let mut output = OpenOptions::new().write(true).create_new(true).open(temp)?;
+    io::copy(&mut input, &mut output)?;
+    output.sync_all()
 }
 
 impl Installer {
@@ -155,20 +211,54 @@ impl Installer {
 
     pub fn install_sbom_sidecar(&mut self, src: PathBuf, dst: PathBuf) -> Result<(), String> {
         println!("[sbom] copying SPDX sidecar {} -> {}", src.display(), dst.display());
+        let mut backup = None;
         if !self.dry_run {
-            if !src.is_file() {
-                return Err(format!("required SPDX SBOM is missing: {}", src.display()));
+            let source_metadata = fs::symlink_metadata(&src)
+                .map_err(|error| format!("required SPDX SBOM is missing: {} ({error})", src.display()))?;
+            if !source_metadata.is_file() || source_metadata.file_type().is_symlink() {
+                return Err(format!("required SPDX SBOM is not a regular file: {}", src.display()));
             }
-            if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("create SBOM directory failed: {e}"))?;
+            if let Some(parent) = dst.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("create SBOM directory failed: {error}"))?;
             }
-            std::fs::copy(&src, &dst).map_err(|e| format!("copy SBOM failed: {e}"))?;
+
+            match fs::symlink_metadata(&dst) {
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                    let previous = reserve_sidecar_backup(&dst)
+                        .map_err(|error| format!("reserve SBOM backup failed: {error}"))?;
+                    if let Err(error) = fs::rename(&dst, &previous) {
+                        if let Some(directory) = previous.parent() {
+                            let _ = fs::remove_dir(directory);
+                        }
+                        return Err(format!("preserve existing SBOM failed: {error}"));
+                    }
+                    backup = Some(previous);
+                }
+                Ok(_) => return Err(format!("SBOM destination is not a regular file: {}", dst.display())),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("inspect SBOM destination failed: {error}")),
+            }
+
+            let temp = unique_sidecar_sibling(&dst, "tmp");
+            let install_result = stage_sidecar_copy(&src, &temp)
+                .and_then(|()| fs::rename(&temp, &dst));
+            if let Err(error) = install_result {
+                let _ = fs::remove_file(&temp);
+                if let Some(previous) = backup.take() {
+                    if let Err(restore_error) = fs::rename(&previous, &dst) {
+                        return Err(format!(
+                            "copy SBOM failed: {error}; restoring previous sidecar also failed: {restore_error}"
+                        ));
+                    }
+                    let _ = remove_sidecar_backup(&previous);
+                }
+                return Err(format!("copy SBOM failed: {error}"));
+            }
         }
-        self.journal.push(
-            InstallStep::SbomSidecar { path: dst.clone() },
-            Some(RollbackAction::RemoveFile { path: dst }),
-        );
+        let rollback = (!self.dry_run).then_some(RollbackAction::RestoreFile { path: dst.clone(), backup });
+        self.journal
+            .push(InstallStep::SbomSidecar { path: dst }, rollback);
         Ok(())
     }
 
@@ -177,6 +267,31 @@ impl Installer {
         println!("[self-test] checks: driver loaded, service reachable via IPC, adapter MTU, both SBOM sidecars exist, ETW provider registered, self-test offline VM per clean-machine-test.md");
         self.journal.push(InstallStep::SelfTest, None);
         Ok(())
+    }
+
+    fn discard_sidecar_backups(&mut self) {
+        for entry in &mut self.journal.entries {
+            if let Some(RollbackAction::RestoreFile { backup, .. }) = entry.rollback.as_mut() {
+                if let Some(previous) = backup.take() {
+                    let removed = match fs::remove_file(&previous) {
+                        Ok(()) => true,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+                        Err(error) => {
+                            eprintln!("warning: could not remove prior SBOM backup {}: {error}", previous.display());
+                            *backup = Some(previous.clone());
+                            false
+                        }
+                    };
+                    if removed {
+                        if let Some(directory) = previous.parent() {
+                            if let Err(error) = fs::remove_dir(directory) {
+                                eprintln!("warning: could not remove SBOM backup directory {}: {error}", directory.display());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn run(&mut self) -> Result<(), String> {
@@ -200,6 +315,7 @@ impl Installer {
             }
             let _ = self.journal.save(&self.journal_path);
         }
+        self.discard_sidecar_backups();
         println!("Install complete, journal at {}", self.journal_path.display());
         Ok(())
     }
@@ -229,10 +345,22 @@ impl Installer {
                 RollbackAction::RemoveGui => {
                     println!("    unregistering GUI + firewall rules");
                 }
-                RollbackAction::RemoveFile { path } => {
-                    println!("    removing installed sidecar {}", path.display());
-                    if path.is_file() {
-                        std::fs::remove_file(path).map_err(|e| format!("remove sidecar failed: {e}"))?;
+                RollbackAction::RestoreFile { path, backup } => {
+                    println!("    restoring installed sidecar {}", path.display());
+                    match fs::symlink_metadata(&path) {
+                        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
+                            fs::remove_file(&path).map_err(|error| format!("remove sidecar failed: {error}"))?;
+                        }
+                        Ok(_) => return Err(format!("refusing to remove non-file sidecar path: {}", path.display())),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(format!("inspect sidecar during rollback failed: {error}")),
+                    }
+                    if let Some(previous) = backup {
+                        fs::rename(&previous, &path)
+                            .map_err(|error| format!("restore previous sidecar failed: {error}"))?;
+                        if let Err(error) = remove_sidecar_backup(&previous) {
+                            eprintln!("warning: could not clean up restored SBOM backup {}: {error}", previous.display());
+                        }
                     }
                 }
                 RollbackAction::RestoreRoutes => {
@@ -284,6 +412,22 @@ mod tests {
     }
 
     #[test]
+    fn dry_run_rollback_leaves_existing_sidecar_untouched() {
+        let root = std::env::temp_dir().join(format!("balancify-sbom-dry-run-{}", std::process::id()));
+        let src = root.join("source.spdx.json");
+        let dst = root.join("install").join("sbom.spdx.json");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::write(&dst, b"installed inventory").unwrap();
+
+        let mut installer = Installer::new(root.join("journal.json"), true);
+        installer.install_sbom_sidecar(src, dst.clone()).unwrap();
+        installer.rollback().unwrap();
+
+        assert_eq!(std::fs::read(&dst).unwrap(), b"installed inventory");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn sbom_sidecar_requires_and_copies_the_generated_inventory() {
         let root = std::env::temp_dir().join(format!("balancify-sbom-{}", std::process::id()));
         let src = root.join("source.spdx.json");
@@ -296,6 +440,55 @@ mod tests {
         installer.install_sbom_sidecar(src.clone(), dst.clone()).unwrap();
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), expected);
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replacing_existing_sidecar_restores_previous_file_on_rollback() {
+        let root = std::env::temp_dir().join(format!("balancify-sbom-replace-{}", std::process::id()));
+        let src = root.join("source.spdx3.json");
+        let dst = root.join("install").join("sbom.spdx3.json");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"new SPDX inventory").unwrap();
+        std::fs::write(&dst, b"previous installed inventory").unwrap();
+
+        let mut installer = Installer::new(root.join("journal.json"), false);
+        installer.install_sbom_sidecar(src, dst.clone()).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"new SPDX inventory");
+        let backup = match installer.journal.entries.back().unwrap().rollback.as_ref().unwrap() {
+            RollbackAction::RestoreFile { backup: Some(path), .. } => path.clone(),
+            action => panic!("expected backup action, got {action:?}"),
+        };
+        assert!(backup.exists());
+
+        installer.rollback().unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"previous installed inventory");
+        assert!(!backup.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn successful_sidecar_commit_removes_previous_backup() {
+        let root = std::env::temp_dir().join(format!("balancify-sbom-commit-{}", std::process::id()));
+        let src = root.join("source.spdx.json");
+        let dst = root.join("install").join("sbom.spdx.json");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"new inventory").unwrap();
+        std::fs::write(&dst, b"old inventory").unwrap();
+
+        let mut installer = Installer::new(root.join("journal.json"), false);
+        installer.install_sbom_sidecar(src, dst.clone()).unwrap();
+        let backup = match installer.journal.entries.back().unwrap().rollback.as_ref().unwrap() {
+            RollbackAction::RestoreFile { backup: Some(path), .. } => path.clone(),
+            action => panic!("expected backup action, got {action:?}"),
+        };
+        installer.discard_sidecar_backups();
+        assert!(!backup.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"new inventory");
+        assert!(matches!(
+            installer.journal.entries.back().unwrap().rollback.as_ref(),
+            Some(RollbackAction::RestoreFile { backup: None, .. })
+        ));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -320,11 +513,14 @@ mod tests {
     fn sbom_sidecar_does_not_fabricate_a_missing_inventory() {
         let root = std::env::temp_dir().join(format!("balancify-sbom-missing-{}", std::process::id()));
         let dst = root.join("install").join("sbom.spdx.json");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::write(&dst, b"existing inventory").unwrap();
         let mut installer = Installer::new(root.join("journal.json"), false);
         let error = installer
             .install_sbom_sidecar(root.join("missing.spdx.json"), dst.clone())
             .unwrap_err();
         assert!(error.contains("required SPDX SBOM is missing"));
-        assert!(!dst.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"existing inventory");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
