@@ -755,6 +755,10 @@ impl<C: Crypto + Clone> Service<C> {
             self.counters.reinjections += 1;
             out.push(Action::Send { uplink: UplinkId(sent.path), bytes: sent.bytes });
         }
+        for sent in self.tx.flow_reinjections_due(now) {
+            self.counters.reinjections += 1;
+            out.push(Action::Send { uplink: UplinkId(sent.path), bytes: sent.bytes });
+        }
         // A reinjection is a loss signal for the path it left on (Sec.6.4 rule 4).
         for path in self.tx.drain_losses() {
             self.cc.on_loss(path, now);
@@ -1565,6 +1569,33 @@ mod tests {
         s.publish(later);
         let after = s.snapshot().view(UplinkId(header.path)).unwrap().capacity_bps;
         assert_ne!(after, before, "flow capacity changes only after the peer ACK is accounted");
+    }
+
+    #[test]
+    fn flow_level_tick_reinjects_unacknowledged_data_on_another_uplink() {
+        let now = Instant::now();
+        let mut s = ready_service(now);
+        s.handle(ipc::Request::SetBondMode { enabled: false }, now);
+        let flow = FlowKey::new(6, sa(5100), peer(443));
+        let sent = s.send_app_packet(&flow, None, &[9u8; 1200], now);
+        let original = sent.iter().find_map(|action| match action {
+            Action::Send { bytes, .. } => Header::decode(bytes).map(|(header, _)| header),
+            _ => None,
+        }).expect("flow-level frame is sent");
+        assert_eq!(original.kind, FrameKind::FlowData);
+
+        let retried = s.tick(now + Duration::from_millis(121));
+        let repairs: Vec<_> = retried.iter().filter_map(|action| match action {
+            Action::Send { bytes, .. } => Header::decode(bytes)
+                .map(|(header, _)| header)
+                .filter(|header| header.kind == FrameKind::FlowData),
+            _ => None,
+        }).collect();
+        assert_eq!(repairs.len(), 1);
+        assert_ne!(repairs[0].path, original.path);
+        assert_eq!(repairs[0].flags & balancify_tunnel::FLAG_REINJECTED, balancify_tunnel::FLAG_REINJECTED);
+        assert_eq!((repairs[0].session, repairs[0].seq), (original.session, original.seq));
+        assert_eq!(s.counters().reinjections, 1);
     }
 
     #[test]

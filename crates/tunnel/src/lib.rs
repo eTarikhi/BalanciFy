@@ -230,8 +230,11 @@ struct RetxEntry {
 }
 
 struct FlowAckEntry {
+    plain: Vec<u8>,
     path: u8,
     bytes: usize,
+    sent_at: Instant,
+    reinjections: u8,
 }
 
 /// Sender: numbers packets, selects the egress path per packet (Sec.6.4 rule 2),
@@ -400,20 +403,21 @@ impl<C: Crypto> Sender<C> {
 
     /// Flow-level lane (Sec.6.2): send one packet of a non-striped flow on a
     /// specific uplink. It has a per-session FlowData sequence for nonce and
-    /// replay safety and receives a selective FlowAck, but is not retransmitted
-    /// or ordered with the Data lane.
-    pub fn send_flow(&mut self, plain: &[u8], path: u8, _now: Instant) -> Option<Sent> {
-        self.send_flow_with_session(plain, path, self.session, _now)
+    /// replay safety, receives a selective FlowAck, and can be repaired on a
+    /// different path after the retransmission timeout. It is never ordered
+    /// with the striped Data lane.
+    pub fn send_flow(&mut self, plain: &[u8], path: u8, now: Instant) -> Option<Sent> {
+        self.send_flow_with_session(plain, path, self.session, now)
     }
 
-    pub fn send_flow_with_session(&mut self, plain: &[u8], path: u8, session: u64, _now: Instant) -> Option<Sent> {
+    pub fn send_flow_with_session(&mut self, plain: &[u8], path: u8, session: u64, now: Instant) -> Option<Sent> {
         if !self.paths().contains(&path) { return None; }
         let seq = self.next_flow_seq_for(session);
         let bytes = self.frame_with_session(FrameKind::FlowData, path, session, seq, 0, plain);
         self.counters.flow_packets += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
         self.stat(path).sent += 1;
-        self.remember_flow_ack(session, seq, path, plain.len());
+        self.remember_flow_ack(session, seq, plain, path, now);
         Some(Sent { path, seq, session, kind: FrameKind::FlowData, bytes })
     }
 
@@ -590,6 +594,61 @@ impl<C: Crypto> Sender<C> {
         out
     }
 
+    /// Selectively repair unacknowledged FlowData packets on another active path.
+    /// A duplicate is replay-detected by the receiver and re-ACKed without being
+    /// delivered twice. FlowData retains its independent sequence space.
+    pub fn flow_reinjections_due(&mut self, now: Instant) -> Vec<Sent> {
+        let rto = self.cfg.rto;
+        let max_re = self.cfg.max_reinjections;
+        let due: Vec<(u64, u64)> = self
+            .flow_pending
+            .iter()
+            .filter(|(_, entry)| {
+                entry.reinjections < max_re && now.duration_since(entry.sent_at) >= rto
+            })
+            .map(|(key, _)| *key)
+            .collect();
+
+        let mut out = Vec::with_capacity(due.len());
+        for (session, seq) in due {
+            let (plain, old_path) = match self.flow_pending.get(&(session, seq)) {
+                Some(entry) => (entry.plain.clone(), entry.path),
+                None => continue,
+            };
+            let Some(new_path) = self.drr.next_excluding(old_path, plain.len().max(1) as u64) else {
+                continue;
+            };
+            let bytes = self.frame_with_session(
+                FrameKind::FlowData,
+                new_path,
+                session,
+                seq,
+                FLAG_REINJECTED,
+                &plain,
+            );
+            self.counters.reinjections += 1;
+            self.counters.bytes_sealed += bytes.len() as u64;
+            if let Some(entry) = self.flow_pending.get_mut(&(session, seq)) {
+                entry.path = new_path;
+                entry.sent_at = now;
+                entry.reinjections += 1;
+            }
+            self.stat(old_path).lost += 1;
+            self.losses.push(old_path);
+            let stats = self.stat(new_path);
+            stats.reinjections += 1;
+            stats.sent += 1;
+            out.push(Sent {
+                path: new_path,
+                seq,
+                session,
+                kind: FrameKind::FlowData,
+                bytes,
+            });
+        }
+        out
+    }
+
     fn remember(&mut self, session: u64, seq: u64, plain: &[u8], path: u8, now: Instant) {
         self.retx_bytes += plain.len();
         self.retx.insert(
@@ -603,10 +662,17 @@ impl<C: Crypto> Sender<C> {
         }
     }
 
-    fn remember_flow_ack(&mut self, session: u64, seq: u64, path: u8, bytes: usize) {
+    fn remember_flow_ack(&mut self, session: u64, seq: u64, plain: &[u8], path: u8, now: Instant) {
+        let bytes = plain.len();
         if bytes > self.cfg.max_retx_bytes { return; }
         self.flow_pending_bytes = self.flow_pending_bytes.saturating_add(bytes);
-        self.flow_pending.insert((session, seq), FlowAckEntry { path, bytes });
+        self.flow_pending.insert((session, seq), FlowAckEntry {
+            plain: plain.to_vec(),
+            path,
+            bytes,
+            sent_at: now,
+            reinjections: 0,
+        });
         while self.flow_pending_bytes > self.cfg.max_retx_bytes
             || self.flow_pending.len() > MAX_PENDING_FLOW_ACKS
         {
@@ -1507,6 +1573,44 @@ mod tests {
         assert!(bounded.flow_pending_bytes() <= 2);
         assert!(bounded.flow_pending.len() <= 4096);
         assert!(bounded.counters().flow_ack_evictions > 0);
+    }
+
+    #[test]
+    fn unacked_flow_data_is_reinjected_and_duplicate_is_reacked_once() {
+        let t0 = Instant::now();
+        let cfg = SenderConfig {
+            rto: Duration::from_millis(10),
+            max_reinjections: 1,
+            ..SenderConfig::default()
+        };
+        let mut tx = Sender::with_config(61, PassThrough, vec![(0, 1000), (1, 1000)], cfg);
+        let original = tx.send_flow(b"repair me", 0, t0).unwrap();
+        assert!(tx.flow_reinjections_due(t0 + Duration::from_millis(9)).is_empty());
+
+        let due = tx.flow_reinjections_due(t0 + Duration::from_millis(10));
+        assert_eq!(due.len(), 1);
+        let repaired = &due[0];
+        assert_eq!(repaired.kind, FrameKind::FlowData);
+        assert_eq!(repaired.path, 1, "repair must leave on a different path");
+        assert_eq!((repaired.session, repaired.seq), (original.session, original.seq));
+        let (header, body) = Header::decode(&repaired.bytes).unwrap();
+        assert_eq!(header.flags & FLAG_REINJECTED, FLAG_REINJECTED);
+        assert_eq!(body, b"repair me");
+        assert_eq!(tx.flow_pending_bytes(), b"repair me".len());
+        assert_eq!(tx.drain_losses(), vec![0]);
+        assert!(tx.flow_reinjections_due(t0 + Duration::from_millis(20)).is_empty());
+
+        let mut rx = Receiver::with_defaults(PassThrough);
+        let initial = rx.ingest(&original.bytes, t0);
+        assert!(initial.iter().any(|event| matches!(event, Event::Payload { data, .. } if data.as_slice() == b"repair me")));
+        let duplicate = rx.ingest(&repaired.bytes, t0 + Duration::from_millis(10));
+        assert!(!duplicate.iter().any(|event| matches!(event, Event::Payload { .. })), "repair must not duplicate delivery");
+        let ack = duplicate.iter().find(|event| matches!(event, Event::FlowAck { .. })).expect("duplicate repair is re-ACKed");
+        let ack_bytes = rx.reply_for(ack).expect("FlowAck response is encoded");
+        let (ack_header, _) = Header::decode(&ack_bytes).unwrap();
+        assert_eq!(tx.on_flow_ack_for_session(ack_header.session, ack_header.seq), vec![(1, 9)]);
+        assert_eq!(tx.flow_pending_bytes(), 0);
+        assert_eq!(tx.counters().reinjections, 1);
     }
 
     #[test]
