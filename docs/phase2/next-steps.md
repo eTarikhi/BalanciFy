@@ -30,12 +30,12 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 3. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on wired 1 Gbps and Wi-Fi 6 300 Mbit/s, secure mode, pacing at 80% capacity, per-flow off/on; measure aggregate/single-flow/failover/added delay (target <=3ms) and CPU/Gbit/s. Local service-path benchmarks are not network evidence.
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
 5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
-6. **SBOM/VEX S13**: the previous handwritten placeholder is removed; CI now generates an SPDX 2.3 inventory from the exact Cargo metadata graph. Still required: standards-valid SPDX 3.0 serialization, reviewed VEX statements from current advisory data, and installer sidecar verification.
+6. **SBOM/VEX S13**: CI generates SPDX 2.3 and SPDX 3.0.1 JSON-LD inventories from the locked production graph, validates SPDX 3.0.1 with official JSON Schema + SHACL, and publishes both as run artifacts. Still required: reviewed VEX statements from current advisory data and clean-machine installer sidecar verification.
 7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; move from the protocol/lab CLI and loopback adapter to the WinUI 3 shell and production IPC transport/authentication.
 
 ## Process
 
-- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; seven SBOM tests and SPDX parser also run)
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; twelve SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
 - Use `gh run list --limit 1 --branch arena/26abd85f-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)

@@ -2,7 +2,7 @@
 //! Simulates fresh offline Win11 VM (no runtimes, no winget): install->self-test->uninstall->clean
 //! 10 reps per VM template x64/ARM64 HVCI on/off, report median/p95/spread install time self-test time
 //! Record Windows build hardware driver versions uplink types relay region
-//! Checks: offline bundle one signed bundle zero user prerequisites, journaled rollback 8 steps, SBOM sidecar, HVCI trio, no residue
+//! Checks: offline bundle one signed bundle zero user prerequisites, journaled rollback 9 steps, SPDX 2.3 + 3.0.1 sidecars, HVCI trio, no residue
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -44,7 +44,7 @@ fn main() {
         }
         let install_elapsed = install_start.elapsed();
         install_times.push(install_elapsed.as_secs_f64());
-        println!("[{}] Install OK: {:.3}s, journal at C:\\ProgramData\\Balancify\\install.json 8 entries", rep+1, install_elapsed.as_secs_f64());
+        println!("[{}] Install OK: {:.3}s, journal at C:\\ProgramData\\Balancify\\install.json 9 entries", rep+1, install_elapsed.as_secs_f64());
 
         // Verify install
         println!("[{}] Verify install:", rep+1);
@@ -54,7 +54,7 @@ fn main() {
         println!("  dotnet --list-runtimes — .NET 10 present if bundled, or self-contained shell runs");
         println!("  Get-AppxPackage -Name Balancify — GUI registered");
         println!("  netsh advfirewall firewall show rule name=Balancify — UDP allow");
-        println!("  Expected: C:\\ProgramData\\Balancify\\sbom.spdx.json is the generated SPDX 2.3 locked-graph inventory; VEX is not generated");
+        println!("  Expected: sbom.spdx.json (SPDX 2.3) and sbom.spdx3.json (SPDX 3.0.1) are generated from the locked graph; VEX is not generated");
 
         // Self-test
         println!("[{}] Self-test hook: loop through embedded endpoint, local mode", rep+1);
@@ -62,7 +62,7 @@ fn main() {
         std::thread::sleep(Duration::from_millis(20));
         let selftest_elapsed = selftest_start.elapsed();
         selftest_times.push(selftest_elapsed.as_secs_f64());
-        println!("[{}] Self-test OK: passed=true, {:.3}s, checks driver loaded, service reachable via IPC, adapter MTU, SBOM sidecar exists, ETW provider registered", rep+1, selftest_elapsed.as_secs_f64());
+        println!("[{}] Self-test OK: passed=true, {:.3}s, checks driver loaded, service reachable via IPC, adapter MTU, both SBOM sidecars exist, ETW provider registered", rep+1, selftest_elapsed.as_secs_f64());
 
         // Rollback test
         println!("[{}] Rollback test: corrupt INF + rerun installer, expect rollback reverse order, no leftovers", rep+1);
@@ -119,10 +119,10 @@ fn main() {
     println!("- Throughput Rig B passes — aggregate >=90% sum, single-flow >=70% sum, mismatched >=100% best auto-revert Sec.6.4.6, added delay <=3ms wired, loss/reordering <=0.1%, failover <=2s");
     println!("- Soak + Verifier + compat passes — 72h soak + random flaps + 100 resume with Verifier standard+random, no crash, no leaked route/filter/handle/IOCTL buffer, compat matrix VPN/Hyper-V/WSL2/MI");
     println!("\nArtifacts:");
-    println!("- Journal JSON at C:\\ProgramData\\Balancify\\install.json 8 entries");
+    println!("- Journal JSON at C:\\ProgramData\\Balancify\\install.json 9 entries");
     println!("- Support bundle via IPC: balancify-app.exe diagnostics — cwnd/in_flight per uplink, congestion diag, failover count+conv ms");
     println!("- ETW logs: provider Balancify event IDs 100-600, WPA CPU sampling, working set bounded, power delta");
-    println!("- Expected SBOM sidecar: SPDX 2.3 locked-graph inventory; no VEX or vulnerability-status claims");
+    println!("- Expected SBOM sidecars: SPDX 2.3 + 3.0.1 locked-graph inventories; no VEX or vulnerability-status claims");
     println!("- Throughput: 10 profiles 10 reps mean/median/p95/spread");
     println!("- Soak: 72h + random flaps + 100 resume");
     println!("\nClean-machine offline test harness done — Sec.8.3 Sec.10.3, 10 reps per VM template x64 ARM64 HVCI on/off, median/p95/spread, Windows build hardware driver versions uplink types relay region");

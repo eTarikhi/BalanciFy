@@ -14,6 +14,7 @@ pub enum InstallStep {
     Adapter { mtu: u16 },
     Runtimes { dotnet_bundled: bool, winappsdk_bundled: bool },
     Gui { exe_path: PathBuf },
+    SbomSidecar { path: PathBuf },
     SelfTest,
 }
 
@@ -24,6 +25,7 @@ pub enum RollbackAction {
     RemoveAdapter,
     RemoveRuntimes { dotnet_added: bool, winappsdk_added: bool },
     RemoveGui,
+    RemoveFile { path: PathBuf },
     RestoreRoutes,
 }
 
@@ -164,15 +166,15 @@ impl Installer {
             std::fs::copy(&src, &dst).map_err(|e| format!("copy SBOM failed: {e}"))?;
         }
         self.journal.push(
-            InstallStep::Gui { exe_path: dst.clone() }, // reuse Gui for rollback tracking, SBOM is sidecar
-            Some(RollbackAction::RemoveGui),
+            InstallStep::SbomSidecar { path: dst.clone() },
+            Some(RollbackAction::RemoveFile { path: dst }),
         );
         Ok(())
     }
 
     pub fn self_test(&mut self) -> Result<(), String> {
         println!("[self-test] loop through embedded endpoint, local mode");
-        println!("[self-test] checks: driver loaded, service reachable via IPC, adapter MTU, SBOM sidecar exists, ETW provider registered, self-test offline VM per clean-machine-test.md");
+        println!("[self-test] checks: driver loaded, service reachable via IPC, adapter MTU, both SBOM sidecars exist, ETW provider registered, self-test offline VM per clean-machine-test.md");
         self.journal.push(InstallStep::SelfTest, None);
         Ok(())
     }
@@ -186,6 +188,7 @@ impl Installer {
             Box::new(|s| s.ensure_runtimes()),
             Box::new(|s| s.install_gui(PathBuf::from("app/Balancify.exe"))),
             Box::new(|s| s.install_sbom_sidecar(PathBuf::from("sbom.spdx.json"), PathBuf::from("C:\\ProgramData\\Balancify\\sbom.spdx.json"))),
+            Box::new(|s| s.install_sbom_sidecar(PathBuf::from("sbom.spdx3.json"), PathBuf::from("C:\\ProgramData\\Balancify\\sbom.spdx3.json"))),
             Box::new(|s| s.self_test()),
         ];
 
@@ -225,6 +228,12 @@ impl Installer {
                 }
                 RollbackAction::RemoveGui => {
                     println!("    unregistering GUI + firewall rules");
+                }
+                RollbackAction::RemoveFile { path } => {
+                    println!("    removing installed sidecar {}", path.display());
+                    if path.is_file() {
+                        std::fs::remove_file(path).map_err(|e| format!("remove sidecar failed: {e}"))?;
+                    }
                 }
                 RollbackAction::RestoreRoutes => {
                     println!("    restoring routes/adapters/services snapshot");
@@ -271,7 +280,7 @@ mod tests {
     fn installer_dry_run_succeeds() {
         let mut inst = Installer::new(PathBuf::from("/tmp/test_journal.json"), true);
         assert!(inst.run().is_ok());
-        assert_eq!(inst.journal.entries.len(), 8); // preflight, driver, service, adapter, runtimes, gui, sbom, self-test
+        assert_eq!(inst.journal.entries.len(), 9); // preflight, driver, service, adapter, runtimes, gui, two SBOMs, self-test
     }
 
     #[test]
@@ -287,6 +296,23 @@ mod tests {
         installer.install_sbom_sidecar(src.clone(), dst.clone()).unwrap();
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), expected);
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spdx3_sidecar_is_copied_and_removed_on_rollback() {
+        let root = std::env::temp_dir().join(format!("balancify-spdx3-sidecar-{}", std::process::id()));
+        let src = root.join("source.spdx3.json");
+        let dst = root.join("install").join("sbom.spdx3.json");
+        std::fs::create_dir_all(&root).unwrap();
+        let expected = r#"{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld"}"#;
+        std::fs::write(&src, expected).unwrap();
+
+        let mut installer = Installer::new(root.join("journal.json"), false);
+        installer.install_sbom_sidecar(src, dst.clone()).unwrap();
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), expected);
+        installer.rollback().unwrap();
+        assert!(!dst.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
