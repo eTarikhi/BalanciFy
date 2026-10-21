@@ -51,6 +51,10 @@ static const NDIS_OID gSupportedOids[] = {
 static VOID MiniportFreeAdapter(PBALANCIFY_ADAPTER adapter) {
     if (!adapter) return;
     if (adapter->controlDevice) {
+        WDFQUEUE queue = WdfDeviceGetDefaultQueue(adapter->controlDevice);
+        // Halt and failed initialization run at PASSIVE_LEVEL. Stop dispatch and
+        // wait for any active control request before releasing its adapter.
+        if (queue) WdfIoQueuePurgeSynchronously(queue);
         WdfObjectDelete(adapter->controlDevice);
         adapter->controlDevice = NULL;
     }
