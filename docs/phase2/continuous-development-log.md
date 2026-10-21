@@ -9,6 +9,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## Continuation (2026-10-20–2026-10-21)
 
+- PR #9 merged the NDIS registration/general-attribute and OID source work. Commit `f57319c` / PR #10 switches the miniport/INF to `NdisMediumIP`, removes Ethernet-only MAC OIDs, validates exact IPv4/IPv6 packet lengths against MTU, rejects paused injections, and adds a portable C boundary-test target to CI. CI `39535018573` passed on Ubuntu and Windows; WDK build and driver runtime validation remain pending.
 - `7920e4a test service telemetry snapshots for IPC` — centralized warning + counter event composition in Service and tested the IPC payload. CI 39426255171 passed.
 - `5751d43 close idle unsubscribed IPC clients` — impose a 60-second idle limit for unsubscribed lab clients; retain long-lived event subscriptions. CI 39426687493 passed.
 - `93dc6ff refresh IPC coverage notes` and `5e15a4b document responsive service loop` — synchronized roadmap/test coverage with implemented behavior.

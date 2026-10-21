@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous on `arena/d70f9d7d-balancify`; PR #9 completed the initial NDIS attribute/OID source work. This unit aligns the miniport/INF on NdisMediumIP and tightens raw IPv4/IPv6 injection validation. WDK/Windows validation remains pending; the previous cross-platform CI run 39533920427 passed.
+Status: continuous on `arena/d70f9d7d-balancify`; PR #9 completed the initial NDIS attribute/OID source work. PR #10 aligns the miniport/INF on NdisMediumIP and tightens raw IPv4/IPv6 injection validation. CI 39535018573 passed on Linux and Windows, including the new portable C validator; WDK/Windows driver validation remains pending.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -45,4 +45,4 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0037
-- Latest active-branch CI: 39531428626 success
+- Latest active-branch CI: 39535018573 success
