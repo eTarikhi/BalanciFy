@@ -26,7 +26,7 @@ fn main() -> std::io::Result<()> {
     // Send requests based on mode
     match mode {
         "home" => {
-            let mut last_good = None;
+            let mut last_good: Option<LastKnownGoodHome> = None;
             send_request(&mut stream, &Request::GetStatus)?;
             if let Some(resp) = recv_response(&mut stream)? {
                 if let Response::Status(snapshot) = &resp {
