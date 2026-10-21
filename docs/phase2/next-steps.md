@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous, latest CI green 39508334534, 252 Rust tests + 7 SBOM tool tests
+Status: continuous, latest CI green 39512809286, 259 Linux / 258 Windows Rust tests + 7 SBOM tool tests
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -33,8 +33,8 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 ## Process
 
-- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (252 Rust tests; seven SBOM tests and SPDX parser also run)
-- Use `gh run list --limit 1 --branch arena/6b225b20-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (259 Linux / 258 Windows Rust tests; seven SBOM tests and SPDX parser also run)
+- Use `gh run list --limit 1 --branch arena/096b15fe-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
 - Workspace dependency policy: `[workspace.dependencies]` intentionally empty per blueprint Sec.4.8 — do not add unpinned dependencies casually

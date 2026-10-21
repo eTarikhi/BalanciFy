@@ -101,24 +101,35 @@ fn choose_state_dir(
     is_windows: bool,
 ) -> Result<std::path::PathBuf, std::io::Error> {
     if let Some(path) = override_dir {
-        if path.as_os_str().is_empty() {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "BALANCIFY_STATE_DIR cannot be empty"));
+        if !path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "BALANCIFY_STATE_DIR must be an absolute path",
+            ));
         }
         return Ok(path);
     }
     if is_windows {
-        if let Some(path) = windows_local_app_data {
+        if let Some(path) = windows_local_app_data.filter(|path| path.is_absolute()) {
             return Ok(path.join("Balancify"));
         }
         return home
+            .filter(|path| path.is_absolute())
             .map(|path| path.join("AppData").join("Local").join("Balancify"))
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA or USERPROFILE is required"));
+            .ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "absolute LOCALAPPDATA or USERPROFILE is required",
+            ));
     }
     if let Some(path) = xdg_state_home.filter(|path| path.is_absolute()) {
         return Ok(path.join("balancify"));
     }
-    home.map(|path| path.join(".local").join("state").join("balancify"))
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "XDG_STATE_HOME or HOME is required"))
+    home.filter(|path| path.is_absolute())
+        .map(|path| path.join(".local").join("state").join("balancify"))
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "absolute XDG_STATE_HOME or HOME is required",
+        ))
 }
 
 fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
@@ -136,6 +147,14 @@ fn default_state_dir() -> Result<std::path::PathBuf, std::io::Error> {
     #[cfg(not(windows))]
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     choose_state_dir(override_dir, windows_local_app_data, xdg_state_home, home, cfg!(windows))
+}
+
+fn is_handshake_message2(datagram: &[u8]) -> bool {
+    datagram.len() >= 2 && datagram[0] == 0xFF && datagram[1] == 0x02
+}
+
+fn is_expected_relay_source(source: SocketAddr, relay_addr: SocketAddr) -> bool {
+    source == relay_addr
 }
 
 fn validate_lab_target(mode: ConnectionMode, relay_addr: SocketAddr) -> Result<(), std::io::Error> {
@@ -260,7 +279,7 @@ fn main() -> std::io::Result<()> {
                     format!("handshake response came from unexpected peer {from}"),
                 ));
             }
-            if n < 2 || buf[0] != 0xFF || buf[1] != 0x02 {
+            if !is_handshake_message2(&buf[..n]) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("unexpected handshake response framing: {:02x?}", &buf[..n.min(16)]),
@@ -294,8 +313,14 @@ fn main() -> std::io::Result<()> {
         for act in actions {
             match act {
                 balancify_service::Action::Send { uplink, bytes } => {
-                    let _ = sock.send_to(&bytes, relay_addr);
-                    println!("  [{}] sent {} bytes via uplink {}", i, bytes.len(), uplink.0);
+                    let sent = sock.send_to(&bytes, relay_addr)?;
+                    if sent != bytes.len() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            format!("short UDP datagram send: {sent}/{} bytes", bytes.len()),
+                        ));
+                    }
+                    println!("  [{}] sent {} bytes via uplink {}", i, sent, uplink.0);
                 }
                 balancify_service::Action::Hold { .. } => {
                     println!("  [{}] held (congestion)", i);
@@ -310,18 +335,23 @@ fn main() -> std::io::Result<()> {
         let mut buf = [0u8; 65535];
         loop {
             match sock.recv_from(&mut buf) {
-                Ok((n, _)) => {
+                Ok((n, from)) => {
+                    if !is_expected_relay_source(from, relay_addr) {
+                        eprintln!("  ignored datagram from unexpected peer {from}");
+                        continue;
+                    }
                     let now = Instant::now();
-                    // Try handshake or tunnel
-                    if n >= 2 && buf[0] == 0xFF && buf[1] == 0x02 {
-                        let _ = svc.handle_handshake_msg2(&buf[..n], now);
-                    } else {
-                        let actions = svc.ingest_path(UplinkId(0), &buf[..n], now);
-                        for a in actions {
-                            if let balancify_service::Action::Deliver { data } = a {
-                                println!("  [{}] delivered {} bytes: {:?}", i, data.len(), String::from_utf8_lossy(&data));
-                                delivered += 1;
-                            }
+                    if is_handshake_message2(&buf[..n]) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "unexpected handshake response after session establishment",
+                        ));
+                    }
+                    let actions = svc.ingest_path(UplinkId(0), &buf[..n], now);
+                    for a in actions {
+                        if let balancify_service::Action::Deliver { data } = a {
+                            println!("  [{}] delivered {} bytes: {:?}", i, data.len(), String::from_utf8_lossy(&data));
+                            delivered += 1;
                         }
                     }
                 }
@@ -415,41 +445,62 @@ mod tests {
     }
 
     #[test]
+    fn handshake_response_framing_is_recognized_for_single_use_enforcement() {
+        assert!(is_handshake_message2(&[0xFF, 0x02]));
+        assert!(is_handshake_message2(&[0xFF, 0x02, 0x00]));
+        assert!(!is_handshake_message2(&[]));
+        assert!(!is_handshake_message2(&[0xFF]));
+        assert!(!is_handshake_message2(&[0xFF, 0x01]));
+    }
+
+    #[test]
+    fn data_plane_datagrams_must_come_from_the_configured_relay_endpoint() {
+        let relay = "127.0.0.1:4430".parse().unwrap();
+        assert!(is_expected_relay_source("127.0.0.1:4430".parse().unwrap(), relay));
+        assert!(!is_expected_relay_source("127.0.0.1:4431".parse().unwrap(), relay));
+        assert!(!is_expected_relay_source("127.0.0.2:4430".parse().unwrap(), relay));
+    }
+
+    #[test]
     fn state_dir_override_has_highest_precedence() {
+        let override_path = std::env::temp_dir().join("custom").join("state");
         let chosen = choose_state_dir(
-            Some("/custom/state".into()),
-            Some("/local/app".into()),
-            Some("/xdg".into()),
-            Some("/home/user".into()),
+            Some(override_path.clone()),
+            Some(std::env::temp_dir().join("local")),
+            Some(std::env::temp_dir().join("xdg")),
+            Some(std::env::temp_dir().join("home")),
             false,
         ).unwrap();
-        assert_eq!(chosen, std::path::PathBuf::from("/custom/state"));
+        assert_eq!(chosen, override_path);
     }
 
     #[test]
     fn windows_state_prefers_per_user_local_app_data() {
+        let local_app_data = std::env::temp_dir().join("local-app-data");
         let chosen = choose_state_dir(
             None,
-            Some("C:/Users/test/AppData/Local".into()),
+            Some(local_app_data.clone()),
             None,
-            Some("C:/Users/test".into()),
+            Some(std::env::temp_dir().join("user-profile")),
             true,
         ).unwrap();
-        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+        assert_eq!(chosen, local_app_data.join("Balancify"));
     }
 
     #[test]
     fn windows_state_falls_back_to_user_profile_not_program_data() {
+        let user_profile = std::env::temp_dir().join("user-profile");
         let chosen = choose_state_dir(
             None,
             None,
             None,
-            Some("C:/Users/test".into()),
+            Some(user_profile.clone()),
             true,
         ).unwrap();
-        assert_eq!(chosen, std::path::PathBuf::from("C:/Users/test/AppData/Local/Balancify"));
+        assert_eq!(chosen, user_profile.join("AppData").join("Local").join("Balancify"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn unix_state_prefers_absolute_xdg_then_home_state_dir() {
         assert_eq!(
@@ -467,6 +518,18 @@ mod tests {
         assert_eq!(
             choose_state_dir(Some(std::path::PathBuf::new()), None, None, None, false).unwrap_err().kind(),
             std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            choose_state_dir(Some("relative".into()), None, None, None, false).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            choose_state_dir(None, Some("relative".into()), None, Some("relative".into()), true).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            choose_state_dir(None, None, None, Some("relative".into()), false).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
         );
         assert_eq!(
             choose_state_dir(None, None, None, None, false).unwrap_err().kind(),
