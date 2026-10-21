@@ -54,10 +54,15 @@ fn main() -> std::io::Result<()> {
                 }
                 render_home(resp);
             }
-            // Subscribe to events at 1 Hz
-            send_request(&mut stream, &Request::SubscribeEvents { interval_hz: 1 })?;
-            match recv_response(&mut stream)? {
-                Some(Response::Ack) => {
+            // Subscribe to events at 1 Hz. Preserve the last-known-good view if
+            // the request or acknowledgement fails after the initial snapshot.
+            let subscription_result = send_request(
+                &mut stream,
+                &Request::SubscribeEvents { interval_hz: 1 },
+            )
+            .and_then(|()| recv_response(&mut stream));
+            match subscription_result {
+                Ok(Some(Response::Ack)) => {
                     println!("Subscribed to events at 1 Hz, listening for 5 events...");
                     for _ in 0..5 {
                         match recv_event(&mut stream) {
@@ -91,13 +96,17 @@ fn main() -> std::io::Result<()> {
                         }
                     }
                 }
-                Some(response) => render_connection_stale_home(
+                Ok(Some(response)) => render_connection_stale_home(
                     last_good.as_mut(),
                     &format!("Event subscription was not accepted: {:?}; showing cached status as stale.", response),
                 ),
-                None => render_connection_stale_home(
+                Ok(None) => render_connection_stale_home(
                     last_good.as_mut(),
                     "Service closed the IPC connection before acknowledging the event subscription; showing cached status as stale.",
+                ),
+                Err(error) => render_connection_stale_home(
+                    last_good.as_mut(),
+                    &format!("Could not subscribe to IPC events: {error}; showing cached status as stale."),
                 ),
             }
         }
