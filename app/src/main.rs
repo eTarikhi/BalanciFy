@@ -251,12 +251,28 @@ fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
 }
 
 fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
+    read_frame_inner(stream, false)
+}
+
+fn read_frame_inner(
+    stream: &mut TcpStream,
+    idle_timeout_returns_none: bool,
+) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
     let mut header = [0u8; FRAME_HEADER_LEN];
-    // Distinguish clean EOF before a frame from a truncated frame header.
-    match stream.read(&mut header[..1])? {
-        0 => return Ok(None),
-        1 => {}
-        _ => unreachable!("one-byte read cannot exceed the buffer"),
+    // A timeout is a harmless idle poll only if no byte of a frame has arrived.
+    // Once a frame starts, any timeout is a truncated frame and must be surfaced.
+    match stream.read(&mut header[..1]) {
+        Ok(0) => return Ok(None),
+        Ok(1) => {}
+        Ok(_) => unreachable!("one-byte read cannot exceed the buffer"),
+        Err(error)
+            if idle_timeout_returns_none
+                && (error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
     }
     stream.read_exact(&mut header[1..])?;
     let len = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
@@ -286,16 +302,7 @@ fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
 }
 
 fn recv_event(stream: &mut TcpStream) -> std::io::Result<Option<Event>> {
-    let frame = match read_frame(stream) {
-        Ok(frame) => frame,
-        Err(error)
-            if error.kind() == std::io::ErrorKind::WouldBlock
-                || error.kind() == std::io::ErrorKind::TimedOut =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
+    let frame = read_frame_inner(stream, true)?;
     match frame {
         None => Ok(None),
         Some((FrameKind::Event, payload)) => Event::decode(&payload)
@@ -528,6 +535,14 @@ fn render_event(ev: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+
+    fn tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
 
     fn snapshot() -> StatusSnapshot {
         StatusSnapshot {
@@ -552,6 +567,19 @@ mod tests {
             active_flows: 0,
             counters: Counters::default(),
         }
+    }
+
+    #[test]
+    fn event_idle_timeout_is_only_ignored_before_frame_bytes_arrive() {
+        let (mut client, _server) = tcp_pair();
+        client.set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(recv_event(&mut client).unwrap().is_none());
+
+        let (mut client, mut server) = tcp_pair();
+        client.set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        server.write_all(&[1]).unwrap();
+        let error = recv_event(&mut client).unwrap_err();
+        assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
     }
 
     #[test]
