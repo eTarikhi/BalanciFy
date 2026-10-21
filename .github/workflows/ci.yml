@@ -14,7 +14,7 @@ jobs:
     name: Dependency + crypto policy audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       # ADR-0002 / blueprint §11.5 criteria C2 and C4: no third-party runtime
       # dependency, and the null cipher cannot reach a shipped build.
       - name: audit
@@ -24,7 +24,7 @@ jobs:
     name: Lab analysis tool tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: test analyzer
         run: python3 -m unittest discover -s tools/lab -p 'test_*.py' -v
       - name: test SBOM generation logic
@@ -38,7 +38,7 @@ jobs:
     name: Rust workspace tests (ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test
         env:
@@ -104,7 +104,7 @@ jobs:
           python3 tools/ci/sbom_v3.py 0.1.0
           python3 -m spdx3_validate --json sbom.spdx3.json --spdx-version 3.0.1 --quiet
       - name: publish validated SBOM sidecars
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: balancify-sbom-0.1.0
           path: |
@@ -117,7 +117,7 @@ jobs:
     name: Rust workspace tests (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test
         shell: bash
