@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous; client hardening PR #6 is merged. FlowData selective repair is under review in PR #7. CI 39530970838 passed (261 Linux / 260 Windows Rust tests), including SPDX 2.3 validation and lab/policy checks.
+Status: continuous; client-hardening PR #6 and FlowData-repair PR #7 are merged. Follow-up documentation and an explicit uplink-loss test are on the active branch. CI 39531428626 passed (261 Linux / 260 Windows Rust tests), including SPDX 2.3 validation and lab/policy checks.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -17,7 +17,7 @@ User instruction: "continue the development process without stopping to report" 
 - Docs: ADR-0021 ETW wiring, ADR-0022 support bundle per-path, ADR-0023 relay ECN stats, ADR-0024 driver WDF control, ADR-0025 app shell relay & bundle, ADR-0026 ECN bench, plus continuous-development-log, security-hardening, test-coverage
 - Control-frame authentication/replay hardening and relay/session idle protections; wire v2 selective FlowAck for peer-receipt capacity sampling, with bounded per-session accounting and duplicate re-ACK (CI 39476560004).
 - Client transport hardening (per-user absolute state roots, relay-source filtering, fatal UDP send errors, and single-use handshake responses) merged in PR #6; prior PR #5 was closed as superseded.
-- FlowData selective repair is implemented in PR #7 / ADR-0036: retain bounded plaintext until authenticated FlowAck, reinject once after RTO on an alternate path, and rely on replay rejection plus duplicate re-ACK to preserve at-most-once delivery. Tunnel and service timer regressions pass.
+- FlowData selective repair merged in PR #7 / ADR-0036: retain bounded plaintext until authenticated FlowAck, reinject once after RTO on an alternate path, and rely on replay rejection plus duplicate re-ACK to preserve at-most-once delivery. Tunnel and service timer regressions, including uplink removal before retry, pass.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d); they are complete, not remaining roadmap work.
 
 CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success per-path diag, 39234403709 success, 39234666177 success, 39234937199 success, 39235214291 success, 39235545738 success driver, 39235817239 success, 39236091314 success app, 39236360963 success, 39236639218 success ECN bench, 39236895693 success, 39237159469 success, 39237431952 success test coverage
@@ -44,4 +44,4 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0036
-- Latest feature CI: 39530970838 success
+- Latest active-branch CI: 39531428626 success

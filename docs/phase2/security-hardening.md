@@ -1,7 +1,7 @@
 # Security hardening — what is done, what remains
 
 Date: 2026-10-21
-Status: active branch `arena/73af0098-balancify`; FlowData repair CI green on Ubuntu and Windows (39530970838).
+Status: active branch `arena/73af0098-balancify`; FlowData repair and follow-up test CI green on Ubuntu and Windows (39531428626).
 
 ## Done
 
@@ -40,4 +40,4 @@ Status: active branch `arena/73af0098-balancify`; FlowData repair CI green on Ub
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio, C2/C4
 - ADRs 0003-0036
-- CI: 39530970838 success on Ubuntu and Windows, including 261/260 Rust tests, lab safety checks, release build, SPDX validation, and dependency/crypto audit
+- CI: 39531428626 success on Ubuntu and Windows, including 261/260 Rust tests, lab safety checks, release build, SPDX validation, and dependency/crypto audit
