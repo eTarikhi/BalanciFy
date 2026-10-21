@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
 Date: 2026-10-21
-Status: in progress; software work continues, hardware gates remain pending
+Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (PR #14 run `39672568665`, head `bd5fd54`); hardware gates remain pending
 
 ## Completed since last green (39191895800)
 
@@ -12,7 +12,8 @@ Status: in progress; software work continues, hardware gates remain pending
 - Rate limiting service egress (TokenBucket, RateLimiter per-uplink, try_send, delay_for, wired into send_app_packet -> Hold on limit)
 - Flow-level capacity uses authenticated per-packet FlowAck receipts in wire v2; sender-side pending ACK state is bounded and capacity samples are credited to the original uplink.
 - Wintun fallback ADR-0009 (feature-gated, exception file check, raw FFI placeholder)
-- Installer transactional (journaled, 9 steps including SPDX 2.3 + 3.0.1 sidecars, reverse rollback, dry-run, tests)
+- Installer transactional (journaled, 9 steps including SPDX 2.3 + 3.0.1 sidecars, reverse rollback, dry-run, tests); default journals are exclusively reserved and private (Unix mode `0600`), with collision regression coverage.
+- IPC v1 string fields now reject malformed UTF-8 instead of accepting replacement-character aliases; tests cover both short and u32-length strings. CI also tests pinned Ubuntu runner and Pages action release contracts.
 - Rust lab CLI IPC client (`balancify-app` crate; home/rules/diagnostics/tray and support modes, 1Hz event subscription, ECN/delay rendering); the production WinUI 3/.NET shell remains unimplemented
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.

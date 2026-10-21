@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Active continuation: `arena/1e00c990-balancify`, commit `6b33e5e`; PR #13 is merged as `6856b498d00f6863007fd8a7def9805ed6a954bc`, and PR #14 is open. CI run `39669985734` passed all four checks after pinning Linux jobs to Ubuntu 24.04 and covering installer CLI parsing/journal path isolation. The merged installer transaction/journal hardening, fail-closed lab service transport, Home stale-state behavior, and loopback-only IPC client policy are now in `main`. Production named-pipe authentication, live ETW trace validation, persisted UI state, production UI, reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, and hardware performance remain unverified. See `continuous-development-log.md` for the verified continuation.
+Active continuation: `arena/1e00c990-balancify`, commit `bd5fd54`; PR #13 is merged as `6856b498d00f6863007fd8a7def9805ed6a954bc`, and PR #14 is open. CI run `39672559082` passed all four jobs on Ubuntu 24.04 and Windows, including Rust workspace tests, lab/tool contract tests, and dependency/crypto policy audit. The continuation adds strict UTF-8 rejection in IPC string decoders, regression coverage for pinned runner/Pages action versions, and installer journal exclusive-reservation/private-mode checks. Production named-pipe authentication, live ETW trace validation, persisted UI state, production UI, reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, Pages deployment, and hardware performance remain unverified. See `continuous-development-log.md` for the verified continuation.
 
 ## Progression
 
@@ -85,6 +85,9 @@ Active continuation: `arena/1e00c990-balancify`, commit `6b33e5e`; PR #13 is mer
 - 89e1f26 success fix sleep->resume_from_sleep — soak harness G5 72h + random flaps + 100 resume — CI green
 - 50bf7c8 success app failover and soak modes 11 modes — G5
 - 1b7fa25 success ADR-0034 WinUI3 shell 11 modes + soak harness G5 + failover convergence <=2s + netem-rig 11 profiles + analyze.py
+- 39671965140 success exclusive default journal collision and Unix 0600 regression tests (commit 8edd075)
+- 39672229904 success pinned runner/Pages-action contract tests (commit 0f1183a)
+- 39672559082 success reject invalid UTF-8 in IPC strings (commit bd5fd54)
 
 ## Historical snapshot (pre-Arena continuation)
 

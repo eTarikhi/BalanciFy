@@ -1,7 +1,7 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-21
-Status: continuous; active branch `arena/1e00c990-balancify`; latest CI green on Ubuntu 24.04 and Windows (PR #14 run `39669985734` at `6b33e5e`)
+Status: continuous; active branch `arena/1e00c990-balancify`; latest CI green on Ubuntu 24.04 and Windows (push run `39672559082` and PR #14 run `39672568665` at `bd5fd54`)
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
@@ -9,6 +9,10 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## Continuation (2026-10-20–2026-10-21)
 
+- Commit `8edd075` adds an installer regression check that a pre-existing default journal path is not overwritten and that Unix-reserved journals use mode `0600`; push CI `39671965140` passed all four jobs.
+- Commit `0f1183a` adds CI contract tests pinning Linux runners to Ubuntu 24.04 and Pages actions to exact releases, and includes those checks in the lab test job; CI `39672229904` passed all four jobs.
+- Commit `bd5fd54` makes IPC `string` decoding reject malformed UTF-8 instead of silently replacing invalid bytes, with tests for both short and u32-length strings. Push CI `39672559082` and PR #14 CI `39672568665` passed all four jobs.
+- PR #14 body was refreshed to match its installer/CI changes and current CI status. PR #14 remains open; no merge has been performed.
 - Commit `6b33e5e` fixes installer CLI parsing so `--dry-run` is not mistaken for the journal filename, adds explicit `--journal PATH`/help/ambiguous-argument handling, and gives each invocation a unique temp journal name. Added parser and uniqueness tests; CI `39669978102` and PR #14 checks `39669985734` passed all four jobs.
 - Commit `1218870` pins Linux CI and Pages jobs to `ubuntu-24.04` rather than the moving `ubuntu-latest` alias, eliminating runner-image migration drift; Ubuntu and Windows CI run `39668980327` passed all four test/audit jobs.
 - Commit `3ee541b` makes installer SPDX sidecar replacement rollback-safe: same-directory staged copies, exclusive backup-directory reservation, restoration of pre-existing files on step rollback, and backup cleanup after successful install. Dry-run rollback is non-destructive. Tests cover replacement/rollback, successful cleanup, missing-source preservation, and dry-run safety. PR #13 CI run `39607841932` passed all four jobs.

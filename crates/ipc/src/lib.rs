@@ -148,6 +148,7 @@ impl<'a> Reader<'a> {
             _ => None,
         }
     }
+    /// Decode a length-prefixed string, rejecting malformed UTF-8.
     pub fn string(&mut self) -> Option<String> {
         let n = self.u8()? as usize;
         let b = self.take(n)?;
