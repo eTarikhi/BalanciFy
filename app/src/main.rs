@@ -30,7 +30,12 @@ fn main() -> std::io::Result<()> {
             send_request(&mut stream, &Request::GetStatus)?;
             if let Some(resp) = recv_response(&mut stream)? {
                 if let Response::Status(snapshot) = &resp {
-                    last_good = Some(LastKnownGoodHome::new(snapshot.clone(), Instant::now()));
+                    let now = Instant::now();
+                    if let Some(cache) = last_good.as_mut() {
+                        cache.refresh_status(snapshot.clone(), now);
+                    } else {
+                        last_good = Some(LastKnownGoodHome::new(snapshot.clone(), now));
+                    }
                 }
                 render_home(resp);
             }
@@ -180,9 +185,15 @@ impl LastKnownGoodHome {
         }
     }
 
-    fn apply_event(&mut self, event: &Event, now: Instant) {
+    fn refresh_status(&mut self, snapshot: StatusSnapshot, now: Instant) {
+        self.snapshot = snapshot;
         self.last_seen = now;
         self.connection_stale = false;
+        self.snapshot_stale_reason = None;
+    }
+
+    fn apply_event(&mut self, event: &Event, now: Instant) {
+        self.last_seen = now;
         match event {
             Event::Stats(counters) => self.snapshot.counters = *counters,
             Event::UplinkStateChanged { id, state } => {
@@ -576,15 +587,20 @@ mod tests {
         assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
         cache.apply_event(&Event::Stats(Counters::default()), now + Duration::from_secs(1));
         assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
+        cache.refresh_status(snapshot(), now + Duration::from_secs(2));
+        assert_eq!(cache.stale_reason(), None);
     }
 
     #[test]
-    fn event_stream_timeout_marks_cached_status_stale_until_reconnected() {
+    fn event_stream_timeout_stays_stale_until_a_full_status_refresh() {
         let now = Instant::now();
         let mut cache = LastKnownGoodHome::new(snapshot(), now);
         cache.mark_connection_stale();
         assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
         cache.apply_event(&Event::Warning { code: 1 }, now + Duration::from_secs(2));
+        assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
+        cache.refresh_status(snapshot(), now + Duration::from_secs(3));
         assert_eq!(cache.stale_reason(), None);
+        assert_eq!(cache.age(now + Duration::from_secs(3)), Duration::ZERO);
     }
 }
