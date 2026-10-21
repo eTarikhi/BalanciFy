@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous, latest CI green 39520659434, 259 Linux / 258 Windows Rust tests + 7 SBOM tool tests
+Status: continuous; client hardening is under review in PR #6. Code CI 39520659434 passed (259 Linux / 258 Windows Rust tests); docs-only sync CI 39520910898 also passed.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -16,6 +16,8 @@ User instruction: "continue the development process without stopping to report" 
 - ECN bench (cwnd 80% ECN vs 50% loss, delay 10% reduction, per-path ECN/delay/rtt_min/last)
 - Docs: ADR-0021 ETW wiring, ADR-0022 support bundle per-path, ADR-0023 relay ECN stats, ADR-0024 driver WDF control, ADR-0025 app shell relay & bundle, ADR-0026 ECN bench, plus continuous-development-log, security-hardening, test-coverage
 - Control-frame authentication/replay hardening and relay/session idle protections; wire v2 selective FlowAck for peer-receipt capacity sampling, with bounded per-session accounting and duplicate re-ACK (CI 39476560004).
+- Client transport hardening is now carried on the active branch and proposed in PR #6: per-user absolute state roots, exact relay-source filtering, fatal UDP send errors, and single-use handshake responses. PR #5 was closed as superseded. The exact tested code commit passed Ubuntu/Windows CI 39520659434; the docs-only follow-up passed CI 39520910898.
+- ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d); they are complete, not remaining roadmap work.
 
 CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success per-path diag, 39234403709 success, 39234666177 success, 39234937199 success, 39235214291 success, 39235545738 success driver, 39235817239 success, 39236091314 success app, 39236360963 success, 39236639218 success ECN bench, 39236895693 success, 39237159469 success, 39237431952 success test coverage
 
@@ -29,7 +31,6 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 6. **SBOM/VEX S13**: the previous handwritten placeholder is removed; CI now generates an SPDX 2.3 inventory from the exact Cargo metadata graph. Still required: standards-valid SPDX 3.0 serialization, reviewed VEX statements from current advisory data, and installer sidecar verification.
 7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; move from the protocol/lab CLI and loopback adapter to the WinUI 3 shell and production IPC transport/authentication.
 8. **FlowData reliability**: FlowAck now supports capacity estimation; selective retransmission/repair remains a possible future requirement if acceptance criteria require recovery on the non-striped lane.
-9. **More ETW events**: wire bond revert and uplink up/down events into PolicyEngine publication.
 
 ## Process
 
