@@ -148,13 +148,14 @@ VOID BalancifyEvtIoDeviceControl(
         status = WdfRequestRetrieveInputBuffer(request, sizeof(ULONG), &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
         ULONG mtu = *(PULONG)inputBuffer;
-        if (mtu < 576 || mtu > 9000) {
+        if (mtu < BALANCIFY_MIN_MTU || mtu > BALANCIFY_MAX_MTU) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
         // Update adapter MTU (Sec.6.1)
         NdisAcquireSpinLock(&adapter->lock);
         adapter->mtu = mtu;
+        if (adapter->lookaheadSize > mtu) adapter->lookaheadSize = mtu;
         NdisReleaseSpinLock(&adapter->lock);
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU %lu\n", mtu));
         status = STATUS_SUCCESS;
@@ -194,7 +195,7 @@ VOID BalancifyEvtIoDeviceControl(
             status = STATUS_DEVICE_NOT_READY;
             break;
         }
-        if (inputBufferLength < 20 || inputBufferLength > mtu || inputBufferLength > 9000) {
+        if (inputBufferLength < 20 || inputBufferLength > mtu || inputBufferLength > BALANCIFY_MAX_MTU) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }

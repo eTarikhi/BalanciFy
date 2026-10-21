@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous on `arena/d70f9d7d-balancify`; PR #9 completed the initial NDIS attribute/OID source work. PR #10 aligns the miniport/INF on NdisMediumIP and tightens raw IPv4/IPv6 injection validation. CI 39535018573 passed on Linux and Windows, including the new portable C validator; WDK/Windows driver validation remains pending.
+Status: continuous on `arena/26abd85f-balancify`; PR #9's NDIS registration/OID work and PR #10's NdisMediumIP/raw-packet alignment are merged. This unit reads the bounded INF MTU setting and adds current-lookahead handling plus packet-count OID responses. WDK/Windows driver validation remains pending; CI 39535250862 was green before this unit.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -36,7 +36,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 ## Process
 
 - Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; seven SBOM tests and SPDX parser also run)
-- Use `gh run list --limit 1 --branch arena/d70f9d7d-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
+- Use `gh run list --limit 1 --branch arena/26abd85f-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
 - Workspace dependency policy: `[workspace.dependencies]` intentionally empty per blueprint Sec.4.8 — do not add unpinned dependencies casually

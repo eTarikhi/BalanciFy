@@ -3,6 +3,8 @@
 #include <ndis.h>
 #include <wdf.h>
 
+#include "config_validation.h"
+
 #define BALANCIFY_TAG 'laBB' // 'BBal' reversed
 #define BALANCIFY_POOL_TAG BALANCIFY_TAG
 
@@ -14,6 +16,7 @@ typedef struct _BALANCIFY_ADAPTER {
     NDIS_SPIN_LOCK lock;
     BOOLEAN paused;
     ULONG mtu;
+    ULONG lookaheadSize;
     ULONG packetFilter;
     ULONG64 txPackets;
     ULONG64 rxPackets;
