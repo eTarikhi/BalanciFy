@@ -107,6 +107,11 @@ fn is_expected_relay_source(source: SocketAddr, expected_relay: SocketAddr) -> b
     source == expected_relay
 }
 
+fn next_simulated_packet_tick(started_at: Instant, now: Instant, last_tick: u64) -> Option<u64> {
+    let elapsed_seconds = now.duration_since(started_at).as_secs();
+    (elapsed_seconds > last_tick).then_some(elapsed_seconds)
+}
+
 fn send_datagram(sock: &UdpSocket, bytes: &[u8], destination: SocketAddr) -> std::io::Result<()> {
     let sent = sock.send_to(bytes, destination)?;
     if sent != bytes.len() {
@@ -279,6 +284,7 @@ fn main() -> std::io::Result<()> {
 
     let mut dg = [0u8; 65535];
     let mut flow_counter = 0u64;
+    let started_at = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
 
@@ -366,9 +372,9 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        // Simulate app packet every second
-        if now.elapsed().as_secs() > flow_counter {
-            flow_counter = now.elapsed().as_secs();
+        // Simulate app packet once per elapsed second from service startup.
+        if let Some(elapsed_seconds) = next_simulated_packet_tick(started_at, now, flow_counter) {
+            flow_counter = elapsed_seconds;
             let src: SocketAddr = format!("10.0.0.1:{}", 5000 + (flow_counter % 1000) as u16).parse().unwrap();
             let dst: SocketAddr = "8.8.8.8:443".parse().unwrap();
             let flow = FlowKey::new(6, src, dst);
@@ -597,6 +603,27 @@ mod ipc_capacity_tests {
             root.join("Balancify")
         );
         assert!(choose_state_dir(None, None, None, None, true).is_err());
+    }
+
+    #[test]
+    fn simulated_packet_scheduler_uses_elapsed_service_time() {
+        let started_at = Instant::now();
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_millis(999), 0),
+            None
+        );
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_secs(1), 0),
+            Some(1)
+        );
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_millis(1500), 1),
+            None
+        );
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_secs(3), 1),
+            Some(3)
+        );
     }
 
     #[test]
