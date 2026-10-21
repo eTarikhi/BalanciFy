@@ -1,7 +1,7 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-21
-Status: continuous; active branch `arena/7b97c6a4-balancify`; latest CI green on Ubuntu and Windows (run `39615713353` at `b40d847`)
+Status: continuous; active branch `arena/7b97c6a4-balancify`; latest CI green on Ubuntu and Windows (run `39617035293` at `39240d2`)
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
@@ -16,6 +16,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Commit `e944905` creates missing parent directories for installer journals. The nested-path regression coverage passed on both operating systems in PR #13 CI run `39612331714`.
 - Commits `aa3813f` and `b85ece4` correct Home stale-state semantics: receiving any event no longer clears a connection-stale marker; a complete GetStatus refresh is required. Added timeout/reconnect and policy-refresh tests. The first CI attempt `39614288688` caught a missing `Option<LastKnownGoodHome>` annotation (E0282); corrected in `b85ece4`, and CI `39614494930` passed all four jobs.
 - Commits `d7f37c3` and `9901460` harden Home IPC event reads: idle timeouts are ignored only before the first frame byte; mid-frame timeouts/errors propagate and render the cached status as stale rather than exiting before showing it. Added local TCP timeout regression coverage. CI `39615099508` and `39615713353` passed all four jobs on Ubuntu and Windows.
+- Commit `39240d2` restricts the lab CLI IPC client to loopback-only addresses and rejects malformed/remote destinations instead of silently defaulting; added IPv4/IPv6/default/rejection tests. CI `39617035293` passed all four jobs.
 - PR #9 merged the NDIS registration/general-attribute and OID source work. Commit `f57319c` / PR #10 switches the miniport/INF to `NdisMediumIP`, removes Ethernet-only MAC OIDs, validates exact IPv4/IPv6 packet lengths against MTU, rejects paused injections, and adds a portable C boundary-test target to CI. CI `39535018573` passed on Ubuntu and Windows; WDK build and driver runtime validation remain pending.
 - Current follow-up reads the bounded INF Mtu value at initialization with a 1440-byte fallback; adds `OID_GEN_CURRENT_LOOKAHEAD` query/set with MTU bounds, `OID_GEN_XMIT_OK`/`OID_GEN_RCV_OK` backed by packet counts (counting each NET_BUFFER, not each NBL), and clamps lookahead when SET_MTU reduces the MTU. Portable tests cover MTU normalization, while a source-contract unit test checks that advertised OIDs have query handlers and that INF/miniport raw-IP media settings agree.
 - Commit `55ecafa` adds receive lifecycle hardening with a lock-protected, portable-tested pause state machine: receive NBLs and active indication calls are tracked, send callback chains are drained, pause returns `NDIS_STATUS_PENDING` until these operations are quiescent, and `NdisMPauseComplete` is signaled only after the final return/completion. PR #11 CI run `39537906530` passed all four jobs. This is source-level only; WDK/Verifier/runtime validation remains pending.
