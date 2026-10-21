@@ -1,8 +1,8 @@
 # Balancify — Development Progress Report
 
 **As of:** 22 October 2026 (Asia/Tehran)<br>
-**Repository state:** `main` at merge commit [`e3f2e24`](https://github.com/eTarikhi/BalanciFy/commit/e3f2e243c49f82b53b75823b48520e828e9ac42c); active report branch: `arena/83b27a29-balancify`<br>
-**Latest verified main CI:** [Run 39688256976](https://github.com/eTarikhi/BalanciFy/actions/runs/39688256976) — all four jobs succeeded.<br>
+**Repository state:** `main` at merge commit [`42efe79`](https://github.com/eTarikhi/BalanciFy/commit/42efe79ba9e41dc068c035547bf04daa41bde5c4); active continuation: `arena/1b78fd62-balancify`<br>
+**Latest verified main CI:** [Run 39690376384](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376384) — all four jobs succeeded.<br>
 **Overall status:** active engineering prototype; **not release-ready**. Gates G2–G8 are not closed; G1 formal sign-off was not found in the repository evidence reviewed for this report.
 
 > **Measurement and evidence rule.** This report separates source/CI evidence from Windows driver execution, network measurements and release validation. Passing Rust tests or a synthetic benchmark does not prove that the product works through an NDIS driver, meets throughput/latency targets, installs offline, or is ready for release. Percent-complete figures and velocity forecasts are omitted where no auditable basis exists.
@@ -23,7 +23,7 @@ The project has a substantial first-party Rust software foundation: the merged b
 | User-facing product | Rust lab CLI and loopback IPC exist; production WinUI/.NET GUI and authenticated named-pipe service transport do not | Production UX and IPC remain unimplemented |
 | Installer / release | Journal and rollback logic are tested; no signed offline bundle or clean-machine install record | G4/G5 and release readiness remain open |
 | Supply chain | SPDX 2.3 and SPDX 3.0.1 generation/validation are part of CI | Inventory pipeline exists; reviewed VEX, signing, and installer-sidecar validation remain open |
-| Documentation deployment | GitHub Pages run [39688256979](https://github.com/eTarikhi/BalanciFy/actions/runs/39688256979) failed at “Setup Pages”; Pages API returned 404 during this report | Site is not deployed; repository Pages setup must be enabled/configured and re-tested |
+| Documentation deployment | Main run [39690376461](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376461) failed at “Setup Pages”; Pages API returned 404 on 22 Oct | Site is not live; a first-party static portal and narrowed artifact build are being prepared; Pages configuration still needs enabling |
 
 ## 1. Retrospective analysis — work completed and evidence
 
@@ -154,8 +154,8 @@ Balancify has a credible, testable first-party software base and healthy cross-p
 
 ## Sources, definitions and reproducibility
 
-- Latest merged CI/check summaries: [run 39688256976](https://github.com/eTarikhi/BalanciFy/actions/runs/39688256976); merged commit `e3f2e24`.
-- Pages deployment failure: [run 39688256979](https://github.com/eTarikhi/BalanciFy/actions/runs/39688256979); failed at `Setup Pages`; repository Pages API returned 404 on 2026-10-22.
+- Latest merged CI/check summaries: [run 39690376384](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376384); merged commit `42efe79`.
+- Pages deployment failure: [run 39690376461](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376461); failed at `Setup Pages`; repository Pages API returned 404 on 2026-10-22. A small static portal is being built, but deployment will remain pending until Pages is enabled.
 - Product gates and 47–58 week phase estimate: `docs/technical-blueprint.md`, especially §11.1–§11.3. Estimates assume a 5–6 engineer team and require re-baselining.
 - Demonstrated behavior and limitations: `docs/phase2/lab-progress.md`.
 - Proposed empirical acceptance and methodology: `docs/phase2/throughput-rows.md` and `docs/phase2/clean-machine-test.md`.

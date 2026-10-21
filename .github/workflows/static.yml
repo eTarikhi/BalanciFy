@@ -31,13 +31,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
+      - name: Build static documentation portal
+        run: sh tools/ci/build-docs-site.sh "$RUNNER_TEMP/balancify-site"
       - name: Setup Pages
         uses: actions/configure-pages@v6.0.0
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5.0.0
         with:
-          # Upload entire repository
-          path: '.'
+          path: ${{ runner.temp }}/balancify-site
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5.0.1
