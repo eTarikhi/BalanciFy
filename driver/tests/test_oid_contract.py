@@ -26,7 +26,12 @@ class NdisOidContractTests(unittest.TestCase):
         self.assertTrue(set(advertised).issubset(query_cases))
 
     def test_lookahead_and_packet_count_oids_are_advertised_and_handled(self):
-        for oid in ("OID_GEN_CURRENT_LOOKAHEAD", "OID_GEN_XMIT_OK", "OID_GEN_RCV_OK"):
+        for oid in (
+            "OID_GEN_CURRENT_LOOKAHEAD",
+            "OID_GEN_XMIT_OK",
+            "OID_GEN_XMIT_ERROR",
+            "OID_GEN_RCV_OK",
+        ):
             self.assertRegex(MINIPORT_C, rf"(?s)gSupportedOids\[\].*?\b{oid}\b")
             self.assertIn(f"case {oid}:", MINIPORT_C)
         self.assertIn("if (oid == OID_GEN_CURRENT_LOOKAHEAD)", MINIPORT_C)
@@ -42,13 +47,37 @@ class NdisOidContractTests(unittest.TestCase):
         mtu_read = MINIPORT_C.index("adapter->mtu = MiniportReadConfiguredMtu")
         self.assertLess(registration_set, mtu_read)
 
-    def test_receive_pause_waits_for_returned_nbls(self):
-        self.assertIn("BalancifyRxBeginPause(&adapter->rxPause)", MINIPORT_C)
-        self.assertIn("BalancifyRxReturnNbl(&adapter->rxPause)", MINIPORT_C)
+    def test_unimplemented_transmit_path_fails_instead_of_counting_success(self):
+        send_callback = re.search(
+            r"VOID MiniportSendNetBufferLists\(.*?\n\}", MINIPORT_C, re.S
+        )
+        self.assertIsNotNone(send_callback)
+        body = send_callback.group(0)
+        self.assertIn(
+            "NET_BUFFER_LIST_STATUS(curr, paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE)",
+            body,
+        )
+        self.assertIn("adapter->txErrors++", body)
+        send_track = body.index("BalancifyTrackSendCallback(&adapter->pauseState)")
+        send_loop = body.index("while (curr)")
+        send_return = body.index("BalancifySendCallbackReturned(&adapter->pauseState)")
+        self.assertLess(send_track, send_loop)
+        self.assertLess(send_loop, send_return)
+        self.assertNotIn("adapter->txPackets++", body)
+        self.assertNotIn("adapter->txBytes +=", body)
+        self.assertIn("case OID_GEN_XMIT_ERROR:", MINIPORT_C)
+
+    def test_pause_waits_for_receive_indication_and_send_completion(self):
+        self.assertIn("BalancifyBeginPause(&adapter->pauseState)", MINIPORT_C)
+        self.assertIn("BalancifyReceiveNblReturned(&adapter->pauseState)", MINIPORT_C)
+        self.assertIn("BalancifyReceiveIndicationReturned(&adapter->pauseState)", IOCTL_C)
+        self.assertIn("BalancifySendCallbackReturned(&adapter->pauseState)", MINIPORT_C)
         self.assertRegex(MINIPORT_C, r"if\s*\(completePause\)\s*NdisMPauseComplete\(")
-        track = IOCTL_C.index("BalancifyRxTrackIndication(&adapter->rxPause)")
+        track = IOCTL_C.index("BalancifyTrackReceiveIndication(&adapter->pauseState)")
         indicate = IOCTL_C.index("NdisMIndicateReceiveNetBufferLists(")
+        returned = IOCTL_C.index("BalancifyReceiveIndicationReturned(&adapter->pauseState)")
         self.assertLess(track, indicate)
+        self.assertLess(indicate, returned)
 
     def test_raw_ip_inf_and_ndis_attributes_agree(self):
         self.assertRegex(INF, r"(?m)^\*MediaType\s*=\s*19\s*;\s*NdisMediumIP")

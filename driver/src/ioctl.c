@@ -27,6 +27,7 @@
 typedef struct _BALANCIFY_STATS {
     ULONG64 txPackets;
     ULONG64 rxPackets;
+    ULONG64 txErrors;
     ULONG64 txBytes;
     ULONG64 rxBytes;
     ULONG mtu;
@@ -172,10 +173,11 @@ VOID BalancifyEvtIoDeviceControl(
         NdisAcquireSpinLock(&adapter->lock);
         stats->txPackets = adapter->txPackets;
         stats->rxPackets = adapter->rxPackets;
+        stats->txErrors = adapter->txErrors;
         stats->txBytes = adapter->txBytes;
         stats->rxBytes = adapter->rxBytes;
         stats->mtu = adapter->mtu;
-        stats->paused = (BOOLEAN)adapter->rxPause.paused;
+        stats->paused = (BOOLEAN)adapter->pauseState.paused;
         NdisReleaseSpinLock(&adapter->lock);
         bytesReturned = sizeof(BALANCIFY_STATS);
         status = STATUS_SUCCESS;
@@ -190,7 +192,7 @@ VOID BalancifyEvtIoDeviceControl(
         // it under the same lock used by SET_MTU and the miniport OID callbacks.
         NdisAcquireSpinLock(&adapter->lock);
         mtu = adapter->mtu;
-        paused = (BOOLEAN)adapter->rxPause.paused;
+        paused = (BOOLEAN)adapter->pauseState.paused;
         NdisReleaseSpinLock(&adapter->lock);
         if (paused) {
             status = STATUS_DEVICE_NOT_READY;
@@ -263,8 +265,8 @@ VOID BalancifyEvtIoDeviceControl(
         NBL_SET_PORT_NUMBER(nbl, 0);
 
         NdisAcquireSpinLock(&adapter->lock);
-        paused = (BOOLEAN)adapter->rxPause.paused;
-        canIndicate = BalancifyRxTrackIndication(&adapter->rxPause) ? TRUE : FALSE;
+        paused = (BOOLEAN)adapter->pauseState.paused;
+        canIndicate = BalancifyTrackReceiveIndication(&adapter->pauseState) ? TRUE : FALSE;
         if (canIndicate) {
             adapter->rxPackets++;
             adapter->rxBytes += inputBufferLength;
@@ -290,6 +292,12 @@ VOID BalancifyEvtIoDeviceControl(
             NDIS_DEFAULT_PORT_NUMBER,
             1,
             receiveFlags);
+
+        BOOLEAN completePause;
+        NdisAcquireSpinLock(&adapter->lock);
+        completePause = BalancifyReceiveIndicationReturned(&adapter->pauseState) ? TRUE : FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
 
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: INJECT_NBL %zu bytes indicated\n", inputBufferLength));
         status = STATUS_SUCCESS;

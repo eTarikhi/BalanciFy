@@ -15,12 +15,13 @@ typedef struct _BALANCIFY_ADAPTER {
     NDIS_HANDLE netBufferPool;
     WDFDEVICE controlDevice;
     NDIS_SPIN_LOCK lock;
-    BALANCIFY_RX_PAUSE_STATE rxPause;
+    BALANCIFY_NDIS_PAUSE_STATE pauseState;
     ULONG mtu;
     ULONG lookaheadSize;
     ULONG packetFilter;
     ULONG64 txPackets;
     ULONG64 rxPackets;
+    ULONG64 txErrors;
     ULONG64 txBytes;
     ULONG64 rxBytes;
 } BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;

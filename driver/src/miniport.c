@@ -43,6 +43,7 @@ static const NDIS_OID gSupportedOids[] = {
     OID_GEN_CURRENT_LOOKAHEAD,
     OID_GEN_CURRENT_PACKET_FILTER,
     OID_GEN_XMIT_OK,
+    OID_GEN_XMIT_ERROR,
     OID_GEN_RCV_OK,
     OID_GEN_STATISTICS,
 };
@@ -309,18 +310,22 @@ NDIS_STATUS MiniportPause(NDIS_HANDLE miniportAdapterContext, PNDIS_MINIPORT_PAU
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
     NDIS_STATUS status;
     ULONG outstandingRxNbls;
+    ULONG indicationsInProgress;
+    ULONG sendCallbacksInProgress;
     UNREFERENCED_PARAMETER(pauseParameters);
 
     NdisAcquireSpinLock(&adapter->lock);
-    outstandingRxNbls = adapter->rxPause.outstandingRxNbls;
-    status = BalancifyRxBeginPause(&adapter->rxPause)
+    outstandingRxNbls = adapter->pauseState.outstandingRxNbls;
+    indicationsInProgress = adapter->pauseState.indicationsInProgress;
+    sendCallbacksInProgress = adapter->pauseState.sendCallbacksInProgress;
+    status = BalancifyBeginPause(&adapter->pauseState)
         ? NDIS_STATUS_SUCCESS
         : NDIS_STATUS_PENDING;
     NdisReleaseSpinLock(&adapter->lock);
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "Balancify: MiniportPause outstandingRx=%lu status=0x%x\n",
-        outstandingRxNbls, status));
+        "Balancify: MiniportPause rx=%lu indicate=%lu sendCallbacks=%lu status=0x%x\n",
+        outstandingRxNbls, indicationsInProgress, sendCallbacksInProgress, status));
     return status;
 }
 
@@ -331,7 +336,7 @@ NDIS_STATUS MiniportRestart(
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
     UNREFERENCED_PARAMETER(restartParameters);
     NdisAcquireSpinLock(&adapter->lock);
-    BalancifyRxRestart(&adapter->rxPause);
+    BalancifyRestart(&adapter->pauseState);
     NdisReleaseSpinLock(&adapter->lock);
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportRestart (Sec.4.5 resume)\n"));
     return NDIS_STATUS_SUCCESS;
@@ -347,20 +352,34 @@ VOID MiniportSendNetBufferLists(
     PNET_BUFFER_LIST curr = netBufferLists;
     UNREFERENCED_PARAMETER(portNumber);
 
+    BOOLEAN paused;
+    BOOLEAN tracked;
+    BOOLEAN completePause = FALSE;
+
+    // Track the whole callback chain so a pending pause cannot complete after
+    // only the first NBL has been completed.
+    NdisAcquireSpinLock(&adapter->lock);
+    paused = (BOOLEAN)adapter->pauseState.paused;
+    tracked = BalancifyTrackSendCallback(&adapter->pauseState) ? TRUE : FALSE;
+    NdisReleaseSpinLock(&adapter->lock);
+
     while (curr) {
         PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(curr);
         NET_BUFFER_LIST_NEXT_NBL(curr) = NULL;
 
-        // For skeleton: count and complete immediately.
-        // Real implementation: copy to service ring, service does tunnel send,
-        // then NdisMSendNetBufferListsComplete.
-        NdisAcquireSpinLock(&adapter->lock);
-        // Each NET_BUFFER is one packet; an NBL may carry multiple NBs.
-        for (PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr); nb; nb = NET_BUFFER_NEXT_NB(nb)) {
-            adapter->txPackets++;
-            adapter->txBytes += NET_BUFFER_DATA_LENGTH(nb);
+        // The service transmit ring is not implemented yet. Fail explicitly
+        // instead of completing a dropped packet as a successful transmission.
+        // Sends admitted before pause are counted as errors; while pausing or
+        // paused, reject them with NDIS_STATUS_PAUSED as required by NDIS.
+        if (!paused) {
+            NdisAcquireSpinLock(&adapter->lock);
+            // NDIS packet counters count each NET_BUFFER, not each NBL.
+            for (PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr); nb; nb = NET_BUFFER_NEXT_NB(nb)) {
+                adapter->txErrors++;
+            }
+            NdisReleaseSpinLock(&adapter->lock);
         }
-        NdisReleaseSpinLock(&adapter->lock);
+        NET_BUFFER_LIST_STATUS(curr, paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE);
 
         if (sendFlags & NDIS_SEND_FLAGS_DISPATCH_LEVEL) {
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
@@ -368,6 +387,13 @@ VOID MiniportSendNetBufferLists(
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, 0);
         }
         curr = next;
+    }
+
+    if (tracked) {
+        NdisAcquireSpinLock(&adapter->lock);
+        completePause = BalancifySendCallbackReturned(&adapter->pauseState) ? TRUE : FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
     }
 }
 
@@ -402,7 +428,7 @@ VOID MiniportReturnNetBufferLists(
 
         BOOLEAN completePause;
         NdisAcquireSpinLock(&adapter->lock);
-        completePause = BalancifyRxReturnNbl(&adapter->rxPause) ? TRUE : FALSE;
+        completePause = BalancifyReceiveNblReturned(&adapter->pauseState) ? TRUE : FALSE;
         NdisReleaseSpinLock(&adapter->lock);
         if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
 
@@ -475,6 +501,7 @@ NDIS_STATUS MiniportOidRequest(
         ULONG64 txBytes;
         ULONG64 rxPackets;
         ULONG64 txPackets;
+        ULONG64 txErrors;
 
         oidRequest->DATA.QUERY_INFORMATION.BytesWritten = 0;
         oidRequest->DATA.QUERY_INFORMATION.BytesNeeded = 0;
@@ -486,6 +513,7 @@ NDIS_STATUS MiniportOidRequest(
         txBytes = adapter->txBytes;
         rxPackets = adapter->rxPackets;
         txPackets = adapter->txPackets;
+        txErrors = adapter->txErrors;
         NdisReleaseSpinLock(&adapter->lock);
 
         switch (oid) {
@@ -529,6 +557,13 @@ NDIS_STATUS MiniportOidRequest(
             bytesNeeded = sizeof(ULONG);
             if (bufferLength >= bytesNeeded) {
                 *(PULONG)buffer = (ULONG)txPackets;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_XMIT_ERROR:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = (ULONG)txErrors;
                 bytesWritten = bytesNeeded;
             }
             break;
