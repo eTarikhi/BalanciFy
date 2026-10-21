@@ -13,9 +13,24 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 
+fn parse_ipc_addr(value: Option<&str>) -> std::io::Result<SocketAddr> {
+    let addr = value
+        .map(|value| value.parse::<SocketAddr>())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid IPC socket address"))?
+        .unwrap_or_else(|| "127.0.0.1:5000".parse().unwrap());
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "lab IPC client is restricted to loopback addresses",
+        ));
+    }
+    Ok(addr)
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let addr: SocketAddr = args.get(1).and_then(|s| s.parse().ok()).unwrap_or_else(|| "127.0.0.1:5000".parse().unwrap());
+    let addr = parse_ipc_addr(args.get(1).map(String::as_str))?;
     let mode = args.get(2).map(|s| s.as_str()).unwrap_or("home");
 
     println!("Balancify shell -- connecting to {} mode={}", addr, mode);
@@ -577,6 +592,20 @@ mod tests {
             active_flows: 0,
             counters: Counters::default(),
         }
+    }
+
+    #[test]
+    fn ipc_client_address_is_strictly_loopback_only() {
+        assert_eq!(parse_ipc_addr(None).unwrap(), "127.0.0.1:5000".parse().unwrap());
+        assert_eq!(parse_ipc_addr(Some("[::1]:5000")).unwrap(), "[::1]:5000".parse().unwrap());
+        assert_eq!(
+            parse_ipc_addr(Some("192.0.2.10:5000")).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            parse_ipc_addr(Some("not-an-address")).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]

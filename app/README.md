@@ -6,7 +6,9 @@ Windows App SDK 2.5.1 NuGet + .NET 10 SDK (`dotnet build`).
 The lab CLI in `app/src/main.rs` uses IPC v1 over TCP. The service binary now
 serves request/response messages on `127.0.0.1:5000` by default; override the
 port with `BALANCIFY_IPC_PORT`. This listener refuses non-loopback addresses
-and caps concurrent local IPC clients at 16.
+and caps concurrent local IPC clients at 16. The CLI client also accepts only
+loopback socket addresses; malformed and remote addresses fail explicitly
+instead of silently falling back to the default.
 It is a development adapter, not a substitute for the production ACL-protected
 Windows named pipe and caller-identity authentication. The lab adapter supports
 v1 event push at the requested capped 1–10 Hz rate. The CLI Home view keeps an in-memory last-known-good snapshot, applies Stats/uplink events, and marks cached status stale after a read timeout or partial policy/bond event. A new event alone does not clear a connection-stale marker; only a full status refresh does. Event-read timeouts are treated as idle polls only before any frame byte arrives; a timeout mid-frame is propagated as a stream error and shown with the stale cached view. The CLI exits gracefully after displaying the stale view. This is not yet a persisted cache or production GUI.
