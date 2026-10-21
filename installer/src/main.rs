@@ -624,6 +624,18 @@ mod tests {
         assert_ne!(first_default, second_default);
         assert!(first_default.exists());
         assert!(second_default.exists());
+        let collision = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&first_default)
+            .unwrap_err();
+        assert_eq!(collision.kind(), io::ErrorKind::AlreadyExists);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&first_default).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         std::fs::remove_file(options.journal_path).unwrap();
         std::fs::remove_file(first_default).unwrap();
         std::fs::remove_file(second_default).unwrap();
