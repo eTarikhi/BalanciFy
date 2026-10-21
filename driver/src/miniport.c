@@ -40,9 +40,41 @@ static const NDIS_OID gSupportedOids[] = {
     OID_GEN_MEDIA_IN_USE,
     OID_GEN_MAXIMUM_FRAME_SIZE,
     OID_GEN_MAXIMUM_TOTAL_SIZE,
+    OID_GEN_CURRENT_LOOKAHEAD,
     OID_GEN_CURRENT_PACKET_FILTER,
+    OID_GEN_XMIT_OK,
+    OID_GEN_XMIT_ERROR,
+    OID_GEN_RCV_OK,
     OID_GEN_STATISTICS,
 };
+
+static ULONG MiniportReadConfiguredMtu(NDIS_HANDLE miniportAdapterHandle) {
+    NDIS_CONFIGURATION_OBJECT configurationObject;
+    NDIS_HANDLE configurationHandle = NULL;
+    PNDIS_CONFIGURATION_PARAMETER parameter = NULL;
+    NDIS_STRING mtuKeyword = NDIS_STRING_CONST("Mtu");
+    NDIS_STATUS status;
+    ULONG mtu = BALANCIFY_DEFAULT_MTU;
+
+    NdisZeroMemory(&configurationObject, sizeof(configurationObject));
+    configurationObject.Header.Type = NDIS_OBJECT_TYPE_CONFIGURATION_OBJECT;
+    configurationObject.Header.Revision = NDIS_CONFIGURATION_OBJECT_REVISION_1;
+    configurationObject.Header.Size = NDIS_SIZEOF_CONFIGURATION_OBJECT_REVISION_1;
+    configurationObject.NdisHandle = miniportAdapterHandle;
+    configurationObject.Flags = 0;
+
+    status = NdisOpenConfigurationEx(&configurationObject, &configurationHandle);
+    if (status != NDIS_STATUS_SUCCESS) return mtu;
+
+    NdisReadConfiguration(&status, &parameter, configurationHandle,
+        &mtuKeyword, NdisParameterInteger);
+    if (status == NDIS_STATUS_SUCCESS && parameter &&
+        parameter->ParameterType == NdisParameterInteger) {
+        mtu = BalancifyNormalizeMtu(parameter->ParameterData.IntegerData, mtu);
+    }
+    NdisCloseConfiguration(configurationHandle);
+    return mtu;
+}
 
 static VOID MiniportFreeAdapter(PBALANCIFY_ADAPTER adapter) {
     if (!adapter) return;
@@ -146,7 +178,8 @@ NDIS_STATUS MiniportInitializeEx(
 
     NdisZeroMemory(adapter, sizeof(BALANCIFY_ADAPTER));
     adapter->miniportAdapterHandle = miniportAdapterHandle;
-    adapter->mtu = 1440; // Sec.6.1 default, updated from service via IOCTL
+    adapter->mtu = BALANCIFY_DEFAULT_MTU;
+    adapter->lookaheadSize = adapter->mtu;
     // NDIS requires the receive filter to start disabled; protocols enable it
     // through OID_GEN_CURRENT_PACKET_FILTER after adapter initialization.
     adapter->packetFilter = 0;
@@ -174,6 +207,10 @@ NDIS_STATUS MiniportInitializeEx(
         MiniportFreeAdapter(adapter);
         return status;
     }
+
+    // Read adapter parameters only after registration attributes have been set.
+    adapter->mtu = MiniportReadConfiguredMtu(miniportAdapterHandle);
+    adapter->lookaheadSize = adapter->mtu;
 
     // Create the receive NBL pool used by the controlled INJECT_NBL path.
     {
@@ -222,7 +259,7 @@ NDIS_STATUS MiniportInitializeEx(
     general.RcvLinkSpeed = (ULONG64)linkSpeed;
     general.MediaConnectState = MediaConnectStateConnected;
     general.MediaDuplexState = MediaDuplexStateFull;
-    general.LookaheadSize = adapter->mtu;
+    general.LookaheadSize = adapter->lookaheadSize;
     general.MacOptions = NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
         NDIS_MAC_OPTION_TRANSFERS_NOT_PEND | NDIS_MAC_OPTION_NO_LOOPBACK;
     general.SupportedPacketFilters = gSupportedPacketFilters;
@@ -271,12 +308,25 @@ VOID MiniportHaltEx(NDIS_HANDLE miniportAdapterContext, NDIS_HALT_ACTION haltAct
 _Use_decl_annotations_
 NDIS_STATUS MiniportPause(NDIS_HANDLE miniportAdapterContext, PNDIS_MINIPORT_PAUSE_PARAMETERS pauseParameters) {
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
+    NDIS_STATUS status;
+    ULONG outstandingRxNbls;
+    ULONG indicationsInProgress;
+    ULONG sendCallbacksInProgress;
     UNREFERENCED_PARAMETER(pauseParameters);
+
     NdisAcquireSpinLock(&adapter->lock);
-    adapter->paused = TRUE;
+    outstandingRxNbls = adapter->pauseState.outstandingRxNbls;
+    indicationsInProgress = adapter->pauseState.indicationsInProgress;
+    sendCallbacksInProgress = adapter->pauseState.sendCallbacksInProgress;
+    status = BalancifyBeginPause(&adapter->pauseState)
+        ? NDIS_STATUS_SUCCESS
+        : NDIS_STATUS_PENDING;
     NdisReleaseSpinLock(&adapter->lock);
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportPause (Sec.4.5 sleep)\n"));
-    return NDIS_STATUS_SUCCESS;
+
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+        "Balancify: MiniportPause rx=%lu indicate=%lu sendCallbacks=%lu status=0x%x\n",
+        outstandingRxNbls, indicationsInProgress, sendCallbacksInProgress, status));
+    return status;
 }
 
 _Use_decl_annotations_
@@ -286,7 +336,7 @@ NDIS_STATUS MiniportRestart(
     PBALANCIFY_ADAPTER adapter = (PBALANCIFY_ADAPTER)miniportAdapterContext;
     UNREFERENCED_PARAMETER(restartParameters);
     NdisAcquireSpinLock(&adapter->lock);
-    adapter->paused = FALSE;
+    BalancifyRestart(&adapter->pauseState);
     NdisReleaseSpinLock(&adapter->lock);
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: MiniportRestart (Sec.4.5 resume)\n"));
     return NDIS_STATUS_SUCCESS;
@@ -302,20 +352,34 @@ VOID MiniportSendNetBufferLists(
     PNET_BUFFER_LIST curr = netBufferLists;
     UNREFERENCED_PARAMETER(portNumber);
 
+    BOOLEAN paused;
+    BOOLEAN tracked;
+    BOOLEAN completePause = FALSE;
+
+    // Track the whole callback chain so a pending pause cannot complete after
+    // only the first NBL has been completed.
+    NdisAcquireSpinLock(&adapter->lock);
+    paused = (BOOLEAN)adapter->pauseState.paused;
+    tracked = BalancifyTrackSendCallback(&adapter->pauseState) ? TRUE : FALSE;
+    NdisReleaseSpinLock(&adapter->lock);
+
     while (curr) {
         PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(curr);
         NET_BUFFER_LIST_NEXT_NBL(curr) = NULL;
 
-        // For skeleton: count and complete immediately.
-        // Real implementation: copy to service ring, service does tunnel send,
-        // then NdisMSendNetBufferListsComplete.
-        NdisAcquireSpinLock(&adapter->lock);
-        adapter->txPackets++;
-        // Approximate bytes: sum NET_BUFFER data length
-        for (PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr); nb; nb = NET_BUFFER_NEXT_NB(nb)) {
-            adapter->txBytes += NET_BUFFER_DATA_LENGTH(nb);
+        // The service transmit ring is not implemented yet. Fail explicitly
+        // instead of completing a dropped packet as a successful transmission.
+        // Sends admitted before pause are counted as errors; while pausing or
+        // paused, reject them with NDIS_STATUS_PAUSED as required by NDIS.
+        if (!paused) {
+            NdisAcquireSpinLock(&adapter->lock);
+            // NDIS packet counters count each NET_BUFFER, not each NBL.
+            for (PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr); nb; nb = NET_BUFFER_NEXT_NB(nb)) {
+                adapter->txErrors++;
+            }
+            NdisReleaseSpinLock(&adapter->lock);
         }
-        NdisReleaseSpinLock(&adapter->lock);
+        NET_BUFFER_LIST_STATUS(curr, paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE);
 
         if (sendFlags & NDIS_SEND_FLAGS_DISPATCH_LEVEL) {
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
@@ -323,6 +387,13 @@ VOID MiniportSendNetBufferLists(
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, 0);
         }
         curr = next;
+    }
+
+    if (tracked) {
+        NdisAcquireSpinLock(&adapter->lock);
+        completePause = BalancifySendCallbackReturned(&adapter->pauseState) ? TRUE : FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
     }
 }
 
@@ -354,9 +425,15 @@ VOID MiniportReturnNetBufferLists(
             context->packetLength = 0;
         }
         NdisFreeNetBufferList(curr);
+
+        BOOLEAN completePause;
+        NdisAcquireSpinLock(&adapter->lock);
+        completePause = BalancifyReceiveNblReturned(&adapter->pauseState) ? TRUE : FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
+
         curr = next;
     }
-    UNREFERENCED_PARAMETER(adapter);
     UNREFERENCED_PARAMETER(returnFlags);
 }
 
@@ -387,6 +464,22 @@ NDIS_STATUS MiniportOidRequest(
             oidRequest->DATA.SET_INFORMATION.BytesRead = sizeof(ULONG);
             return NDIS_STATUS_SUCCESS;
         }
+        if (oid == OID_GEN_CURRENT_LOOKAHEAD) {
+            ULONG lookahead;
+            ULONG mtu;
+            if (bufferLength != sizeof(ULONG)) {
+                oidRequest->DATA.SET_INFORMATION.BytesNeeded = sizeof(ULONG);
+                return NDIS_STATUS_INVALID_LENGTH;
+            }
+            lookahead = *(PULONG)buffer;
+            NdisAcquireSpinLock(&adapter->lock);
+            mtu = adapter->mtu;
+            if (lookahead <= mtu) adapter->lookaheadSize = lookahead;
+            NdisReleaseSpinLock(&adapter->lock);
+            if (lookahead > mtu) return NDIS_STATUS_INVALID_DATA;
+            oidRequest->DATA.SET_INFORMATION.BytesRead = sizeof(ULONG);
+            return NDIS_STATUS_SUCCESS;
+        }
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -402,17 +495,25 @@ NDIS_STATUS MiniportOidRequest(
         ULONG bytesWritten = 0;
         ULONG bytesNeeded = 0;
         ULONG mtu;
+        ULONG lookaheadSize;
         ULONG packetFilter;
         ULONG64 rxBytes;
         ULONG64 txBytes;
+        ULONG64 rxPackets;
+        ULONG64 txPackets;
+        ULONG64 txErrors;
 
         oidRequest->DATA.QUERY_INFORMATION.BytesWritten = 0;
         oidRequest->DATA.QUERY_INFORMATION.BytesNeeded = 0;
         NdisAcquireSpinLock(&adapter->lock);
         mtu = adapter->mtu;
+        lookaheadSize = adapter->lookaheadSize;
         packetFilter = adapter->packetFilter;
         rxBytes = adapter->rxBytes;
         txBytes = adapter->txBytes;
+        rxPackets = adapter->rxPackets;
+        txPackets = adapter->txPackets;
+        txErrors = adapter->txErrors;
         NdisReleaseSpinLock(&adapter->lock);
 
         switch (oid) {
@@ -442,6 +543,34 @@ NDIS_STATUS MiniportOidRequest(
             bytesNeeded = sizeof(ULONG);
             if (bufferLength >= bytesNeeded) {
                 *(PULONG)buffer = mtu;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_CURRENT_LOOKAHEAD:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = lookaheadSize;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_XMIT_OK:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = (ULONG)txPackets;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_XMIT_ERROR:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = (ULONG)txErrors;
+                bytesWritten = bytesNeeded;
+            }
+            break;
+        case OID_GEN_RCV_OK:
+            bytesNeeded = sizeof(ULONG);
+            if (bufferLength >= bytesNeeded) {
+                *(PULONG)buffer = (ULONG)rxPackets;
                 bytesWritten = bytesNeeded;
             }
             break;

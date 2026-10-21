@@ -7,11 +7,11 @@
 
 use balancify_ipc::{
     decode_frame, encode_frame, Counters, Event, FrameKind, Request, Response,
-    FRAME_HEADER_LEN, MAX_PAYLOAD,
+    FRAME_HEADER_LEN, MAX_PAYLOAD, StatusSnapshot, UplinkInfo,
 };
 use std::io::{Read, Write};
 use std::net::{TcpStream, SocketAddr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -26,8 +26,12 @@ fn main() -> std::io::Result<()> {
     // Send requests based on mode
     match mode {
         "home" => {
+            let mut last_good = None;
             send_request(&mut stream, &Request::GetStatus)?;
             if let Some(resp) = recv_response(&mut stream)? {
+                if let Response::Status(snapshot) = &resp {
+                    last_good = Some(LastKnownGoodHome::new(snapshot.clone(), Instant::now()));
+                }
                 render_home(resp);
             }
             // Subscribe to events at 1 Hz
@@ -37,9 +41,27 @@ fn main() -> std::io::Result<()> {
                     println!("Subscribed to events at 1 Hz, listening for 5 events...");
                     for _ in 0..5 {
                         match recv_event(&mut stream)? {
-                            Some(ev) => render_event(ev),
+                            Some(ev) => {
+                                let now = Instant::now();
+                                let mut newly_stale = false;
+                                if let Some(cache) = last_good.as_mut() {
+                                    let was_stale = cache.stale_reason().is_some();
+                                    cache.apply_event(&ev, now);
+                                    newly_stale = !was_stale && cache.stale_reason().is_some();
+                                    if newly_stale {
+                                        render_stale_home(cache, now);
+                                    }
+                                }
+                                render_event(ev);
+                            }
                             None => {
-                                println!("No event arrived before the IPC read timeout; the event stream may be idle or disconnected.");
+                                println!("No event arrived before the IPC read timeout; showing cached status as stale.");
+                                if let Some(mut cache) = last_good {
+                                    cache.mark_connection_stale();
+                                    render_stale_home(&cache, Instant::now());
+                                } else {
+                                    println!("No last-known-good service snapshot is available.");
+                                }
                                 break;
                             }
                         }
@@ -138,6 +160,75 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct LastKnownGoodHome {
+    snapshot: StatusSnapshot,
+    last_seen: Instant,
+    connection_stale: bool,
+    snapshot_stale_reason: Option<&'static str>,
+}
+
+impl LastKnownGoodHome {
+    fn new(snapshot: StatusSnapshot, now: Instant) -> Self {
+        Self {
+            snapshot,
+            last_seen: now,
+            connection_stale: false,
+            snapshot_stale_reason: None,
+        }
+    }
+
+    fn apply_event(&mut self, event: &Event, now: Instant) {
+        self.last_seen = now;
+        self.connection_stale = false;
+        match event {
+            Event::Stats(counters) => self.snapshot.counters = *counters,
+            Event::UplinkStateChanged { id, state } => {
+                if let Some(uplink) = self.snapshot.uplinks.iter_mut().find(|uplink| uplink.id == *id) {
+                    uplink.state = *state;
+                } else {
+                    self.snapshot_stale_reason = Some("an unknown uplink changed state");
+                }
+            }
+            Event::PolicyChanged { revision } => {
+                self.snapshot.policy_revision = *revision;
+                self.snapshot_stale_reason = Some("policy changed; full status refresh required");
+            }
+            Event::BondReverted { .. } => {
+                self.snapshot_stale_reason = Some("bond placement changed; full status refresh required");
+            }
+            Event::Warning { .. } => {}
+        }
+    }
+
+    fn mark_connection_stale(&mut self) {
+        self.connection_stale = true;
+    }
+
+    fn stale_reason(&self) -> Option<&'static str> {
+        if self.connection_stale {
+            Some("IPC event stream timed out or disconnected")
+        } else {
+            self.snapshot_stale_reason
+        }
+    }
+
+    fn age(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.last_seen)
+    }
+}
+
+fn render_stale_home(cache: &LastKnownGoodHome, now: Instant) {
+    let age = cache.age(now);
+    let reason = cache.stale_reason().unwrap_or("status is cached");
+    eprintln!(
+        "[STALE] showing last-known-good Home status ({:.1}s old): {}",
+        age.as_secs_f64(),
+        reason
+    );
+    render_home(Response::Status(cache.snapshot.clone()));
 }
 
 fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
@@ -420,5 +511,80 @@ fn render_event(ev: Event) {
             println!("[event] Stats: stripped={} forwarded={} ecn={} delay={} — 1 Hz telemetry", c.packets_stripped, c.packets_forwarded, c.ecn_ce, c.delay_events);
         }
         Event::Warning { code } => println!("[event] Warning code={} — Sec.4.5 failure modes", code),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot() -> StatusSnapshot {
+        StatusSnapshot {
+            service_version: "test".to_string(),
+            schema_version: 1,
+            policy_revision: 1,
+            rules_revision: 1,
+            bond_enabled: true,
+            duplicate_mode: false,
+            allow_metered: false,
+            adapter_mtu: 1440,
+            uplinks: vec![UplinkInfo {
+                id: 0,
+                state: 1,
+                rtt_ms: 10,
+                loss_permille: 0,
+                capacity_bps: 1_000_000,
+                weight_permille: 1000,
+                metered: false,
+                eligible: true,
+            }],
+            active_flows: 0,
+            counters: Counters::default(),
+        }
+    }
+
+    #[test]
+    fn stats_event_refreshes_last_known_good_counters_and_timestamp() {
+        let start = Instant::now();
+        let mut cache = LastKnownGoodHome::new(snapshot(), start);
+        let later = start + Duration::from_secs(1);
+        cache.apply_event(
+            &Event::Stats(Counters { packets_forwarded: 7, ..Counters::default() }),
+            later,
+        );
+        assert_eq!(cache.snapshot.counters.packets_forwarded, 7);
+        assert_eq!(cache.age(later), Duration::ZERO);
+        assert_eq!(cache.stale_reason(), None);
+    }
+
+    #[test]
+    fn uplink_event_updates_cached_state_without_replacing_other_metrics() {
+        let now = Instant::now();
+        let mut cache = LastKnownGoodHome::new(snapshot(), now);
+        cache.apply_event(&Event::UplinkStateChanged { id: 0, state: 2 }, now);
+        assert_eq!(cache.snapshot.uplinks[0].state, 2);
+        assert_eq!(cache.snapshot.uplinks[0].rtt_ms, 10);
+        assert_eq!(cache.stale_reason(), None);
+    }
+
+    #[test]
+    fn policy_change_marks_snapshot_stale_until_a_full_status_refresh() {
+        let now = Instant::now();
+        let mut cache = LastKnownGoodHome::new(snapshot(), now);
+        cache.apply_event(&Event::PolicyChanged { revision: 2 }, now);
+        assert_eq!(cache.snapshot.policy_revision, 2);
+        assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
+        cache.apply_event(&Event::Stats(Counters::default()), now + Duration::from_secs(1));
+        assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
+    }
+
+    #[test]
+    fn event_stream_timeout_marks_cached_status_stale_until_reconnected() {
+        let now = Instant::now();
+        let mut cache = LastKnownGoodHome::new(snapshot(), now);
+        cache.mark_connection_stale();
+        assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
+        cache.apply_event(&Event::Warning { code: 1 }, now + Duration::from_secs(2));
+        assert_eq!(cache.stale_reason(), None);
     }
 }

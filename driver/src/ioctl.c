@@ -27,6 +27,7 @@
 typedef struct _BALANCIFY_STATS {
     ULONG64 txPackets;
     ULONG64 rxPackets;
+    ULONG64 txErrors;
     ULONG64 txBytes;
     ULONG64 rxBytes;
     ULONG mtu;
@@ -148,13 +149,14 @@ VOID BalancifyEvtIoDeviceControl(
         status = WdfRequestRetrieveInputBuffer(request, sizeof(ULONG), &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
         ULONG mtu = *(PULONG)inputBuffer;
-        if (mtu < 576 || mtu > 9000) {
+        if (mtu < BALANCIFY_MIN_MTU || mtu > BALANCIFY_MAX_MTU) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
         // Update adapter MTU (Sec.6.1)
         NdisAcquireSpinLock(&adapter->lock);
         adapter->mtu = mtu;
+        if (adapter->lookaheadSize > mtu) adapter->lookaheadSize = mtu;
         NdisReleaseSpinLock(&adapter->lock);
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU %lu\n", mtu));
         status = STATUS_SUCCESS;
@@ -171,10 +173,11 @@ VOID BalancifyEvtIoDeviceControl(
         NdisAcquireSpinLock(&adapter->lock);
         stats->txPackets = adapter->txPackets;
         stats->rxPackets = adapter->rxPackets;
+        stats->txErrors = adapter->txErrors;
         stats->txBytes = adapter->txBytes;
         stats->rxBytes = adapter->rxBytes;
         stats->mtu = adapter->mtu;
-        stats->paused = adapter->paused;
+        stats->paused = (BOOLEAN)adapter->pauseState.paused;
         NdisReleaseSpinLock(&adapter->lock);
         bytesReturned = sizeof(BALANCIFY_STATS);
         status = STATUS_SUCCESS;
@@ -183,18 +186,19 @@ VOID BalancifyEvtIoDeviceControl(
     case IOCTL_BALANCIFY_INJECT_NBL: {
         ULONG mtu;
         BOOLEAN paused;
+        BOOLEAN canIndicate;
 
         // The public miniport MTU is the maximum raw IP packet length. Snapshot
         // it under the same lock used by SET_MTU and the miniport OID callbacks.
         NdisAcquireSpinLock(&adapter->lock);
         mtu = adapter->mtu;
-        paused = adapter->paused;
+        paused = (BOOLEAN)adapter->pauseState.paused;
         NdisReleaseSpinLock(&adapter->lock);
         if (paused) {
             status = STATUS_DEVICE_NOT_READY;
             break;
         }
-        if (inputBufferLength < 20 || inputBufferLength > mtu || inputBufferLength > 9000) {
+        if (inputBufferLength < 20 || inputBufferLength > mtu || inputBufferLength > BALANCIFY_MAX_MTU) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
@@ -261,18 +265,19 @@ VOID BalancifyEvtIoDeviceControl(
         NBL_SET_PORT_NUMBER(nbl, 0);
 
         NdisAcquireSpinLock(&adapter->lock);
-        paused = adapter->paused;
-        if (!paused) {
+        paused = (BOOLEAN)adapter->pauseState.paused;
+        canIndicate = BalancifyTrackReceiveIndication(&adapter->pauseState) ? TRUE : FALSE;
+        if (canIndicate) {
             adapter->rxPackets++;
             adapter->rxBytes += inputBufferLength;
         }
         NdisReleaseSpinLock(&adapter->lock);
 
-        if (paused) {
+        if (!canIndicate) {
             NdisFreeNetBufferList(nbl);
             NdisFreeMdl(mdl);
             NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
-            status = STATUS_DEVICE_NOT_READY;
+            status = paused ? STATUS_DEVICE_NOT_READY : STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
 
@@ -287,6 +292,12 @@ VOID BalancifyEvtIoDeviceControl(
             NDIS_DEFAULT_PORT_NUMBER,
             1,
             receiveFlags);
+
+        BOOLEAN completePause;
+        NdisAcquireSpinLock(&adapter->lock);
+        completePause = BalancifyReceiveIndicationReturned(&adapter->pauseState) ? TRUE : FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (completePause) NdisMPauseComplete(adapter->miniportAdapterHandle);
 
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: INJECT_NBL %zu bytes indicated\n", inputBufferLength));
         status = STATUS_SUCCESS;

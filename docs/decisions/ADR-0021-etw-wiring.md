@@ -17,18 +17,18 @@ Previously, service had eprintln for failover only, no ETW.
 - `ingest_path`: when `Event::Dropped AuthFailed`, log `EVT_AUTH_FAILED (600)` with uplink
 - `tick`: when `should_rekey` triggers `maybe_rekey`, log `EVT_REKEY (400)` with session and time
 - `tick`: when `check_relay_failover` returns new relay, log `EVT_RELAY_FAILOVER (500)` with old->new and count, plus existing eprintln
-- `crates/service/src/etw.rs`: already has event IDs 100-600, `EtwProvider::new`, `info/warn/error/verbose` that eprintln on non-Windows, EventRegister/EventWrite on Windows (stub)
+- `crates/service/src/etw.rs`: event IDs 100-600; Windows `EventRegister`/`EventEnabled`/`EventWrite`/`EventUnregister` use a stable provider GUID, nonzero level/keyword, and bounded UTF-16 payloads; non-Windows and Windows API failure paths log to stderr. No provider manifest is installed, so useful Windows trace decoding still needs runtime validation. Relay failover ETW messages deliberately omit endpoint IPs and ports.
 - Tests: existing ETW test `etw_provider_logs` still passes, no new failure
 
 ## Consequences
 
 - Positive: diagnostics include ECN/delay/rekey/failover/auth via ETW, visible in support bundle and shell
-- Negative: ETW stub on non-Windows is eprintln, not real ETW — acceptable for lab, real ETW needs Windows build
+- Negative: non-Windows uses stderr; Windows ETW code is compiled by CI but has not been exercised against a live trace session, and no manifest is installed for high-level decoding.
 - Neutral: no change to data path, only logging
 
 ## References
 
 - Blueprint Sec.8.2 Diagnostics, Sec.6.4 CC ECN+delay, Sec.11.3 rekey, Sec.4.5 failover, Sec.9.1b auth_failed
 - Code: `crates/service/src/lib.rs` `etw` field, `ingest_path`, `tick`, `crates/service/src/etw.rs`
-- CI: 39233826038 success after fixing arg order `on_ack_with_rtt(path, bytes, None, now)` vs previous `now, None`
+- CI: 39233826038 success after fixing arg order `on_ack_with_rtt(path, bytes, None, now)` vs previous `now, None`; Windows ETW sink and follow-up tests pass in CI `39601436958` (live trace capture/decoding remains pending).
 - ADR-0012 ETW and support bundle, ADR-0019 enhanced, ADR-0021 wiring

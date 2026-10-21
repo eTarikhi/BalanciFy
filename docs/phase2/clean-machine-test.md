@@ -1,7 +1,7 @@
 # Clean-machine offline test (installer transactional, Sec.8.3, Sec.10.3)
 
-Date: 2026-10-20
-Status: procedure documented, not yet run on Hyper-V farm. Installer now requires and copies the generated SPDX sidecar; it no longer fabricates a fallback SBOM. The generated CI artifact is SPDX 2.3 only; SPDX 3.0/VEX are pending.
+Date: 2026-10-21
+Status: procedure documented, not yet run on Hyper-V farm. Installer requires and copies both generated SPDX sidecars and removes them on rollback; it no longer fabricates a fallback SBOM. SPDX 2.3 and 3.0.1 inventories are intended CI artifacts; reviewed VEX remains pending.
 
 ## Goal
 
@@ -10,7 +10,7 @@ Validate that the installer is truly offline (one signed bundle, zero user prere
 ## Prerequisites
 
 - Hyper-V VM templates (x64 + ARM64, HVCI on/off, VBS/Memory-Integrity on/off) — Phase 4 CI (Sec.10.3 row)
-- Offline bundle: `Balancify-0.1.0-offline.exe` (bootstrapper carrying MSI + driver + runtimes + SBOM sidecar)
+- Offline bundle: `Balancify-0.1.0-offline.exe` (bootstrapper carrying MSI + driver + runtimes + SPDX 2.3 and 3.0.1 sidecars)
 - No internet access in VM (unplug vSwitch or firewall block)
 - Snapshot before install for rollback verification
 
@@ -21,7 +21,7 @@ Validate that the installer is truly offline (one signed bundle, zero user prere
 3. **Run installer dry-run**: `balancify-installer.exe --dry-run C:\temp\journal.json`
    - Expect: preflight OK, all steps logged, no changes.
 4. **Run installer**: `Balancify-0.1.0-offline.exe /quiet`
-   - Check journal at `C:\ProgramData\Balancify\install.json` — 8 entries (preflight, driver, service, adapter, runtimes, gui, sbom, self-test), each with rollback.
+   - Check journal at `C:\ProgramData\Balancify\install.json` — 9 entries (preflight, driver, service, adapter, runtimes, gui, SPDX 2.3 sidecar, SPDX 3.0.1 sidecar, self-test), each with rollback.
 5. **Verify install**:
    - `pnputil /enum-drivers | findstr balancify` — driver present, attestation-signed, HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre PoolTag BlaB.
    - `sc query BalancifyService` — running, restricted account `NT SERVICE\BalancifyService`.
@@ -29,8 +29,8 @@ Validate that the installer is truly offline (one signed bundle, zero user prere
    - `dotnet --list-runtimes` — .NET 10 present if bundled, or self-contained shell runs.
    - `Get-AppxPackage -Name Balancify` — GUI registered (if MSIX path).
    - Firewall: `netsh advfirewall firewall show rule name=Balancify` — UDP allow.
-   - SBOM: `C:\ProgramData\Balancify\sbom.spdx.json` exists and is byte-for-byte the CI-generated SPDX 2.3 inventory from the locked Cargo graph. Validate it with an SPDX 2.3 parser; do not expect VEX or claim vulnerability status until reviewed VEX is implemented.
-6. **Self-test hook**: installer runs first-run self-test — loop through embedded endpoint, local mode, expect `passed=true`, checks driver loaded, service reachable via IPC, adapter MTU, SBOM sidecar exists, ETW provider registered, offline VM per clean-machine-test.md.
+   - SBOMs: `C:\ProgramData\Balancify\sbom.spdx.json` (SPDX 2.3) and `C:\ProgramData\Balancify\sbom.spdx3.json` (SPDX 3.0.1) exist and match the CI-generated locked-graph inventories byte-for-byte. Validate each with its corresponding official validator; do not expect VEX or claim vulnerability status until reviewed VEX is implemented.
+6. **Self-test hook**: installer runs first-run self-test — loop through embedded endpoint, local mode, expect `passed=true`, checks driver loaded, service reachable via IPC, adapter MTU, both SBOM sidecars exist, ETW provider registered, offline VM per clean-machine-test.md.
 7. **Induce failure** (rollback test):
    - Corrupt driver INF (or block service creation) and rerun installer — expect rollback in reverse order, journal shows inverse ops, no leftover driver/service/adapter/runtimes/sbom.
    - Verify: `pnputil /enum-drivers` no balancify, `sc query` no service, adapter gone, routes restored, SBOM sidecar removed.
@@ -44,10 +44,10 @@ Validate that the installer is truly offline (one signed bundle, zero user prere
 
 ## Expected artifacts
 
-- Journal JSON at `C:\ProgramData\Balancify\install.json` — 8 entries (preflight, driver, service, adapter, runtimes, gui, sbom, self-test) with rollback reverse order
+- Journal JSON at `C:\ProgramData\Balancify\install.json` — 9 entries (preflight, driver, service, adapter, runtimes, gui, SPDX 2.3 sidecar, SPDX 3.0.1 sidecar, self-test) with rollback reverse order
 - Support bundle via IPC: `balancify-app.exe diagnostics` — includes cwnd/in_flight per uplink, congestion diag loss/ecn/delay+paths per_path Vec<PathCongestionDiag> cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, rekey diag, relay stats, failover count+convergence ms (relay_failover_count, relay_conv_ms, uplink_failover_count, uplink_conv_ms), history
-- ETW logs: provider `Balancify` with event IDs 100-600 (100 start, 101 stop, 200 up, 201 down, 300 bond reverted, 400 rekey, 401 ECN CE, 402 delay, 500 failover, 600 auth failed) — WPA CPU sampling, working set bounded, power delta
-- SBOM at `C:\ProgramData\Balancify\sbom.spdx.json` sidecar: generated SPDX 2.3 inventory from locked Cargo metadata; VEX and vulnerability claims are intentionally absent; verify the installer copy matches the validated CI artifact byte-for-byte.
+- ETW logs: provider `Balancify` with event IDs 100-600 (100 start, 101 stop, 200 up, 201 down, 300 bond reverted, 400 rekey, 401 ECN CE, 402 delay, 500 failover, 600 auth failed). Confirm live trace capture and decode the raw UTF-16 message payload; no provider manifest is installed yet. WPA CPU sampling, working set bounded, power delta.
+- SBOM sidecars at `C:\ProgramData\Balancify\sbom.spdx.json` and `C:\ProgramData\Balancify\sbom.spdx3.json`: SPDX 2.3 and 3.0.1 inventories from locked Cargo metadata; VEX and vulnerability claims are intentionally absent; verify both installer copies match their validated CI artifacts byte-for-byte.
 - Throughput: real Rig B iperf3/UDP echo results with 10 reps, median/p95/spread, ETW CPU/Gbit and remote-ACK failover convergence; local harness output is not acceptance evidence
 - Soak: 72h + random flaps + 100 resume with Verifier, no crash, no leaked route/filter/handle/IOCTL buffer, compat matrix VPN/Hyper-V/WSL2/MI
 
@@ -72,13 +72,13 @@ Add-VMDvdDrive -VMName Balancify-Clean -Path Balancify-0.1.0-offline.iso
 Start-VM Balancify-Clean
 Invoke-Command -VMName Balancify-Clean -ScriptBlock { C:\Balancify-0.1.0-offline.exe /quiet }
 # Then run throughput.rs + soak.rs + netem-rig.sh + analyze.py
-# And collect support bundle + ETW + SBOM sidecar
+# And collect support bundle + ETW + both SBOM sidecars
 ```
 
 ## References
 
 - Blueprint Sec.4.8 rev 2.1, Sec.8.3 installer, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B 10 reps, Sec.10.3 acceptance rows, S13 SBOM/VEX, S15 HVCI trio, Sec.4.5 failover, G5 soak+Verifier+compat
-- Installer: `installer/src/main.rs` — journaled 8 steps (preflight, driver, service, adapter, runtimes, gui, sbom, self-test) with reverse rollback, dry-run, tests, SBOM sidecar
+- Installer: `installer/src/main.rs` — journaled 9 steps (preflight, driver, service, adapter, runtimes, gui, SPDX 2.3 sidecar, SPDX 3.0.1 sidecar, self-test) with reverse rollback, dry-run, tests
 - Driver: `driver/balancify.vcxproj` HVCI flags, `driver/balancify.inf` Universal, `driver/src/miniport.c` NBL pool, `driver/src/ioctl.c` INJECT_NBL via NdisMIndicateReceiveNetBufferLists
 - Throughput: `crates/service/src/bin/throughput.rs` 10 profiles, `crates/service/src/bin/soak.rs` G5, `crates/crypto/src/bin/bench.rs` CPU/Gbit, `tools/lab/netem-rig.sh` 11 profiles, `tools/lab/analyze.py`
 - App: `app/src/main.rs` 11 modes (home/rules/diagnostics/tray/relay/bundle/perflow/rigb/hvci/sbom/failover/soak)

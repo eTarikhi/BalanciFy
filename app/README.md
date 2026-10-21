@@ -9,14 +9,13 @@ port with `BALANCIFY_IPC_PORT`. This listener refuses non-loopback addresses
 and caps concurrent local IPC clients at 16.
 It is a development adapter, not a substitute for the production ACL-protected
 Windows named pipe and caller-identity authentication. The lab adapter supports
-v1 event push at the requested capped 1–10 Hz rate; the Home view still exits
-gracefully if its event stream becomes idle or disconnects.
+v1 event push at the requested capped 1–10 Hz rate. The CLI Home view keeps an in-memory last-known-good snapshot, applies Stats/uplink events, and marks cached status stale after a read timeout or partial policy/bond event; it exits gracefully after displaying the stale view. This is not yet a persisted cache or production GUI.
 
 Rules carried from the blueprint (§8):
 - The shell **never** opens sockets or touches the driver; it renders only
   messages pushed by the service over the ACL'd named pipe.
 - Runs unprivileged; elevation happens once, in the installer (§8.3).
-- Last-known-good + stale markers; 1 Hz telemetry subscription; virtualized lists.
+- Session-scoped last-known-good snapshot + stale markers; 1 Hz telemetry subscription; virtualized lists remain production GUI work.
 - Shipped self-contained or with bundled runtimes inside our installer (§4.8 rev 2.1).
 
 Views to implement (Phase 4): Home, Rules, Relay & account, Diagnostics, tray flyout.

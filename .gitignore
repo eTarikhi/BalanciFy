@@ -2,5 +2,6 @@
 target/
 __pycache__/
 sbom.spdx.json
+sbom.spdx3.json
 sbom.vex.json
 *.sbom.tmp

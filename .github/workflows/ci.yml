@@ -14,7 +14,7 @@ jobs:
     name: Dependency + crypto policy audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       # ADR-0002 / blueprint §11.5 criteria C2 and C4: no third-party runtime
       # dependency, and the null cipher cannot reach a shipped build.
       - name: audit
@@ -24,11 +24,11 @@ jobs:
     name: Lab analysis tool tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: test analyzer
         run: python3 -m unittest discover -s tools/lab -p 'test_*.py' -v
       - name: test SBOM generation logic
-        run: python3 -m unittest discover -s tools/ci -p 'test_sbom.py' -v
+        run: python3 -m unittest discover -s tools/ci -p 'test_sbom*.py' -v
       - name: test netem rig safety
         run: sh -n tools/lab/netem-rig.sh && sh tools/lab/test_netem_rig.sh
       - name: test raw IP packet validator
@@ -38,7 +38,7 @@ jobs:
     name: Rust workspace tests (ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test
         env:
@@ -96,12 +96,28 @@ jobs:
             exit 1
           fi
           cat "$LOG"
+      - name: generate and validate SPDX 3.0.1 inventory
+        shell: bash
+        run: |
+          set -eu
+          python3 -m pip install --disable-pip-version-check --no-input spdx3-validate==0.0.7
+          python3 tools/ci/sbom_v3.py 0.1.0
+          python3 -m spdx3_validate --json sbom.spdx3.json --spdx-version 3.0.1 --quiet
+      - name: publish validated SBOM sidecars
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-sbom-0.1.0
+          path: |
+            sbom.spdx.json
+            sbom.spdx3.json
+          if-no-files-found: error
+          retention-days: 90
 
   core-tests-windows:
     name: Rust workspace tests (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test
         shell: bash

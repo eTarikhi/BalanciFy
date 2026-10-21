@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-21
-Status: continuous on `arena/d70f9d7d-balancify`; PR #9 completed the initial NDIS attribute/OID source work. PR #10 aligns the miniport/INF on NdisMediumIP and tightens raw IPv4/IPv6 injection validation. CI 39535018573 passed on Linux and Windows, including the new portable C validator; WDK/Windows driver validation remains pending.
+Status: continuous on `arena/26abd85f-balancify`; PR #9's NDIS registration/OID work and PR #10's NdisMediumIP/raw-packet alignment are merged. This unit reads the bounded INF MTU setting and adds current-lookahead handling plus packet-count OID responses. WDK/Windows driver validation remains pending; CI 39535250862 was green before this unit.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -18,8 +18,8 @@ User instruction: "continue the development process without stopping to report" 
 - Control-frame authentication/replay hardening and relay/session idle protections; wire v2 selective FlowAck for peer-receipt capacity sampling, with bounded per-session accounting and duplicate re-ACK (CI 39476560004).
 - Client transport hardening (per-user absolute state roots, relay-source filtering, fatal UDP send errors, and single-use handshake responses) merged in PR #6; prior PR #5 was closed as superseded.
 - FlowData selective repair merged in PR #7 / ADR-0036: retain bounded plaintext until authenticated FlowAck, reinject once after RTO on an alternate path, and rely on replay rejection plus duplicate re-ACK to preserve at-most-once delivery. Tunnel and service timer regressions, including uplink removal before retry, pass.
-- PR #9 merged the NDIS registration/general-attributes and OID source work. The follow-up ADR-0037 changes the miniport/INF to NdisMediumIP, removes Ethernet-only MAC OIDs, validates exact IPv4/IPv6 lengths and current MTU for injection, and rejects requests while paused. This remains unbuilt pending WDK.
-- ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d); they are complete, not remaining roadmap work.
+- PR #9 merged the NDIS registration/general-attributes and OID source work. The follow-up ADR-0037 changes the miniport/INF to NdisMediumIP, removes Ethernet-only MAC OIDs, validates exact IPv4/IPv6 lengths and current MTU for injection, rejects requests while paused, and defers NDIS pause completion until active receive-indication calls, outstanding receive NBLs, and send callback chains have drained. The pause state helper has portable tests; the driver remains unbuilt pending WDK.
+- ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
 CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success per-path diag, 39234403709 success, 39234666177 success, 39234937199 success, 39235214291 success, 39235545738 success driver, 39235817239 success, 39236091314 success app, 39236360963 success, 39236639218 success ECN bench, 39236895693 success, 39237159469 success, 39237431952 success test coverage
 
@@ -30,13 +30,13 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 3. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on wired 1 Gbps and Wi-Fi 6 300 Mbit/s, secure mode, pacing at 80% capacity, per-flow off/on; measure aggregate/single-flow/failover/added delay (target <=3ms) and CPU/Gbit/s. Local service-path benchmarks are not network evidence.
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
 5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
-6. **SBOM/VEX S13**: the previous handwritten placeholder is removed; CI now generates an SPDX 2.3 inventory from the exact Cargo metadata graph. Still required: standards-valid SPDX 3.0 serialization, reviewed VEX statements from current advisory data, and installer sidecar verification.
+6. **SBOM/VEX S13**: CI generates SPDX 2.3 and SPDX 3.0.1 JSON-LD inventories from the locked production graph, validates SPDX 3.0.1 with official JSON Schema + SHACL, and publishes both as run artifacts. Still required: reviewed VEX statements from current advisory data and clean-machine installer sidecar verification.
 7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; move from the protocol/lab CLI and loopback adapter to the WinUI 3 shell and production IPC transport/authentication.
 
 ## Process
 
-- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; seven SBOM tests and SPDX parser also run)
-- Use `gh run list --limit 1 --branch arena/d70f9d7d-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; twelve SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
+- Use `gh run list --limit 1 --branch arena/26abd85f-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
 - Workspace dependency policy: `[workspace.dependencies]` intentionally empty per blueprint Sec.4.8 — do not add unpinned dependencies casually

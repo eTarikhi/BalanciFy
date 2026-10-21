@@ -7,8 +7,10 @@ Status: accepted
 > listed below emitted handwritten SPDX-3-shaped JSON and placeholder CVE IDs;
 > those were not valid SPDX/VEX claims. Current `tools/ci/sbom.py` generates an
 > SPDX 2.3 inventory from `cargo metadata --locked` and emits no VEX assertions.
-> SPDX 3.0 and reviewed VEX remain pending; the previous stub must not be treated
-> as satisfying S13.
+> The previous stub must not be treated as satisfying S13. A 2026-10-21 follow-up
+> adds a parallel SPDX 3.0.1 JSON-LD inventory with an official JSON Schema + SHACL
+> CI validator and installs it alongside SPDX 2.3. Reviewed VEX and clean-machine
+> installer validation remain pending.
 
 Commits: 9115e4f vcxproj, a527d6d INF, 6c9a52f sbom.sh v2, 8ab9501 installer SBOM sidecar, 78cd32b lab-progress, 36d65eb throughput-rows
 
