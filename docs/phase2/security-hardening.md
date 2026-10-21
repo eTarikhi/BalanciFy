@@ -1,7 +1,7 @@
 # Security hardening — what is done, what remains
 
-Date: 2026-10-20
-Status: continuous; latest CI green on Ubuntu and Windows
+Date: 2026-10-21
+Status: active branch `arena/73af0098-balancify`; FlowData repair and follow-up test CI green on Ubuntu and Windows (39531428626).
 
 ## Done
 
@@ -10,6 +10,7 @@ Status: continuous; latest CI green on Ubuntu and Windows
 - **No third-party kernel component in data path** (C2): only NDIS + WDF, no Wintun unless exception file exists (ADR-0009)
 - **AEAD with AAD binding**: ChaCha20-Poly1305, header bound as AAD, nonce separated by frame kind/path/sequence/salt/key, FlowData and keepalive counters avoid nonce reuse, 16-byte tag only overhead, every bit position refused, wrong-length key refused, 20-payload stream end-to-end (10 tests in `crates/crypto/src/lib.rs`)
 - **Tunnel control authentication and replay resistance**: ACK/probe/probe-reply/keepalive require session-bound AEAD authentication; each control kind has a bounded replay window, stale cumulative ACKs are rejected, and the service applies ECN/liveness effects only after verification. Session allocation is deferred until authentication, and unauthenticated or replayed frames cannot refresh receiver or relay idle timers. Forged-control, session-allocation, and relay-idle regression tests cover these invariants.
+- **Bounded FlowData repair** (ADR-0036): retain eligible plaintext up to the configured byte/entry caps until authenticated FlowAck; retry once by default on an alternate path after RTO using the same session/sequence and the reinjected flag. Receiver replay rejection prevents duplicate payload delivery while generating another FlowAck, so lost acknowledgments are repaired too.
 - **Noise_IK handshake** (Sec.9.2): both sides derive same two keys, pinned relay identity authenticates, every byte of flight 1 authenticated, prologue binds context, initiator static travels encrypted, fresh ephemeral gives fresh session, flights out of order refused, truncations refused, negotiated keys drive tunnel lane, pinning enforced both sides, replay cache rejects second flight (12 tests)
 - **Key management**: static keypair derives public, ephemeral zeroized on drop, pinned keys pin/unpin, OS RNG distinct, memory store generates/remembers, file store roundtrips and rejects corrupt. File writes use unique `create_new` sibling temporaries, 0600 mode at creation on Unix, sync-before-rename, and a symlink-regression test; Windows builds enable DPAPI by default and test migration of legacy raw keys. Plaintext buffers and temporary key copies are zeroized after use.
 - **Replay protection** (Sec.11.4): new ephemeral not replay, same within window is replay, expired not replay, capacity evicts oldest, different ephemerals not replay (5 tests)
@@ -30,13 +31,13 @@ Status: continuous; latest CI green on Ubuntu and Windows
 - **Cargo.lock**: committed and checked by `tools/ci/audit-deps.sh`; regenerate only when the pinned dependency set intentionally changes.
 - **Real netem S2c**: replace simulated rig with `tools/lab/netem-rig.sh` profiles, record 10 reps median/p95/spread per Sec.10.1 — harness exists, real Rig B pending
 - **Throughput rows on Rig B**: re-run Sec.10.3 aggregate/single-flow/failover with pacing enabled and secure mode, measure added delay and CPU/Gbit/s via crypto-bench + ETW — the local synthetic benchmark is not network evidence; real Rig B results pending
-- **Client binary + GUI IPC**: `balancify-client` defaults to an authenticated, pinned Noise_IK identity and fails closed on missing/invalid pins or handshake failure; insecure lab mode is debug-only and loopback-only. It stores identity under absolute per-user state paths, filters post-handshake UDP packets to the configured relay endpoint, rejects duplicate handshake responses, and propagates send failures (ADR-0035). Production packet-adapter integration, WinUI 3 shell, and production IPC transport/authentication remain pending.
-- **Per-flow session demux retx keyed by (session, seq)**: currently global unique seq for retx simplicity, future per-session seq spaces for true per-session sequencing
-- **Flow-level ACK**: wire v2 uses a distinct AEAD nonce-domain `FlowAck` frame for selective FlowData receipt; service validates session/authentication/replay before crediting payload bytes to the sending uplink. Pending records are byte- and entry-bounded, removed on receipt/path loss/resume/rate-limit hold, and duplicate FlowData prompts another ACK without duplicate delivery.
+- **Client binary + GUI IPC**: `balancify-client` defaults to an authenticated, pinned Noise_IK identity and fails closed on missing/invalid pins or handshake failure; insecure lab mode is debug-only and loopback-only. It stores identity under absolute per-user state paths, filters post-handshake UDP packets to the configured relay endpoint, rejects duplicate handshake responses, and propagates send failures (ADR-0035; merged in PR #6). Production packet-adapter integration, WinUI 3 shell, and production IPC transport/authentication remain pending.
+- **Per-session sequence spaces**: striped Data retransmission and independent FlowData use sequences keyed by session, so sessions do not interfere and FlowData does not create gaps in ordered Data (ADR-0011 / ADR-0029).
+- **Flow-level ACK and repair**: wire v2 uses a distinct AEAD nonce-domain `FlowAck` for selective FlowData receipt; service validates session/authentication/replay before crediting bytes to the path that delivered them. Pending payload is byte- and entry-bounded, removed on receipt, explicit path re-key, resume, or rate-limit hold. A lost FlowAck causes one alternate-path FlowData retry; receiver replay protection prevents duplicate delivery and sends another ACK.
 - **Driver WDF control device + IOCTLs**: source contains SET_MTU, GET_STATS, INJECT_NBL, SET_QUANTA and length validation, but `MiniportInitializeEx` still registers NULL NDIS adapter attributes. No WDK build, install, Driver Verifier, HVCI, or S2b miniport-path test has been performed; the driver is not operational.
 
 ## References
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio, C2/C4
-- ADRs 0003-0026
-- CI: 39476560004 success on Ubuntu and Windows, lab safety tests, release build, and dependency/crypto audit
+- ADRs 0003-0036
+- CI: 39531428626 success on Ubuntu and Windows, including 261/260 Rust tests, lab safety checks, release build, SPDX validation, and dependency/crypto audit
