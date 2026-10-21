@@ -1,7 +1,7 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-21
-Status: continuous; active branch `arena/7b97c6a4-balancify`; latest CI green on Ubuntu and Windows (run `39607841932`)
+Status: continuous; active branch `arena/7b97c6a4-balancify`; latest CI green on Ubuntu and Windows (run `39609002773`)
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
@@ -9,8 +9,8 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## Continuation (2026-10-20–2026-10-21)
 
-- Commit `3ee541b` makes installer SPDX sidecar replacement rollback-safe: same-directory staged copies, exclusive backup-directory reservation, restoration of pre-existing files on step rollback, and backup cleanup after successful installation. Dry-run rollback is now non-destructive. Added replacement/rollback, successful cleanup, missing-source preservation, and dry-run regression tests; documented that this is not power-loss recovery or production installer integration. PR #13 CI run `39607841932` passed all four jobs (Ubuntu + Windows Rust workspace tests/release build, lab tools/safety, dependency/crypto audit).
-
+- Commit `3ee541b` makes installer SPDX sidecar replacement rollback-safe: same-directory staged copies, exclusive backup-directory reservation, restoration of pre-existing files on step rollback, and backup cleanup after successful install. Dry-run rollback is non-destructive. Tests cover replacement/rollback, successful cleanup, missing-source preservation, and dry-run safety. PR #13 CI run `39607841932` passed all four jobs.
+- Commit `6b460c7` applies fail-closed transport policy to the service lab adapter (ADR-0038): persistent identity and pin-store errors are fatal, relay keys are strictly parsed and pin-checked, default transport requires a relay identity, zero-key lab mode is explicit debug-only and loopback-only, inbound datagrams are source-filtered, and UDP send errors propagate. Service identity state roots must be absolute and account-appropriate. Six regression tests were added; PR #13 CI run `39609002773` passed all four Ubuntu/Windows and audit/lab jobs. The binary still uses loopback TCP IPC and simulated uplinks and is not a production Windows service.
 - PR #9 merged the NDIS registration/general-attribute and OID source work. Commit `f57319c` / PR #10 switches the miniport/INF to `NdisMediumIP`, removes Ethernet-only MAC OIDs, validates exact IPv4/IPv6 packet lengths against MTU, rejects paused injections, and adds a portable C boundary-test target to CI. CI `39535018573` passed on Ubuntu and Windows; WDK build and driver runtime validation remain pending.
 - Current follow-up reads the bounded INF Mtu value at initialization with a 1440-byte fallback; adds `OID_GEN_CURRENT_LOOKAHEAD` query/set with MTU bounds, `OID_GEN_XMIT_OK`/`OID_GEN_RCV_OK` backed by packet counts (counting each NET_BUFFER, not each NBL), and clamps lookahead when SET_MTU reduces the MTU. Portable tests cover MTU normalization, while a source-contract unit test checks that advertised OIDs have query handlers and that INF/miniport raw-IP media settings agree.
 - Commit `55ecafa` adds receive lifecycle hardening with a lock-protected, portable-tested pause state machine: receive NBLs and active indication calls are tracked, send callback chains are drained, pause returns `NDIS_STATUS_PENDING` until these operations are quiescent, and `NdisMPauseComplete` is signaled only after the final return/completion. PR #11 CI run `39537906530` passed all four jobs. This is source-level only; WDK/Verifier/runtime validation remains pending.

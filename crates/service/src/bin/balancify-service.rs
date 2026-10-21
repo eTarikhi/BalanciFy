@@ -48,6 +48,22 @@ fn select_connection_mode(
     Ok(ConnectionMode::InsecureLab)
 }
 
+fn parse_relay_addresses(
+    primary: Option<&str>,
+    secondary: Option<&str>,
+) -> std::io::Result<(SocketAddr, Option<SocketAddr>)> {
+    let primary = primary
+        .map(|value| value.parse::<SocketAddr>())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid primary relay address"))?
+        .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
+    let secondary = secondary
+        .map(|value| value.parse::<SocketAddr>())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid secondary relay address"))?;
+    Ok((primary, secondary))
+}
+
 fn parse_relay_public_key(encoded: &str) -> std::io::Result<[u8; 32]> {
     let bytes = hex_decode(encoded).filter(|bytes| bytes.len() == 32).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "relay public key must be exactly 32 bytes of hex")
@@ -173,15 +189,10 @@ fn main() -> std::io::Result<()> {
     if positional.len() > 2 {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "expected at most primary and secondary relay addresses"));
     }
-    let relay_primary: SocketAddr = positional.first()
-        .map(|value| value.parse())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid primary relay address"))?
-        .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
-    let relay_secondary: Option<SocketAddr> = positional.get(1)
-        .map(|value| value.parse())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid secondary relay address"))?;
+    let (relay_primary, relay_secondary) = parse_relay_addresses(
+        positional.first().map(String::as_str),
+        positional.get(1).map(String::as_str),
+    )?;
 
     let state_dir = default_state_dir()?;
     let secret_path = state_dir.join("client_secret.key");
@@ -534,6 +545,23 @@ mod ipc_capacity_tests {
         assert!(validate_lab_target(ConnectionMode::InsecureLab, loopback, Some(public)).is_err());
         assert!(validate_lab_target(ConnectionMode::InsecureLab, public, None).is_err());
         validate_lab_target(ConnectionMode::Secure, public, None).unwrap();
+    }
+
+    #[test]
+    fn relay_addresses_reject_malformed_configuration() {
+        let (primary, secondary) = parse_relay_addresses(None, None).unwrap();
+        assert_eq!(primary, "127.0.0.1:4430".parse().unwrap());
+        assert_eq!(secondary, None);
+        assert_eq!(
+            parse_relay_addresses(Some("not-an-address"), None).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            parse_relay_addresses(Some("127.0.0.1:4430"), Some("bad"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
