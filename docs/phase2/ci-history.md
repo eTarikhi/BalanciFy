@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Active continuation: `arena/1e00c990-balancify`, commit `1218870`. PR #13 is merged as `6856b498d00f6863007fd8a7def9805ed6a954bc`; PR #14 is being prepared for deterministic Linux CI runner selection. CI run `39668980327` passed all four checks after pinning Linux jobs to Ubuntu 24.04. The merged installer transaction/journal hardening, fail-closed lab service transport, Home stale-state behavior, and loopback-only IPC client policy are now in `main`. Production named-pipe authentication, live ETW trace validation, persisted UI state, production UI, reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, and hardware performance remain unverified. See `continuous-development-log.md` for the verified continuation.
+Active continuation: `arena/1e00c990-balancify`, commit `6b33e5e`; PR #13 is merged as `6856b498d00f6863007fd8a7def9805ed6a954bc`, and PR #14 is open. CI run `39669985734` passed all four checks after pinning Linux jobs to Ubuntu 24.04 and covering installer CLI parsing/journal path isolation. The merged installer transaction/journal hardening, fail-closed lab service transport, Home stale-state behavior, and loopback-only IPC client policy are now in `main`. Production named-pipe authentication, live ETW trace validation, persisted UI state, production UI, reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, and hardware performance remain unverified. See `continuous-development-log.md` for the verified continuation.
 
 ## Progression
 

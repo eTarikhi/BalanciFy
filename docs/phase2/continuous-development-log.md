@@ -1,7 +1,7 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-21
-Status: continuous; active branch `arena/1e00c990-balancify`; latest CI green on Ubuntu 24.04 and Windows (run `39668980327` at `1218870`)
+Status: continuous; active branch `arena/1e00c990-balancify`; latest CI green on Ubuntu 24.04 and Windows (PR #14 run `39669985734` at `6b33e5e`)
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
@@ -9,6 +9,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## Continuation (2026-10-20–2026-10-21)
 
+- Commit `6b33e5e` fixes installer CLI parsing so `--dry-run` is not mistaken for the journal filename, adds explicit `--journal PATH`/help/ambiguous-argument handling, and gives each invocation a unique temp journal name. Added parser and uniqueness tests; CI `39669978102` and PR #14 checks `39669985734` passed all four jobs.
 - Commit `1218870` pins Linux CI and Pages jobs to `ubuntu-24.04` rather than the moving `ubuntu-latest` alias, eliminating runner-image migration drift; Ubuntu and Windows CI run `39668980327` passed all four test/audit jobs.
 - Commit `3ee541b` makes installer SPDX sidecar replacement rollback-safe: same-directory staged copies, exclusive backup-directory reservation, restoration of pre-existing files on step rollback, and backup cleanup after successful install. Dry-run rollback is non-destructive. Tests cover replacement/rollback, successful cleanup, missing-source preservation, and dry-run safety. PR #13 CI run `39607841932` passed all four jobs.
 - Commits `6b460c7` and `6c283d5` apply fail-closed transport policy to the service lab adapter (ADR-0038): persistent identity and pin-store errors are fatal, relay keys are strictly parsed and pin-checked, default transport requires a relay identity, zero-key lab mode is explicit debug-only and loopback-only, inbound datagrams are source-filtered, and UDP send errors propagate. Service identity state roots must be absolute and account-appropriate. Six regression tests were added; PR #13 CI run `39609517259` passed all four Ubuntu/Windows and audit/lab jobs. The binary still uses loopback TCP IPC and simulated uplinks and is not a production Windows service.
