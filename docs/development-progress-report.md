@@ -29,7 +29,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 | **G4** | Acceptance table on Rig B with signed driver + clean-machine offline provisioning | **PENDING** | The software-path harness is not network evidence; no §10.3 throughput, added-delay, or failover row is accepted until measured on Rig B with the driver and real relay. | Pending hardware validation |
 | **G5** | Soak + Driver Verifier clean | PENDING | 72h soak, random flaps, 100 resume cycles, Verifier standard+random | — |
 | **G6** | Review + compat matrix | PENDING | VPN clients, AV, Hyper-V, WSL2, MI on/off | — |
-| **G7** | Checklist + rollback + final attestation + SBOM/VEX | PENDING | SPDX 2.3 locked-graph inventory generator added; standards-valid SPDX 3.0, reviewed VEX, and installer/rollback validation remain pending | `5fc3af0` (historical baseline) |
+| **G7** | Checklist + rollback + final attestation + SBOM/VEX | PENDING | SPDX 2.3 and standards-valid SPDX 3.0.1 locked-graph inventories generate and validate in CI; reviewed VEX and clean-machine installer/rollback validation remain pending | `5fc3af0` (historical baseline) |
 | **G8** | Field stable | PENDING | GA + winget + status page | — |
 
 ### 1.2 Detailed Technical Work Breakdown (Completed)
@@ -143,7 +143,7 @@ Balancify is a Windows-native multi-WAN aggregation product (Wi-Fi, Ethernet, ce
 |------|------------|-------------|------|
 | **HVCI trio S15 real** | S2b-real, WDK build job in CI | Verifier clean, HLK HVCIMemoryIntegrity pass, VBS/MI VM run with msinfo32, driver load, traffic, ETW 200/201/300/400/401/402/500/600 visible | G3 |
 | **SBOM/VEX S13** | Cargo.lock, reviewed advisory data | This follow-up adds a parallel SPDX 3.0.1 JSON-LD locked-graph inventory, official JSON Schema + SHACL CI validation, and installer copies of SPDX 2.3 + 3.0.1 sidecars. Reviewed VEX, support-bundle inclusion, and clean-machine install validation remain pending | G4, G7 |
-| **Driver packaging** | S2b-real, HVCI trio | INF + PnP install, HVCI-compatible, `/integritycheck`, `/Qspectre`, self-contained .NET 10 + WinAppSDK runtimes bundled, transactional installer journaled 7 steps with atomic rollback, clean-machine offline test per clean-machine-test.md (offline VMs, HVCI on/off, x64+ARM64, no residue) | G4, G5 |
+| **Driver packaging** | S2b-real, HVCI trio | INF + PnP install, HVCI-compatible, `/integritycheck`, `/Qspectre`, self-contained .NET 10 + WinAppSDK runtimes bundled, transactional installer journaled 9 steps including both SPDX sidecars, with atomic rollback, clean-machine offline test per clean-machine-test.md (offline VMs, HVCI on/off, x64+ARM64, no residue) | G4, G5 |
 | **Client binary + GUI IPC** | IPC v1 done, Service handshake done lab mode | `balancify-client` CLI with FileKeyStore DPAPI, Noise_IK 0xFF framing, bonded tunnel, dual relay via env, then WinUI 3 shell Home/Rules/Relay & account/Diagnostics/Tray flyout, 1Hz telemetry, last-known-good + stale markers, accessibility, self-contained .NET 10 | G4 |
 | **Per-flow session tuning** | ADR-0029 done (session,seq) | Measure per-flow on vs off: aggregate, single-flow, failover, 10 reps median/p95/spread, isolation, head-of-line blocking, session cap 64 | G4 |
 

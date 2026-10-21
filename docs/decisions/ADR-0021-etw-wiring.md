@@ -30,5 +30,5 @@ Previously, service had eprintln for failover only, no ETW.
 
 - Blueprint Sec.8.2 Diagnostics, Sec.6.4 CC ECN+delay, Sec.11.3 rekey, Sec.4.5 failover, Sec.9.1b auth_failed
 - Code: `crates/service/src/lib.rs` `etw` field, `ingest_path`, `tick`, `crates/service/src/etw.rs`
-- CI: 39233826038 success after fixing arg order `on_ack_with_rtt(path, bytes, None, now)` vs previous `now, None`
+- CI: 39233826038 success after fixing arg order `on_ack_with_rtt(path, bytes, None, now)` vs previous `now, None`; Windows ETW sink and follow-up tests pass in CI `39601436958` (live trace capture/decoding remains pending).
 - ADR-0012 ETW and support bundle, ADR-0019 enhanced, ADR-0021 wiring
