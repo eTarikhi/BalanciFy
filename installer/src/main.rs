@@ -180,15 +180,33 @@ pub struct Installer {
 
 static SIDECAR_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn default_journal_path() -> PathBuf {
-    let sequence = SIDECAR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "balancify_install-{}-{timestamp}-{sequence}.json",
-        std::process::id()
+fn default_journal_path() -> io::Result<PathBuf> {
+    for _ in 0..16 {
+        let sequence = SIDECAR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "balancify_install-{}-{timestamp}-{sequence}.json",
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&path) {
+            Ok(file) => {
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve a unique installer journal path",
     ))
 }
 
@@ -543,9 +561,14 @@ fn parse_installer_args(args: &[String]) -> Result<Option<InstallerCliOptions>, 
     if journal_path.is_some() && positional_path.is_some() {
         return Err("use either --journal PATH or a positional journal path, not both".to_string());
     }
+    let journal_path = match journal_path.or(positional_path) {
+        Some(path) => path,
+        None => default_journal_path()
+            .map_err(|error| format!("could not reserve default journal path: {error}"))?,
+    };
     Ok(Some(InstallerCliOptions {
         dry_run,
-        journal_path: journal_path.or(positional_path).unwrap_or_else(default_journal_path),
+        journal_path,
     }))
 }
 
@@ -596,9 +619,14 @@ mod tests {
             .to_string_lossy()
             .starts_with("balancify_install-"));
 
-        let first_default = default_journal_path();
-        let second_default = default_journal_path();
+        let first_default = default_journal_path().unwrap();
+        let second_default = default_journal_path().unwrap();
         assert_ne!(first_default, second_default);
+        assert!(first_default.exists());
+        assert!(second_default.exists());
+        std::fs::remove_file(options.journal_path).unwrap();
+        std::fs::remove_file(first_default).unwrap();
+        std::fs::remove_file(second_default).unwrap();
     }
 
     #[test]

@@ -29,8 +29,9 @@ recovery and a production installer integration test remain separate work.
 
 The current lab binary accepts `--dry-run` and an optional journal path, either
 as a positional argument or with `--journal PATH`. Without an explicit path it
-creates a per-process, per-invocation journal name in the system temporary
-directory; on Unix the journal is created and maintained with mode `0600`.
+reserves a per-process, per-invocation journal file in the system temporary
+directory using exclusive creation; on Unix it is created and maintained with
+mode `0600`.
 Flags are not interpreted as paths, duplicate paths are rejected, and `--help`
 prints usage.
 
