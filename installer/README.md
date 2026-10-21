@@ -27,6 +27,12 @@ discards their backups.
 The sidecar transaction protects against ordinary step failures; power-loss
 recovery and a production installer integration test remain separate work.
 
+The current lab binary accepts `--dry-run` and an optional journal path, either
+as a positional argument or with `--journal PATH`. Without an explicit path it
+creates a per-process, per-invocation journal name in the system temporary
+directory. Flags are not interpreted as paths, duplicate paths are rejected,
+and `--help` prints usage.
+
 ## Tooling
 
 - WiX v5 (MSI) wrapped by a bootstrapper (exe) carrying the payloads; or

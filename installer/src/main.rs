@@ -8,7 +8,7 @@ use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub enum InstallStep {
@@ -163,6 +163,18 @@ pub struct Installer {
 }
 
 static SIDECAR_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn default_journal_path() -> PathBuf {
+    let sequence = SIDECAR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "balancify_install-{}-{timestamp}-{sequence}.json",
+        std::process::id()
+    ))
+}
 
 fn unique_sidecar_sibling(path: &Path, suffix: &str) -> PathBuf {
     let parent = path
@@ -471,15 +483,75 @@ impl Installer {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct InstallerCliOptions {
+    dry_run: bool,
+    journal_path: PathBuf,
+}
+
+fn parse_installer_args(args: &[String]) -> Result<Option<InstallerCliOptions>, String> {
+    let mut dry_run = false;
+    let mut journal_path = None;
+    let mut positional_path = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dry-run" => dry_run = true,
+            "--journal" => {
+                index += 1;
+                let path = args
+                    .get(index)
+                    .ok_or_else(|| "--journal requires a path".to_string())?;
+                if path.is_empty() || path.starts_with('-') {
+                    return Err("--journal requires a path argument, not another option".to_string());
+                }
+                if journal_path.replace(PathBuf::from(path)).is_some() {
+                    return Err("--journal may only be specified once".to_string());
+                }
+            }
+            "--help" | "-h" => return Ok(None),
+            option if option.starts_with('-') => {
+                return Err(format!("unknown installer option: {option}"));
+            }
+            "" => return Err("journal path must not be empty".to_string()),
+            path => {
+                if positional_path.replace(PathBuf::from(path)).is_some() {
+                    return Err("provide at most one positional journal path".to_string());
+                }
+            }
+        }
+        index += 1;
+    }
+
+    if journal_path.is_some() && positional_path.is_some() {
+        return Err("use either --journal PATH or a positional journal path, not both".to_string());
+    }
+    Ok(Some(InstallerCliOptions {
+        dry_run,
+        journal_path: journal_path.or(positional_path).unwrap_or_else(default_journal_path),
+    }))
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let dry_run = args.iter().any(|a| a == "--dry-run");
-    let journal_path = args
-        .get(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("balancify_install.json"));
-    println!("Balancify installer -- dry_run={} journal={}", dry_run, journal_path.display());
-    let mut installer = Installer::new(journal_path, dry_run);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let options = match parse_installer_args(&args) {
+        Ok(Some(options)) => options,
+        Ok(None) => {
+            println!("Usage: balancify-installer [--dry-run] [--journal PATH | JOURNAL_PATH]");
+            return;
+        }
+        Err(error) => {
+            eprintln!("{error}\nUsage: balancify-installer [--dry-run] [--journal PATH | JOURNAL_PATH]");
+            std::process::exit(2);
+        }
+    };
+    println!(
+        "Balancify installer -- dry_run={} journal={}",
+        options.dry_run,
+        options.journal_path.display()
+    );
+    let mut installer = Installer::new(options.journal_path, options.dry_run);
     match installer.run() {
         Ok(()) => println!("Install succeeded"),
         Err(e) => {
@@ -492,6 +564,47 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installer_cli_dry_run_does_not_become_the_journal_path() {
+        let options = parse_installer_args(&["--dry-run".to_string()])
+            .unwrap()
+            .unwrap();
+        assert!(options.dry_run);
+        let temp_dir = std::env::temp_dir();
+        assert_eq!(options.journal_path.parent(), Some(temp_dir.as_path()));
+        assert!(options
+            .journal_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("balancify_install-"));
+
+        let first_default = default_journal_path();
+        let second_default = default_journal_path();
+        assert_ne!(first_default, second_default);
+    }
+
+    #[test]
+    fn installer_cli_accepts_explicit_journal_and_rejects_ambiguous_args() {
+        let options = parse_installer_args(&[
+            "--journal".to_string(),
+            "journal.json".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(options.dry_run);
+        assert_eq!(options.journal_path, PathBuf::from("journal.json"));
+        assert!(parse_installer_args(&["--journal".to_string()]).is_err());
+        assert!(parse_installer_args(&["--journal".to_string(), "--dry-run".to_string()]).is_err());
+        assert!(parse_installer_args(&[String::new()]).is_err());
+        assert!(parse_installer_args(&["first.json".to_string(), "second.json".to_string()]).is_err());
+        assert!(parse_installer_args(&["--journal".to_string(), "a.json".to_string(), "b.json".to_string()]).is_err());
+        assert!(parse_installer_args(&["--unexpected".to_string()]).is_err());
+        assert!(parse_installer_args(&["--help".to_string()]).unwrap().is_none());
+    }
+
     #[test]
     fn journal_rollback_order() {
         let mut j = InstallJournal::default();
