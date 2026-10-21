@@ -1584,6 +1584,10 @@ mod tests {
         }).expect("flow-level frame is sent");
         assert_eq!(original.kind, FrameKind::FlowData);
 
+        // Remove the original uplink as would happen on a real disconnect;
+        // publish the topology before the retry timer runs.
+        s.remove_uplink(UplinkId(original.path));
+        s.publish(now + Duration::from_millis(1));
         let retried = s.tick(now + Duration::from_millis(121));
         let repairs: Vec<_> = retried.iter().filter_map(|action| match action {
             Action::Send { bytes, .. } => Header::decode(bytes)

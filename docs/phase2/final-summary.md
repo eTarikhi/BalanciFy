@@ -7,7 +7,7 @@ Status: historical baseline at 36d65eb; active Arena continuation and current ga
 
 ## Active Arena continuation (2026-10-21)
 
-Branch `arena/096b15fe-balancify` now carries authenticated tunnel control/replay protections, admission-before-session-allocation, relay idle-timer protections, per-session retransmission acknowledgements, wire-v2 selective FlowAck, an SPDX 2.3 locked-graph SBOM generator, and a client CLI that now fails closed on missing or invalid relay identities and handshake errors. Latest CI run 39520659434 passed 259 Linux / 258 Windows Rust tests, release build, lab/policy checks, and standards-parser validation of the generated SPDX 2.3 document. The generator joins registry checksums from `Cargo.lock`, preserves declared license metadata, and emits no VEX/vulnerability claims; SPDX 3.0/VEX remain pending. WDK/NDIS build/runtime, HVCI, real netem/Rig B performance, production GUI/IPC, and hardware gates remain unverified; do not infer completion from the historical baseline below.
+Branch `arena/73af0098-balancify` now carries authenticated tunnel control/replay protections, admission-before-session-allocation, relay idle-timer protections, per-session retransmission acknowledgements, wire-v2 selective FlowAck, bounded alternate-path FlowData repair (ADR-0036), an SPDX 2.3 locked-graph SBOM generator, and a client CLI that fails closed on missing or invalid relay identities and handshake errors. Latest feature CI run 39530970838 passed 261 Linux / 260 Windows Rust tests, release build, lab/policy checks, and standards-parser validation of the generated SPDX 2.3 document. The generator joins registry checksums from `Cargo.lock`, preserves declared license metadata, and emits no VEX/vulnerability claims; SPDX 3.0/VEX remain pending. WDK/NDIS build/runtime, HVCI, real netem/Rig B performance, production GUI/IPC, and hardware gates remain unverified; do not infer completion from the historical baseline below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change to report. This is the third+ time user said it, so we continue even more. Latest: "Create a comprehensive development progress report that utilizes data visualizations" done (4feba2b green), then "Continue developing app" ongoing.
 
@@ -53,7 +53,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 ### Test coverage
 
-- Latest CI run 39520659434 passed 259 Rust tests on Ubuntu and 258 on Windows, plus seven Python SBOM tests and SPDX 2.3 parser validation. Earlier Windows/Ubuntu runner failures were corrected (E0503 borrow checker, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, ACK argument order, Service generic, PassThrough audit guard).
+- Latest feature CI run 39530970838 passed 261 Rust tests on Ubuntu and 260 on Windows, plus seven Python SBOM tests and SPDX 2.3 parser validation. Earlier Windows/Ubuntu runner failures were corrected (E0503 borrow checker, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, ACK argument order, Service generic, PassThrough audit guard).
 - Core: 85+ tests (bond, congestion 13, flowtable, health, keepalive, mtu, pacing 7, placement, policy, ratelimit 3, rules, scoring)
 - Crypto: 36 tests (AEAD 8, handshake 12, keys, store, replay 5, rekey 3)
 - IPC: 9 tests (contract v1, truncation, Counters 10 fields)
@@ -79,5 +79,5 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 ## References
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
-- ADRs 0002-0031
-- CI: 5fc3af0 success (latest)
+- ADRs 0002-0036
+- Historical baseline CI: 5fc3af0; active continuation CI: 39530970838

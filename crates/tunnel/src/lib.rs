@@ -10,7 +10,8 @@
 //! authenticated health probes (not raw ICMP, so they survive CGNAT), per-path
 //! NAT keepalives (<= 25 s), cumulative Data ACKs for reinjection, and
 //! authenticated selective FlowAck frames that drive flow-level capacity
-//! estimation (Sec.6.3).
+//! estimation (Sec.6.3) and bounded alternate-path repair for non-striped
+//! FlowData packets.
 //!
 //! Crypto: the [`Crypto`] trait isolates the AEAD. Phase 2/3 tests use
 //! [`PassThrough`], which is compiled **only** under `cfg(test)` or the
@@ -253,7 +254,8 @@ pub struct Sender<C: Crypto> {
     /// FlowData uses an independent sequence lane so these packets cannot leave
     /// gaps in the ordered Data stream.
     flow_seqs: BTreeMap<u64, u64>,
-    /// Bounded send-side byte accounting for authenticated selective FlowAck.
+    /// Bounded outstanding FlowData plaintext/retry state, retired by an
+    /// authenticated selective FlowAck.
     flow_pending: BTreeMap<(u64, u64), FlowAckEntry>,
     flow_pending_bytes: usize,
     /// Keepalives also need fresh nonces despite carrying no application data.
