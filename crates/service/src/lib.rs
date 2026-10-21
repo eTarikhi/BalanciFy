@@ -910,7 +910,7 @@ impl<C: Crypto + Clone> Service<C> {
                 self.relay_failover_count += 1;
                 self.relay_failover_start = Some(now);
                 self.relay_failover_convergence = None;
-                self.etw.info(500, &format!("relay failover: {} -> {} count={} timeout={}s", current, next_addr, self.relay_failover_count, self.relay_failover_timeout.as_secs()));
+                self.etw.info(500, &relay_failover_event_message(self.relay_failover_count, self.relay_failover_timeout));
                 return Some(next_addr);
             }
         }
@@ -1461,6 +1461,12 @@ fn uplink_info(u: &UplinkView, best_weight: f64) -> ipc::UplinkInfo {
 
 fn permille(v: f64) -> i16 {
     (v * 1000.0).round().clamp(i16::MIN as f64, i16::MAX as f64) as i16
+}
+
+fn relay_failover_event_message(count: u64, timeout: Duration) -> String {
+    // Do not emit configured relay IPs/ports to ETW; diagnostics expose only the
+    // transition and aggregate counters, matching support-bundle redaction.
+    format!("relay failover count={count} timeout={}s", timeout.as_secs())
 }
 
 #[cfg(test)]
@@ -2258,6 +2264,13 @@ mod tests {
         // Initiate with unpinned relay should fail
         let res = svc.initiate_handshake(relay_kp.public_bytes(), b"balancify handshake v1");
         assert!(res.is_err(), "unpinned relay must be rejected");
+    }
+
+    #[test]
+    fn relay_failover_etw_message_contains_no_endpoint() {
+        let message = relay_failover_event_message(1, Duration::from_secs(5));
+        assert_eq!(message, "relay failover count=1 timeout=5s");
+        assert!(!message.contains("10.0.0.1"));
     }
 
     #[test]
