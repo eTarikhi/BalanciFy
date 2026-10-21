@@ -29,12 +29,10 @@ MINIPORT_DEVICE_PNP_EVENT_NOTIFY MiniportDevicePnPEventNotify;
 static NDIS_HANDLE gDriverHandle = NULL;
 static NDIS_HANDLE gNdisDriverContext = NULL;
 
-// This scaffold configures one virtual adapter instance with a locally
-// administered unicast address. Production multi-instance addressing requires
-// a per-instance registry/persistent identity policy.
-static const UCHAR gPermanentMacAddress[ETH_LENGTH_OF_ADDRESS] = {
-    0x02, 0xBA, 0x1F, 0x00, 0x00, 0x01
-};
+static const ULONG gSupportedPacketFilters =
+    NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_ALL_MULTICAST |
+    NDIS_PACKET_TYPE_BROADCAST | NDIS_PACKET_TYPE_ALL_LOCAL |
+    NDIS_PACKET_TYPE_ALL_FUNCTIONAL;
 
 static const NDIS_OID gSupportedOids[] = {
     OID_GEN_SUPPORTED_LIST,
@@ -44,8 +42,6 @@ static const NDIS_OID gSupportedOids[] = {
     OID_GEN_MAXIMUM_TOTAL_SIZE,
     OID_GEN_CURRENT_PACKET_FILTER,
     OID_GEN_STATISTICS,
-    OID_802_3_PERMANENT_ADDRESS,
-    OID_802_3_CURRENT_ADDRESS,
 };
 
 static VOID MiniportFreeAdapter(PBALANCIFY_ADAPTER adapter) {
@@ -151,9 +147,9 @@ NDIS_STATUS MiniportInitializeEx(
     NdisZeroMemory(adapter, sizeof(BALANCIFY_ADAPTER));
     adapter->miniportAdapterHandle = miniportAdapterHandle;
     adapter->mtu = 1440; // Sec.6.1 default, updated from service via IOCTL
-    adapter->packetFilter = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
-    NdisMoveMemory(adapter->permanentAddress, gPermanentMacAddress, ETH_LENGTH_OF_ADDRESS);
-    NdisMoveMemory(adapter->currentAddress, gPermanentMacAddress, ETH_LENGTH_OF_ADDRESS);
+    // NDIS requires the receive filter to start disabled; protocols enable it
+    // through OID_GEN_CURRENT_PACKET_FILTER after adapter initialization.
+    adapter->packetFilter = 0;
     NdisAllocateSpinLock(&adapter->lock);
 
     // NDIS requires the registration attributes before general attributes.
@@ -215,8 +211,10 @@ NDIS_STATUS MiniportInitializeEx(
     general.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES;
     general.Header.Revision = NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2;
     general.Header.Size = NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2;
-    general.MediaType = NdisMedium802_3;
-    general.PhysicalMediumType = NdisPhysicalMedium802_3;
+    // NdisMediumIP makes the interface contract match the raw IP packets
+    // accepted by INJECT_NBL; unlike Ethernet, these NBLs have no L2 header.
+    general.MediaType = NdisMediumIP;
+    general.PhysicalMediumType = NdisPhysicalMediumUnspecified;
     general.MtuSize = adapter->mtu;
     general.MaxXmitLinkSpeed = (ULONG64)linkSpeed;
     general.XmitLinkSpeed = (ULONG64)linkSpeed;
@@ -227,11 +225,9 @@ NDIS_STATUS MiniportInitializeEx(
     general.LookaheadSize = adapter->mtu;
     general.MacOptions = NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
         NDIS_MAC_OPTION_TRANSFERS_NOT_PEND | NDIS_MAC_OPTION_NO_LOOPBACK;
-    general.SupportedPacketFilters = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
+    general.SupportedPacketFilters = gSupportedPacketFilters;
     general.MaxMulticastListSize = 0;
-    general.MacAddressLength = ETH_LENGTH_OF_ADDRESS;
-    NdisMoveMemory(general.PermanentMacAddress, adapter->permanentAddress, ETH_LENGTH_OF_ADDRESS);
-    NdisMoveMemory(general.CurrentMacAddress, adapter->currentAddress, ETH_LENGTH_OF_ADDRESS);
+    general.MacAddressLength = 0;
     general.AccessType = NET_IF_ACCESS_BROADCAST;
     general.DirectionType = NET_IF_DIRECTION_SENDRECEIVE;
     general.ConnectionType = NET_IF_CONNECTION_DEDICATED;
@@ -378,14 +374,13 @@ NDIS_STATUS MiniportOidRequest(
         oidRequest->DATA.SET_INFORMATION.BytesNeeded = 0;
 
         if (oid == OID_GEN_CURRENT_PACKET_FILTER) {
-            const ULONG supported = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
             ULONG packetFilter;
             if (bufferLength < sizeof(ULONG)) {
                 oidRequest->DATA.SET_INFORMATION.BytesNeeded = sizeof(ULONG);
                 return NDIS_STATUS_BUFFER_TOO_SHORT;
             }
             packetFilter = *(PULONG)buffer;
-            if (packetFilter & ~supported) return NDIS_STATUS_NOT_SUPPORTED;
+            if (packetFilter & ~gSupportedPacketFilters) return NDIS_STATUS_NOT_SUPPORTED;
             NdisAcquireSpinLock(&adapter->lock);
             adapter->packetFilter = packetFilter;
             NdisReleaseSpinLock(&adapter->lock);
@@ -432,7 +427,7 @@ NDIS_STATUS MiniportOidRequest(
         case OID_GEN_MEDIA_IN_USE:
             bytesNeeded = sizeof(NDIS_MEDIUM);
             if (bufferLength >= bytesNeeded) {
-                *(PNDIS_MEDIUM)buffer = NdisMedium802_3;
+                *(PNDIS_MEDIUM)buffer = NdisMediumIP;
                 bytesWritten = bytesNeeded;
             }
             break;
@@ -446,7 +441,7 @@ NDIS_STATUS MiniportOidRequest(
         case OID_GEN_MAXIMUM_TOTAL_SIZE:
             bytesNeeded = sizeof(ULONG);
             if (bufferLength >= bytesNeeded) {
-                *(PULONG)buffer = mtu + ETH_LENGTH_OF_HEADER;
+                *(PULONG)buffer = mtu;
                 bytesWritten = bytesNeeded;
             }
             break;
@@ -454,20 +449,6 @@ NDIS_STATUS MiniportOidRequest(
             bytesNeeded = sizeof(ULONG);
             if (bufferLength >= bytesNeeded) {
                 *(PULONG)buffer = packetFilter;
-                bytesWritten = bytesNeeded;
-            }
-            break;
-        case OID_802_3_PERMANENT_ADDRESS:
-            bytesNeeded = ETH_LENGTH_OF_ADDRESS;
-            if (bufferLength >= bytesNeeded) {
-                NdisMoveMemory(buffer, adapter->permanentAddress, bytesNeeded);
-                bytesWritten = bytesNeeded;
-            }
-            break;
-        case OID_802_3_CURRENT_ADDRESS:
-            bytesNeeded = ETH_LENGTH_OF_ADDRESS;
-            if (bufferLength >= bytesNeeded) {
-                NdisMoveMemory(buffer, adapter->currentAddress, bytesNeeded);
                 bytesWritten = bytesNeeded;
             }
             break;

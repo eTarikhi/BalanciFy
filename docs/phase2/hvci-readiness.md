@@ -31,7 +31,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - IOCTLs METHOD_BUFFERED, FILE_ANY_ACCESS, custom 0x800-0x8FF:
   - `IOCTL_BALANCIFY_SET_MTU`: ULONG mtu, validates 576..9000
   - `IOCTL_BALANCIFY_GET_STATS`: returns BALANCIFY_STATS (tx/rx packets/bytes, mtu, paused)
-  - `IOCTL_BALANCIFY_INJECT_NBL`: raw IP packet 20..9000, allocates MDL via `NdisAllocateMdl`, NBL via `NdisAllocateNetBufferAndNetBufferList(pool, ...)`, checks paused, indicates via `NdisMIndicateReceiveNetBufferLists(..., NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL)`
+  - `IOCTL_BALANCIFY_INJECT_NBL`: raw IPv4/IPv6 packet limited by the current MTU; validates version-specific header and exact declared packet length, returns `STATUS_DEVICE_NOT_READY` while paused, then allocates an MDL/NBL and indicates the IP-only NBL via `NdisMIndicateReceiveNetBufferLists`. The miniport/INF now use `NdisMediumIP` / `*MediaType = 19` with `LowerRange = nolower`, not Ethernet framing. WDK/runtime validation remains pending.
   - `IOCTL_BALANCIFY_SET_QUANTA`: array of (u8 path, u64 quanta), validates count <=256, length % struct size ==0
 - Length validation on all IOCTLs, no METHOD_NEITHER, no direct user pointer dereference
 

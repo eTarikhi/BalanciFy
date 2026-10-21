@@ -1,7 +1,7 @@
 # Security hardening — what is done, what remains
 
 Date: 2026-10-21
-Status: continuing on active branch `arena/e323e7b5-balancify`; FlowData repair and follow-up test CI green on Ubuntu and Windows (39531428626).
+Status: continuing on active branch `arena/d70f9d7d-balancify`; PR #9's NDIS attribute/OID work is complete, and this unit aligns the miniport/INF on raw-IP media. WDK and Windows driver validation remain pending.
 
 ## Done
 
@@ -34,10 +34,10 @@ Status: continuing on active branch `arena/e323e7b5-balancify`; FlowData repair 
 - **Client binary + GUI IPC**: `balancify-client` defaults to an authenticated, pinned Noise_IK identity and fails closed on missing/invalid pins or handshake failure; insecure lab mode is debug-only and loopback-only. It stores identity under absolute per-user state paths, filters post-handshake UDP packets to the configured relay endpoint, rejects duplicate handshake responses, and propagates send failures (ADR-0035; merged in PR #6). Production packet-adapter integration, WinUI 3 shell, and production IPC transport/authentication remain pending.
 - **Per-session sequence spaces**: striped Data retransmission and independent FlowData use sequences keyed by session, so sessions do not interfere and FlowData does not create gaps in ordered Data (ADR-0011 / ADR-0029).
 - **Flow-level ACK and repair**: wire v2 uses a distinct AEAD nonce-domain `FlowAck` for selective FlowData receipt; service validates session/authentication/replay before crediting bytes to the path that delivered them. Pending payload is byte- and entry-bounded, removed on receipt, explicit path re-key, resume, or rate-limit hold. A lost FlowAck causes one alternate-path FlowData retry; receiver replay protection prevents duplicate delivery and sends another ACK.
-- **Driver WDF control device + NDIS attributes**: source contains SET_MTU, GET_STATS, INJECT_NBL, SET_QUANTA and length validation. `MiniportInitializeEx` now submits registration attributes before revision-2 general attributes and advertises a minimal OID list with checked OID requests. The source has not been compiled with WDK; no test-signed install, Driver Verifier, HVCI, or S2b miniport-path test has been performed. The driver remains non-operational and its NDIS packet path/lifecycle is incomplete.
+- **Driver WDF control device + raw-IP NDIS attributes**: source contains SET_MTU, GET_STATS, INJECT_NBL, SET_QUANTA and length validation. `MiniportInitializeEx` submits registration attributes before revision-2 general attributes; miniport/INF use `NdisMediumIP` and omit Ethernet MAC OIDs. INJECT_NBL validates IPv4/IPv6 declared lengths and the configured MTU, and rejects paused requests. The source has not been compiled with WDK; no test-signed install, Driver Verifier, HVCI, or S2b miniport-path test has been performed. The driver remains non-operational and its NDIS packet path/lifecycle is incomplete.
 
 ## References
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio, C2/C4
-- ADRs 0003-0036
+- ADRs 0003-0037
 - CI: 39531428626 success on Ubuntu and Windows, including 261/260 Rust tests, lab safety checks, release build, SPDX validation, and dependency/crypto audit

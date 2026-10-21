@@ -15,8 +15,6 @@ typedef struct _BALANCIFY_ADAPTER {
     BOOLEAN paused;
     ULONG mtu;
     ULONG packetFilter;
-    UCHAR permanentAddress[ETH_LENGTH_OF_ADDRESS];
-    UCHAR currentAddress[ETH_LENGTH_OF_ADDRESS];
     ULONG64 txPackets;
     ULONG64 rxPackets;
     ULONG64 txBytes;

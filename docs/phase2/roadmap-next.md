@@ -16,7 +16,7 @@ Status: in progress; software work continues, hardware gates remain pending
 - App shell IPC client (balancify-app crate, home/rules/diagnostics/tray modes, 1Hz event subscription, renders ECN/delay)
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
-- Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` now registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. The control-device symbolic link call now uses the KMDF API, and adapter cleanup purges the control queue before freeing context. This remains source-only and unbuilt; WDK/Verifier validation is pending.
+- Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. The miniport and INF now consistently use NdisMediumIP for raw packets; INJECT_NBL validates IPv4/IPv6 declared lengths and the configured MTU, and rejects paused requests. The KMDF symbolic-link and queue teardown paths were corrected. This remains source-only and unbuilt; WDK/Verifier validation is pending.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
 - Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
@@ -27,7 +27,7 @@ Status: in progress; software work continues, hardware gates remain pending
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
 
-1. **Complete and build the driver source**: source now submits registration attributes before valid NDIS general attributes, exposes a minimal OID set, uses the KMDF symbolic-link API, and synchronously purges the control queue before adapter teardown. Review remaining NDIS/WDF lifecycle details and build x64 + ARM64 using WDK 10.0.22621+ (not available in this sandbox).
+1. **Complete and build the driver source**: source now registers attributes, exposes a minimal OID set, aligns the INF/miniport on NdisMediumIP for raw packets, validates injected IP versions/lengths against MTU, and drains the WDF queue before teardown. Review remaining NDIS/WDF lifecycle details and build x64 + ARM64 using WDK 10.0.22621+ (not available in this sandbox).
 2. **S2b socket test through miniport**: only after a successful WDK build, run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on a test-signed Hyper-V VM with Driver Verifier and Memory Integrity configured.
 3. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 
@@ -55,4 +55,4 @@ Status: in progress; software work continues, hardware gates remain pending
 ## References
 
 - Blueprint §4.5 failover, §4.7.4 per-flow sessions, §4.8 dependency policy, §6.1 TAP-like adapter, §6.2 WRH + flow classes, §6.3 capacity, §6.4 DRR + pacing + CC, §6.5 health hysteresis, §6.6 NAT keepalive, §8.2 Diagnostics, §8.3 installer, §9.2 IPC + handshake, §9.3 signing, §9.5 HVCI, §10.1 Rig A/B, §10.3 acceptance rows, §11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio.
-- ADRs 0003-0015.
+- ADRs 0003-0037.
