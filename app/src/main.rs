@@ -622,6 +622,17 @@ mod tests {
     }
 
     #[test]
+    fn event_payload_timeout_propagates_after_frame_starts() {
+        let (mut client, mut server) = tcp_pair();
+        client.set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        let mut frame = Vec::new();
+        encode_frame(FrameKind::Event, &[0xaa, 0xbb], &mut frame).unwrap();
+        server.write_all(&frame[..FRAME_HEADER_LEN + 1]).unwrap();
+        let error = recv_event(&mut client).unwrap_err();
+        assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
     fn stats_event_refreshes_last_known_good_counters_and_timestamp() {
         let start = Instant::now();
         let mut cache = LastKnownGoodHome::new(snapshot(), start);
