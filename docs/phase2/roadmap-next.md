@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
 Date: 2026-10-21
-Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (PR #14 run `39672568665`, head `bd5fd54`); hardware gates remain pending
+Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (push run `39672966928`, PR #14 run `39672975335`, head `1980d6d`); hardware gates remain pending
 
 ## Completed since last green (39191895800)
 
