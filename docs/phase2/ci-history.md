@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Active continuation: `arena/26abd85f-balancify`, PR #11 remains open; latest green CI run `39603173892` on Ubuntu and Windows for commit `69ff677`. The run passed Rust workspace tests, release build, lab analysis/safety, dependency/crypto audit, SPDX 2.3 validation, official SPDX 3.0.1 JSON Schema + SHACL validation, and publication of both SBOM sidecars. The SBOM/VEX described in the historical progression below was a handwritten placeholder with fake vulnerability IDs, not a valid deliverable. The replacement now generates both inventories from the locked production graph, joins registry SHA-256 values from `Cargo.lock`, and installs/rolls back both sidecars. Windows EventRegister/EventWrite diagnostics compile and test in CI, and failover messages exclude relay endpoints; the Home CLI maintains a session-scoped last-known-good snapshot with stale markers. Live ETW trace decoding, persisted UI state, and production UI/IPC remain unverified. Reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, and hardware performance remain pending. See `continuous-development-log.md` for current commits and gates.
+Active continuation: `arena/7b97c6a4-balancify`, commit `39240d2`, with PR #13 open. CI run `39617793769` passed all four jobs on Ubuntu and Windows, including Rust workspace tests/release build, lab safety/tool tests, and dependency/crypto policy audit. The installer stages SPDX sidecars beside destinations, persists full JSON step/inverse-action records with escaped paths, aborts and rolls back if an in-progress journal write fails, and avoids destructive sidecar rollback in dry-run mode. ADR-0038 hardens the service lab adapter: identity/pin-store failures and missing relay identities are fatal by default; the zero-key mode is explicit, debug-only, loopback-only; incoming datagrams are filtered to the active relay and UDP send failures propagate. Home status now remains stale after reconnection events until a full status refresh; partial IPC event frames cannot be mistaken for idle timeouts, and the CLI now rejects non-loopback IPC destinations. PR #12 remains open on its separate head branch `arena/26abd85f-balancify` with all four checks green at run `39606024439`; it is not part of this active branch. The SBOM/VEX described in the historical progression below was a handwritten placeholder with fake vulnerability IDs, not a valid deliverable. Current generation produces SPDX 2.3 and 3.0.1 inventories from the locked graph and validates them in CI. Live ETW trace decoding, persisted UI state, and production UI/IPC remain unverified. Reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, and hardware performance remain pending. See `continuous-development-log.md` for current commits and gates.
 
 ## Progression
 
@@ -86,7 +86,7 @@ Active continuation: `arena/26abd85f-balancify`, PR #11 remains open; latest gre
 - 50bf7c8 success app failover and soak modes 11 modes — G5
 - 1b7fa25 success ADR-0034 WinUI3 shell 11 modes + soak harness G5 + failover convergence <=2s + netem-rig 11 profiles + analyze.py
 
-## Current
+## Historical snapshot (pre-Arena continuation)
 
 - Last green 1b7fa25 (50bf7c8 + ADR-0034), ubuntu+windows+audit success, 215+ tests, benches compile, docs, Cargo.lock vetted-only, vcxproj HVCI, INF Universal, SBOM/VEX SPDX3 v2, throughput 10 profiles Rig B+failover, app 11 modes failover/soak, netem-rig 11 profiles + analyze.py, soak harness G5, failover convergence tracking <=2s, installer 8 steps SBOM sidecar, report 5 viz
 - Branch `arena/7abc96c8-balancify` has:
@@ -105,4 +105,4 @@ Active continuation: `arena/26abd85f-balancify`, PR #11 remains open; latest gre
 
 - Blueprint Sec.10.3 acceptance rows, Sec.10.1 10 reps, Sec.6.4 DRR+pacing+CC, S13 SBOM/VEX, S15 HVCI trio, C2/C4, Sec.4.5 failover, Sec.8.2 Diagnostics, G5 soak+Verifier+compat
 - ADRs 0002-0034
-- CI: 1b7fa25 success (latest) ubuntu+windows+audit, 89e1f26 success soak fix, 50bf7c8 success app 11 modes
+- Historical CI: 1b7fa25 success, 89e1f26 success soak fix, 50bf7c8 success app 11 modes; current active CI is recorded above

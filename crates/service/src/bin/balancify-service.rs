@@ -19,28 +19,202 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionMode {
+    Secure,
+    InsecureLab,
+}
+
+fn select_connection_mode(
+    has_relay_identity: bool,
+    insecure_lab_requested: bool,
+    debug_build: bool,
+) -> std::io::Result<ConnectionMode> {
+    if has_relay_identity {
+        return Ok(ConnectionMode::Secure);
+    }
+    if !insecure_lab_requested {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "no relay identity configured; refusing zero-key transport (use --insecure-lab for loopback-only debug runs)",
+        ));
+    }
+    if !debug_build {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "insecure lab mode is disabled in release builds",
+        ));
+    }
+    Ok(ConnectionMode::InsecureLab)
+}
+
+fn parse_relay_addresses(
+    primary: Option<&str>,
+    secondary: Option<&str>,
+) -> std::io::Result<(SocketAddr, Option<SocketAddr>)> {
+    let primary = primary
+        .map(|value| value.parse::<SocketAddr>())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid primary relay address"))?
+        .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
+    let secondary = secondary
+        .map(|value| value.parse::<SocketAddr>())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid secondary relay address"))?;
+    Ok((primary, secondary))
+}
+
+fn parse_relay_public_key(encoded: &str) -> std::io::Result<[u8; 32]> {
+    let bytes = hex_decode(encoded).filter(|bytes| bytes.len() == 32).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "relay public key must be exactly 32 bytes of hex")
+    })?;
+    let public: [u8; 32] = bytes.try_into().expect("length checked above");
+    if public == [0; 32] {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "all-zero relay public key is not a valid identity",
+        ));
+    }
+    Ok(public)
+}
+
+fn resolve_relay_public(
+    configured: Option<[u8; 32]>,
+    pinned: &PinnedKeys,
+) -> std::io::Result<Option<[u8; 32]>> {
+    match configured {
+        Some(public) if public == [0; 32] => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "all-zero relay public key is not a valid identity",
+        )),
+        Some(public) if !pinned.is_empty() && !pinned.is_pinned(&public) => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "configured relay key does not match any pinned identity",
+        )),
+        Some(public) => Ok(Some(public)),
+        None => match pinned.iter().next().copied() {
+            Some(public) if public == [0; 32] => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stored pinned relay identity is all zeroes",
+            )),
+            Some(public) => Ok(Some(public)),
+            None => Ok(None),
+        },
+    }
+}
+
+fn is_expected_relay_source(source: SocketAddr, expected_relay: SocketAddr) -> bool {
+    source == expected_relay
+}
+
+fn next_simulated_packet_tick(started_at: Instant, now: Instant, last_tick: u64) -> Option<u64> {
+    let elapsed_seconds = now.duration_since(started_at).as_secs();
+    (elapsed_seconds > last_tick).then_some(elapsed_seconds)
+}
+
+fn send_datagram(sock: &UdpSocket, bytes: &[u8], destination: SocketAddr) -> std::io::Result<()> {
+    let sent = sock.send_to(bytes, destination)?;
+    if sent != bytes.len() {
+        return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "short UDP datagram send"));
+    }
+    Ok(())
+}
+
+fn validate_lab_target(mode: ConnectionMode, primary: SocketAddr, secondary: Option<SocketAddr>) -> std::io::Result<()> {
+    if mode == ConnectionMode::InsecureLab
+        && (!primary.ip().is_loopback() || secondary.is_some_and(|addr| !addr.ip().is_loopback()))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "insecure lab mode is restricted to loopback relay addresses",
+        ));
+    }
+    Ok(())
+}
+
+fn choose_state_dir(
+    override_dir: Option<std::path::PathBuf>,
+    program_data: Option<std::path::PathBuf>,
+    xdg_state_home: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+    is_windows: bool,
+) -> std::io::Result<std::path::PathBuf> {
+    if let Some(path) = override_dir {
+        if !path.is_absolute() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "BALANCIFY_STATE_DIR must be an absolute path"));
+        }
+        return Ok(path);
+    }
+    if is_windows {
+        return program_data
+            .filter(|path| path.is_absolute())
+            .map(|path| path.join("Balancify"))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "absolute ProgramData or BALANCIFY_STATE_DIR is required"));
+    }
+    if let Some(path) = xdg_state_home.filter(|path| path.is_absolute()) {
+        return Ok(path.join("balancify-service"));
+    }
+    home.filter(|path| path.is_absolute())
+        .map(|path| path.join(".local").join("state").join("balancify-service"))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "absolute XDG_STATE_HOME, HOME, or BALANCIFY_STATE_DIR is required"))
+}
+
+fn default_state_dir() -> std::io::Result<std::path::PathBuf> {
+    let override_dir = std::env::var_os("BALANCIFY_STATE_DIR").map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let program_data = std::env::var_os("ProgramData").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let program_data = None;
+    #[cfg(not(windows))]
+    let xdg_state_home = std::env::var_os("XDG_STATE_HOME").map(std::path::PathBuf::from);
+    #[cfg(windows)]
+    let xdg_state_home = None;
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    choose_state_dir(override_dir, program_data, xdg_state_home, home, cfg!(windows))
+}
+
 fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let relay_primary: SocketAddr = args.get(1).and_then(|s| s.parse().ok()).unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
-    let relay_secondary: Option<SocketAddr> = args.get(2).and_then(|s| s.parse().ok());
+    let mut positional = Vec::new();
+    let mut insecure_lab_requested = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--insecure-lab" => insecure_lab_requested = true,
+            "--help" | "-h" => {
+                println!("Usage: balancify-service [--insecure-lab] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
+                println!("Without a relay identity, the service fails closed. Insecure lab mode is debug-only and loopback-only.");
+                return Ok(());
+            }
+            _ if arg.starts_with('-') => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unknown option: {arg}"))),
+            _ => positional.push(arg),
+        }
+    }
+    if positional.len() > 2 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "expected at most primary and secondary relay addresses"));
+    }
+    let (relay_primary, relay_secondary) = parse_relay_addresses(
+        positional.first().map(String::as_str),
+        positional.get(1).map(String::as_str),
+    )?;
 
-    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
-        #[cfg(windows)]
-        {
-            std::env::var("ProgramData").map(|pd| format!("{}\\Balancify", pd)).unwrap_or_else(|_| "/tmp/balancify_service".to_string())
-        }
-        #[cfg(not(windows))]
-        {
-            "/tmp/balancify_service".to_string()
-        }
-    });
-    let secret_path = std::path::Path::new(&state_dir).join("client_secret.key");
-    let pinned_path = std::path::Path::new(&state_dir).join("pinned_relays.keys");
+    let state_dir = default_state_dir()?;
+    let secret_path = state_dir.join("client_secret.key");
+    let pinned_path = state_dir.join("pinned_relays.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let keypair = store.load_or_generate().unwrap_or_else(|_| balancify_crypto::StaticKeypair::generate());
-    let pinned_relays = store.load_pinned().unwrap_or_else(|_| PinnedKeys::new());
+    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
+    let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
+    let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
+        Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
+    };
+    let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
+    let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
+    validate_lab_target(mode, relay_primary, relay_secondary)?;
 
-    println!("Balancify service -- state_dir={}, primary={}, secondary={:?}", state_dir, relay_primary, relay_secondary);
+    println!("Balancify service -- state_dir={}, primary={}, secondary={:?}", state_dir.display(), relay_primary, relay_secondary);
     println!("  public key: {:02x?}...", &keypair.public_bytes()[..8]);
 
     let cfg = ServiceConfig {
@@ -92,33 +266,25 @@ fn main() -> std::io::Result<()> {
     println!("  IPC v1 loopback listener: {}", ipc_addr);
 
     // Handshake
-    let relay_public = std::env::var("BALANCIFY_RELAY_PUBLIC_KEY").ok().and_then(|hex| {
-        let bytes = hex_decode(&hex)?;
-        if bytes.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Some(arr)
-        } else {
-            None
+    match mode {
+        ConnectionMode::Secure => {
+            let relay_identity = relay_public.expect("secure mode requires a relay identity");
+            println!("  initiating authenticated handshake to primary...");
+            let prologue = b"balancify handshake v1";
+            let msg1 = svc.initiate_handshake(relay_identity, prologue)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("handshake initialization failed: {error:?}")))?;
+            send_datagram(&sock0, &msg1, relay_primary)?;
+            println!("  sent msg1 {} bytes", msg1.len());
         }
-    });
-    if let Some(rp) = relay_public {
-        println!("  initiating handshake to primary...");
-        let prologue = b"balancify handshake v1";
-        match svc.initiate_handshake(rp, prologue) {
-            Ok(msg1) => {
-                let _ = sock0.send_to(&msg1, relay_primary);
-                println!("  sent msg1 {} bytes", msg1.len());
-            }
-            Err(e) => eprintln!("  handshake init failed: {:?}", e),
+        ConnectionMode::InsecureLab => {
+            eprintln!("  WARNING: explicitly enabled INSECURE lab mode; loopback only, zero-key test cipher");
+            svc.open_session(1, now);
         }
-    } else {
-        println!("  no BALANCIFY_RELAY_PUBLIC_KEY -- lab mode, opening session directly");
-        svc.open_session(1, now);
     }
 
     let mut dg = [0u8; 65535];
     let mut flow_counter = 0u64;
+    let started_at = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
 
@@ -146,7 +312,7 @@ fn main() -> std::io::Result<()> {
                 if let Action::Send { uplink, bytes } = act {
                     let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
                     let relay = svc.relay_current().unwrap_or(relay_primary);
-                    let _ = sock.send_to(&bytes, relay);
+                    send_datagram(sock, &bytes, relay)?;
                 }
             }
             last_tick = now;
@@ -164,6 +330,11 @@ fn main() -> std::io::Result<()> {
         for (uplink_id, sock) in [(UplinkId(0), &sock0), (UplinkId(1), &sock1)] {
             match sock.recv_from(&mut dg) {
                 Ok((n, from)) => {
+                    let expected_relay = svc.relay_current().unwrap_or(relay_primary);
+                    if !is_expected_relay_source(from, expected_relay) {
+                        eprintln!("ignoring datagram from an unexpected relay endpoint");
+                        continue;
+                    }
                     // Record local endpoint for NAT rebinding detection
                     if let Ok(local) = sock.local_addr() {
                         svc.note_local_endpoint(uplink_id, local, now);
@@ -178,7 +349,7 @@ fn main() -> std::io::Result<()> {
                                     Action::Send { uplink, bytes } => {
                                         let s = if uplink.0 == 0 { &sock0 } else { &sock1 };
                                         let relay = svc.relay_current().unwrap_or(relay_primary);
-                                        let _ = s.send_to(&bytes, relay);
+                                        send_datagram(s, &bytes, relay)?;
                                     }
                                     _ => {}
                                 }
@@ -201,9 +372,9 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        // Simulate app packet every second
-        if now.elapsed().as_secs() > flow_counter {
-            flow_counter = now.elapsed().as_secs();
+        // Simulate app packet once per elapsed second from service startup.
+        if let Some(elapsed_seconds) = next_simulated_packet_tick(started_at, now, flow_counter) {
+            flow_counter = elapsed_seconds;
             let src: SocketAddr = format!("10.0.0.1:{}", 5000 + (flow_counter % 1000) as u16).parse().unwrap();
             let dst: SocketAddr = "8.8.8.8:443".parse().unwrap();
             let flow = FlowKey::new(6, src, dst);
@@ -213,7 +384,7 @@ fn main() -> std::io::Result<()> {
                 if let Action::Send { uplink, bytes } = act {
                     let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
                     let relay = svc.relay_current().unwrap_or(relay_primary);
-                    let _ = sock.send_to(&bytes, relay);
+                    send_datagram(sock, &bytes, relay)?;
                 }
             }
         }
@@ -330,12 +501,22 @@ fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    let s = s.trim();
-    if s.len() % 2 != 0 { return None; }
-    let mut out = Vec::with_capacity(s.len()/2);
-    for i in (0..s.len()).step_by(2) {
-        let byte = u8::from_str_radix(&s[i..i+2], 16).ok()?;
-        out.push(byte);
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = s.as_bytes();
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
     }
     Some(out)
 }
@@ -343,6 +524,119 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod ipc_capacity_tests {
     use super::*;
+
+    #[test]
+    fn service_requires_authenticated_transport_by_default() {
+        let error = select_connection_mode(false, false, true).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(select_connection_mode(true, false, false).unwrap(), ConnectionMode::Secure);
+        assert_eq!(select_connection_mode(true, true, false).unwrap(), ConnectionMode::Secure);
+    }
+
+    #[test]
+    fn insecure_lab_mode_is_debug_only_and_loopback_only() {
+        assert_eq!(
+            select_connection_mode(false, true, true).unwrap(),
+            ConnectionMode::InsecureLab
+        );
+        assert_eq!(
+            select_connection_mode(false, true, false).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let loopback: SocketAddr = "127.0.0.1:4430".parse().unwrap();
+        let public: SocketAddr = "192.0.2.1:4430".parse().unwrap();
+        assert!(is_expected_relay_source(loopback, loopback));
+        assert!(!is_expected_relay_source(public, loopback));
+        validate_lab_target(ConnectionMode::InsecureLab, loopback, Some(loopback)).unwrap();
+        assert!(validate_lab_target(ConnectionMode::InsecureLab, loopback, Some(public)).is_err());
+        assert!(validate_lab_target(ConnectionMode::InsecureLab, public, None).is_err());
+        validate_lab_target(ConnectionMode::Secure, public, None).unwrap();
+    }
+
+    #[test]
+    fn relay_addresses_reject_malformed_configuration() {
+        let (primary, secondary) = parse_relay_addresses(None, None).unwrap();
+        assert_eq!(primary, "127.0.0.1:4430".parse().unwrap());
+        assert_eq!(secondary, None);
+        assert_eq!(
+            parse_relay_addresses(Some("not-an-address"), None).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            parse_relay_addresses(Some("127.0.0.1:4430"), Some("bad"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn relay_identity_parsing_and_pins_fail_closed() {
+        let encoded = format!("01{}", "00".repeat(31));
+        let public = parse_relay_public_key(&encoded).unwrap();
+        assert_eq!(public[0], 1);
+        assert!(parse_relay_public_key("00").is_err());
+        assert!(parse_relay_public_key(&"00".repeat(32)).is_err());
+        assert!(parse_relay_public_key(&format!(" {encoded}")).is_err());
+
+        let mut pinned = PinnedKeys::new();
+        pinned.pin(public);
+        assert_eq!(resolve_relay_public(None, &pinned).unwrap(), Some(public));
+        assert_eq!(resolve_relay_public(Some(public), &pinned).unwrap(), Some(public));
+        assert_eq!(
+            resolve_relay_public(Some([2; 32]), &pinned).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(resolve_relay_public(None, &PinnedKeys::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn service_state_directory_requires_an_absolute_secure_root() {
+        let root = std::env::temp_dir();
+        assert!(choose_state_dir(Some("relative".into()), None, None, None, false).is_err());
+        assert_eq!(
+            choose_state_dir(None, None, Some(root.join("xdg")), None, false).unwrap(),
+            root.join("xdg").join("balancify-service")
+        );
+        assert_eq!(
+            choose_state_dir(None, Some(root.clone()), None, None, true).unwrap(),
+            root.join("Balancify")
+        );
+        assert!(choose_state_dir(None, None, None, None, true).is_err());
+    }
+
+    #[test]
+    fn simulated_packet_scheduler_uses_elapsed_service_time() {
+        let started_at = Instant::now();
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_millis(999), 0),
+            None
+        );
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_secs(1), 0),
+            Some(1)
+        );
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_millis(1500), 1),
+            None
+        );
+        assert_eq!(
+            next_simulated_packet_tick(started_at, started_at + Duration::from_secs(3), 1),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn udp_datagram_send_reaches_the_requested_local_endpoint() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let destination = receiver.local_addr().unwrap();
+        send_datagram(&sender, b"test datagram", destination).unwrap();
+        let mut buffer = [0; 32];
+        let (length, source) = receiver.recv_from(&mut buffer).unwrap();
+        assert_eq!(&buffer[..length], b"test datagram");
+        assert_eq!(source, sender.local_addr().unwrap());
+    }
 
     #[test]
     fn local_ipc_worker_slots_are_bounded_and_released() {

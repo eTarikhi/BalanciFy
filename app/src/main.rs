@@ -13,9 +13,24 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 
+fn parse_ipc_addr(value: Option<&str>) -> std::io::Result<SocketAddr> {
+    let addr = value
+        .map(|value| value.parse::<SocketAddr>())
+        .transpose()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid IPC socket address"))?
+        .unwrap_or_else(|| "127.0.0.1:5000".parse().unwrap());
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "lab IPC client is restricted to loopback addresses",
+        ));
+    }
+    Ok(addr)
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let addr: SocketAddr = args.get(1).and_then(|s| s.parse().ok()).unwrap_or_else(|| "127.0.0.1:5000".parse().unwrap());
+    let addr = parse_ipc_addr(args.get(1).map(String::as_str))?;
     let mode = args.get(2).map(|s| s.as_str()).unwrap_or("home");
 
     println!("Balancify shell -- connecting to {} mode={}", addr, mode);
@@ -26,22 +41,32 @@ fn main() -> std::io::Result<()> {
     // Send requests based on mode
     match mode {
         "home" => {
-            let mut last_good = None;
+            let mut last_good: Option<LastKnownGoodHome> = None;
             send_request(&mut stream, &Request::GetStatus)?;
             if let Some(resp) = recv_response(&mut stream)? {
                 if let Response::Status(snapshot) = &resp {
-                    last_good = Some(LastKnownGoodHome::new(snapshot.clone(), Instant::now()));
+                    let now = Instant::now();
+                    if let Some(cache) = last_good.as_mut() {
+                        cache.refresh_status(snapshot.clone(), now);
+                    } else {
+                        last_good = Some(LastKnownGoodHome::new(snapshot.clone(), now));
+                    }
                 }
                 render_home(resp);
             }
-            // Subscribe to events at 1 Hz
-            send_request(&mut stream, &Request::SubscribeEvents { interval_hz: 1 })?;
-            match recv_response(&mut stream)? {
-                Some(Response::Ack) => {
+            // Subscribe to events at 1 Hz. Preserve the last-known-good view if
+            // the request or acknowledgement fails after the initial snapshot.
+            let subscription_result = send_request(
+                &mut stream,
+                &Request::SubscribeEvents { interval_hz: 1 },
+            )
+            .and_then(|()| recv_response(&mut stream));
+            match subscription_result {
+                Ok(Some(Response::Ack)) => {
                     println!("Subscribed to events at 1 Hz, listening for 5 events...");
                     for _ in 0..5 {
-                        match recv_event(&mut stream)? {
-                            Some(ev) => {
+                        match recv_event(&mut stream) {
+                            Ok(Some(ev)) => {
                                 let now = Instant::now();
                                 let mut newly_stale = false;
                                 if let Some(cache) = last_good.as_mut() {
@@ -54,21 +79,35 @@ fn main() -> std::io::Result<()> {
                                 }
                                 render_event(ev);
                             }
-                            None => {
-                                println!("No event arrived before the IPC read timeout; showing cached status as stale.");
-                                if let Some(mut cache) = last_good {
-                                    cache.mark_connection_stale();
-                                    render_stale_home(&cache, Instant::now());
-                                } else {
-                                    println!("No last-known-good service snapshot is available.");
-                                }
+                            Ok(None) => {
+                                render_connection_stale_home(
+                                    last_good.as_mut(),
+                                    "No event arrived before the IPC read timeout; showing cached status as stale.",
+                                );
+                                break;
+                            }
+                            Err(error) => {
+                                render_connection_stale_home(
+                                    last_good.as_mut(),
+                                    &format!("IPC event stream failed: {error}; showing cached status as stale."),
+                                );
                                 break;
                             }
                         }
                     }
                 }
-                Some(response) => println!("Event subscription was not accepted: {:?}", response),
-                None => println!("Service closed the IPC connection before acknowledging the event subscription."),
+                Ok(Some(response)) => render_connection_stale_home(
+                    last_good.as_mut(),
+                    &format!("Event subscription was not accepted: {:?}; showing cached status as stale.", response),
+                ),
+                Ok(None) => render_connection_stale_home(
+                    last_good.as_mut(),
+                    "Service closed the IPC connection before acknowledging the event subscription; showing cached status as stale.",
+                ),
+                Err(error) => render_connection_stale_home(
+                    last_good.as_mut(),
+                    &format!("Could not subscribe to IPC events: {error}; showing cached status as stale."),
+                ),
             }
         }
         "rules" => {
@@ -180,9 +219,15 @@ impl LastKnownGoodHome {
         }
     }
 
-    fn apply_event(&mut self, event: &Event, now: Instant) {
+    fn refresh_status(&mut self, snapshot: StatusSnapshot, now: Instant) {
+        self.snapshot = snapshot;
         self.last_seen = now;
         self.connection_stale = false;
+        self.snapshot_stale_reason = None;
+    }
+
+    fn apply_event(&mut self, event: &Event, now: Instant) {
+        self.last_seen = now;
         match event {
             Event::Stats(counters) => self.snapshot.counters = *counters,
             Event::UplinkStateChanged { id, state } => {
@@ -231,6 +276,16 @@ fn render_stale_home(cache: &LastKnownGoodHome, now: Instant) {
     render_home(Response::Status(cache.snapshot.clone()));
 }
 
+fn render_connection_stale_home(cache: Option<&mut LastKnownGoodHome>, message: &str) {
+    eprintln!("{message}");
+    if let Some(cache) = cache {
+        cache.mark_connection_stale();
+        render_stale_home(cache, Instant::now());
+    } else {
+        println!("No last-known-good service snapshot is available.");
+    }
+}
+
 fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
     let payload = req.encode();
     let mut frame = Vec::new();
@@ -240,12 +295,28 @@ fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
 }
 
 fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
+    read_frame_inner(stream, false)
+}
+
+fn read_frame_inner(
+    stream: &mut TcpStream,
+    idle_timeout_returns_none: bool,
+) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
     let mut header = [0u8; FRAME_HEADER_LEN];
-    // Distinguish clean EOF before a frame from a truncated frame header.
-    match stream.read(&mut header[..1])? {
-        0 => return Ok(None),
-        1 => {}
-        _ => unreachable!("one-byte read cannot exceed the buffer"),
+    // A timeout is a harmless idle poll only if no byte of a frame has arrived.
+    // Once a frame starts, any timeout is a truncated frame and must be surfaced.
+    match stream.read(&mut header[..1]) {
+        Ok(0) => return Ok(None),
+        Ok(1) => {}
+        Ok(_) => unreachable!("one-byte read cannot exceed the buffer"),
+        Err(error)
+            if idle_timeout_returns_none
+                && (error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
     }
     stream.read_exact(&mut header[1..])?;
     let len = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
@@ -275,16 +346,7 @@ fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
 }
 
 fn recv_event(stream: &mut TcpStream) -> std::io::Result<Option<Event>> {
-    let frame = match read_frame(stream) {
-        Ok(frame) => frame,
-        Err(error)
-            if error.kind() == std::io::ErrorKind::WouldBlock
-                || error.kind() == std::io::ErrorKind::TimedOut =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
+    let frame = read_frame_inner(stream, true)?;
     match frame {
         None => Ok(None),
         Some((FrameKind::Event, payload)) => Event::decode(&payload)
@@ -517,6 +579,14 @@ fn render_event(ev: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+
+    fn tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
 
     fn snapshot() -> StatusSnapshot {
         StatusSnapshot {
@@ -541,6 +611,44 @@ mod tests {
             active_flows: 0,
             counters: Counters::default(),
         }
+    }
+
+    #[test]
+    fn ipc_client_address_is_strictly_loopback_only() {
+        assert_eq!(parse_ipc_addr(None).unwrap(), "127.0.0.1:5000".parse().unwrap());
+        assert_eq!(parse_ipc_addr(Some("[::1]:5000")).unwrap(), "[::1]:5000".parse().unwrap());
+        assert_eq!(
+            parse_ipc_addr(Some("192.0.2.10:5000")).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            parse_ipc_addr(Some("not-an-address")).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn event_idle_timeout_is_only_ignored_before_frame_bytes_arrive() {
+        let (mut client, _server) = tcp_pair();
+        client.set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(recv_event(&mut client).unwrap().is_none());
+
+        let (mut client, mut server) = tcp_pair();
+        client.set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        server.write_all(&[1]).unwrap();
+        let error = recv_event(&mut client).unwrap_err();
+        assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
+    fn event_payload_timeout_propagates_after_frame_starts() {
+        let (mut client, mut server) = tcp_pair();
+        client.set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        let mut frame = Vec::new();
+        encode_frame(FrameKind::Event, &[0xaa, 0xbb], &mut frame).unwrap();
+        server.write_all(&frame[..FRAME_HEADER_LEN + 1]).unwrap();
+        let error = recv_event(&mut client).unwrap_err();
+        assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
     }
 
     #[test]
@@ -576,15 +684,28 @@ mod tests {
         assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
         cache.apply_event(&Event::Stats(Counters::default()), now + Duration::from_secs(1));
         assert_eq!(cache.stale_reason(), Some("policy changed; full status refresh required"));
+        cache.refresh_status(snapshot(), now + Duration::from_secs(2));
+        assert_eq!(cache.stale_reason(), None);
     }
 
     #[test]
-    fn event_stream_timeout_marks_cached_status_stale_until_reconnected() {
+    fn subscription_failure_renders_and_marks_the_cached_home_stale() {
+        let now = Instant::now();
+        let mut cache = LastKnownGoodHome::new(snapshot(), now);
+        render_connection_stale_home(Some(&mut cache), "subscription rejected");
+        assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
+    }
+
+    #[test]
+    fn event_stream_timeout_stays_stale_until_a_full_status_refresh() {
         let now = Instant::now();
         let mut cache = LastKnownGoodHome::new(snapshot(), now);
         cache.mark_connection_stale();
         assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
         cache.apply_event(&Event::Warning { code: 1 }, now + Duration::from_secs(2));
+        assert_eq!(cache.stale_reason(), Some("IPC event stream timed out or disconnected"));
+        cache.refresh_status(snapshot(), now + Duration::from_secs(3));
         assert_eq!(cache.stale_reason(), None);
+        assert_eq!(cache.age(now + Duration::from_secs(3)), Duration::ZERO);
     }
 }
