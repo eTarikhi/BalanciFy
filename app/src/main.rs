@@ -45,8 +45,8 @@ fn main() -> std::io::Result<()> {
                 Some(Response::Ack) => {
                     println!("Subscribed to events at 1 Hz, listening for 5 events...");
                     for _ in 0..5 {
-                        match recv_event(&mut stream)? {
-                            Some(ev) => {
+                        match recv_event(&mut stream) {
+                            Ok(Some(ev)) => {
                                 let now = Instant::now();
                                 let mut newly_stale = false;
                                 if let Some(cache) = last_good.as_mut() {
@@ -59,11 +59,21 @@ fn main() -> std::io::Result<()> {
                                 }
                                 render_event(ev);
                             }
-                            None => {
+                            Ok(None) => {
                                 println!("No event arrived before the IPC read timeout; showing cached status as stale.");
-                                if let Some(mut cache) = last_good {
+                                if let Some(cache) = last_good.as_mut() {
                                     cache.mark_connection_stale();
-                                    render_stale_home(&cache, Instant::now());
+                                    render_stale_home(cache, Instant::now());
+                                } else {
+                                    println!("No last-known-good service snapshot is available.");
+                                }
+                                break;
+                            }
+                            Err(error) => {
+                                eprintln!("IPC event stream failed: {error}; showing cached status as stale.");
+                                if let Some(cache) = last_good.as_mut() {
+                                    cache.mark_connection_stale();
+                                    render_stale_home(cache, Instant::now());
                                 } else {
                                     println!("No last-known-good service snapshot is available.");
                                 }
