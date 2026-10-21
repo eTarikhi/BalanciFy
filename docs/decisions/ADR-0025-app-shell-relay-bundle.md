@@ -28,5 +28,5 @@ Previously, relay & account and support bundle were not rendered.
 
 - Blueprint Sec.8.2 Diagnostics, Sec.9.2 IPC + handshake, Sec.4.5 failover, Sec.6.4 CC ECN+delay, Sec.11.3 rekey
 - Code: `app/src/main.rs` `render_relay`, `render_bundle`, modes
-- CI: 39236091314 success
+- CI: 39236091314 success for the original relay/bundle modes; last-known-good/stale-view regression tests pass in CI `39603173892`.
 - ADR-0012 ETW and support bundle, ADR-0025 app shell
