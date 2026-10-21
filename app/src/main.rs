@@ -56,19 +56,20 @@ fn main() -> std::io::Result<()> {
                             }
                             None => {
                                 println!("No event arrived before the IPC read timeout; showing cached status as stale.");
-                                if let Some(mut cache) = last_good {
-                                    cache.mark_connection_stale();
-                                    render_stale_home(&cache, Instant::now());
-                                } else {
-                                    println!("No last-known-good service snapshot is available.");
-                                }
+                                render_disconnected_home(last_good);
                                 break;
                             }
                         }
                     }
                 }
-                Some(response) => println!("Event subscription was not accepted: {:?}", response),
-                None => println!("Service closed the IPC connection before acknowledging the event subscription."),
+                Some(response) => {
+                    println!("Event subscription was not accepted: {:?}", response);
+                    render_disconnected_home(last_good);
+                }
+                None => {
+                    println!("Service closed the IPC connection before acknowledging the event subscription.");
+                    render_disconnected_home(last_good);
+                }
             }
         }
         "rules" => {
@@ -229,6 +230,15 @@ fn render_stale_home(cache: &LastKnownGoodHome, now: Instant) {
         reason
     );
     render_home(Response::Status(cache.snapshot.clone()));
+}
+
+fn render_disconnected_home(last_good: Option<LastKnownGoodHome>) {
+    if let Some(mut cache) = last_good {
+        cache.mark_connection_stale();
+        render_stale_home(&cache, Instant::now());
+    } else {
+        println!("No last-known-good service snapshot is available.");
+    }
 }
 
 fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
