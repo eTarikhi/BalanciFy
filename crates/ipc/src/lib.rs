@@ -148,10 +148,11 @@ impl<'a> Reader<'a> {
             _ => None,
         }
     }
+    /// Decode a length-prefixed string, rejecting malformed UTF-8.
     pub fn string(&mut self) -> Option<String> {
         let n = self.u8()? as usize;
         let b = self.take(n)?;
-        Some(String::from_utf8_lossy(b).into_owned())
+        String::from_utf8(b.to_vec()).ok()
     }
     pub fn string32(&mut self) -> Option<String> {
         let n = self.u32()? as usize;
@@ -833,6 +834,17 @@ mod tests {
             port_end: 53,
             duplicate: true,
         }
+    }
+
+    #[test]
+    fn ipc_string_decoder_rejects_invalid_utf8() {
+        let short_string = [1, 0xff];
+        let mut reader = Reader::new(&short_string);
+        assert_eq!(reader.string(), None);
+
+        let long_string = [0, 0, 0, 1, 0xff];
+        let mut reader = Reader::new(&long_string);
+        assert_eq!(reader.string32(), None);
     }
 
     #[test]
