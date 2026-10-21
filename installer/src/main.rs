@@ -9,6 +9,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 #[derive(Debug, Clone)]
 pub enum InstallStep {
@@ -152,7 +154,21 @@ impl InstallJournal {
             )
         }).collect::<Vec<_>>().join(",");
         let json = format!("{{\"entries\":[{entries}]}}\n");
-        std::fs::write(path, json)
+        let mut options = OpenOptions::new();
+        options.write(true).create(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_mode(0o600);
+            file.set_permissions(permissions)?;
+        }
+        file.set_len(0)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()
     }
 }
 
@@ -649,6 +665,12 @@ mod tests {
         assert!(json.contains(r#""kind":"restore_file""#));
         assert!(json.contains(".backup/previous"));
         assert!(json.ends_with('\n'));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&journal_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
