@@ -8,6 +8,7 @@
 #include <wdf.h>
 #include <ntstrsafe.h>
 #include "miniport.h"
+#include "ip_packet_validation.h"
 
 #define BALANCIFY_DEVICE_NAME L"\\Device\\Balancify"
 #define BALANCIFY_DOS_NAME L"\\DosDevices\\Balancify"
@@ -180,16 +181,29 @@ VOID BalancifyEvtIoDeviceControl(
         break;
     }
     case IOCTL_BALANCIFY_INJECT_NBL: {
-        // Inject raw IP packet as NBL into NDIS stack (S2b socket test through miniport)
-        // Input: raw IP packet (max 9000), output: none
-        // Real impl: allocate MDL/NBL, copy packet, NdisMIndicateReceiveNetBufferLists (Sec.6.1)
-        // Length validation: min 20 (IP header) max 9000 (jumbo) to prevent overflow
-        if (inputBufferLength < 20 || inputBufferLength > 9000) {
+        ULONG mtu;
+        BOOLEAN paused;
+
+        // The public miniport MTU is the maximum raw IP packet length. Snapshot
+        // it under the same lock used by SET_MTU and the miniport OID callbacks.
+        NdisAcquireSpinLock(&adapter->lock);
+        mtu = adapter->mtu;
+        paused = adapter->paused;
+        NdisReleaseSpinLock(&adapter->lock);
+        if (paused) {
+            status = STATUS_DEVICE_NOT_READY;
+            break;
+        }
+        if (inputBufferLength < 20 || inputBufferLength > mtu || inputBufferLength > 9000) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
         status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
+        if (!BalancifyIsValidIpPacket((const unsigned char *)inputBuffer, inputBufferLength, mtu)) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
 
         // Copy out of the METHOD_BUFFERED request before completing it. NDIS may
         // retain the indicated NBL after this IOCTL returns.
@@ -247,16 +261,18 @@ VOID BalancifyEvtIoDeviceControl(
         NBL_SET_PORT_NUMBER(nbl, 0);
 
         NdisAcquireSpinLock(&adapter->lock);
-        adapter->rxPackets++;
-        adapter->rxBytes += inputBufferLength;
-        BOOLEAN paused = adapter->paused;
+        paused = adapter->paused;
+        if (!paused) {
+            adapter->rxPackets++;
+            adapter->rxBytes += inputBufferLength;
+        }
         NdisReleaseSpinLock(&adapter->lock);
 
         if (paused) {
             NdisFreeNetBufferList(nbl);
             NdisFreeMdl(mdl);
             NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
-            status = STATUS_SUCCESS;
+            status = STATUS_DEVICE_NOT_READY;
             break;
         }
 

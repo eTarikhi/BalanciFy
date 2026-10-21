@@ -26,15 +26,15 @@ DriverPackageDisplayName = %Balancify%
 [Balancify.ndi]
 Characteristics = 0x1 ; NCF_VIRTUAL
 *IfType = 53 ; IF_TYPE_PROP_VIRTUAL
-*MediaType = 0 ; NdisMedium802_3
-*PhysicalMediaType = 0
+*MediaType = 19 ; NdisMediumIP (raw IP)
+*PhysicalMediaType = 0 ; NdisPhysicalMediumUnspecified
 AddReg = Balancify.reg, Balancify.Hvci.reg
 CopyFiles = Balancify.CopyFiles
 
 [Balancify.reg]
 HKR, Ndi, Service, 0, "Balancify"
 HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
-HKR, Ndi\Interfaces, LowerRange, 0, "ethernet"
+HKR, Ndi\Interfaces, LowerRange, 0, "nolower"
 HKR, Ndi\Params\Mtu, ParamDesc, 0, %Mtu%
 HKR, Ndi\Params\Mtu, Type, 0, "int"
 HKR, Ndi\Params\Mtu, Default, 0, "1440"

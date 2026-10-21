@@ -2,12 +2,12 @@
 
 This directory contains first-party NDIS miniport and WDF control-device source for the planned packet path (Sec.4.8, Sec.5, Sec.7). No third-party kernel component is used in the intended data path (C2).
 
-**Status:** source-level scaffold only. `MiniportInitializeEx` now submits NDIS registration attributes followed by revision-2 general attributes, publishes its supported OID list, and unwinds resources if initialization fails. This source has not been built with WDK or test-signed; no Driver Verifier, HVCI, or packet-path validation is claimed, and the miniport is still not a functional service data path. The lab prototype continues to use bound UDP sockets (S2a); G2 still requires a WDK build, completion of the adapter/data-path lifecycle, and validation on a Windows test rig.
+**Status:** source-level scaffold only. `MiniportInitializeEx` now submits NDIS registration attributes followed by revision-2 general attributes, configures the interface as raw-IP `NdisMediumIP` to match the INJECT_NBL payload contract, publishes its supported OID list, and unwinds resources if initialization fails. This source has not been built with WDK or test-signed; no Driver Verifier, HVCI, or packet-path validation is claimed, and the miniport is still not a functional service data path. The lab prototype continues to use bound UDP sockets (S2a); G2 still requires a WDK build, completion of the adapter/data-path lifecycle, and validation on a Windows test rig.
 
 **Structure:**
 - `src/miniport.c` + `src/miniport.h` -- NDIS 6.8 callback skeleton, registration/general attributes, a minimal supported OID surface, and shared adapter/NBL ownership definitions. The actual packet path and runtime lifecycle remain incomplete and unvalidated.
-- `src/ioctl.c` -- source implementation of a minimal WDF IOCTL surface: set MTU, inject NBL, query stats, and set quanta. Injected packets are copied to owned nonpaged memory and released when NDIS returns the NBL; this source has not yet been built or verified with WDK/Verifier.
-- `balancify.inf` -- INF for PnP install, `*IfType = IF_TYPE_PROP_VIRTUAL (53)`, `*MediaType = NdisMedium802_3`.
+- `src/ioctl.c` -- source implementation of a minimal WDF IOCTL surface: set MTU, inject NBL, query stats, and set quanta. `INJECT_NBL` accepts one raw IPv4/IPv6 packet, validates its version-specific declared length and the configured MTU, rejects requests while paused, then copies it to owned nonpaged memory until NDIS returns the NBL. This source has not yet been built or verified with WDK/Verifier.
+- `balancify.inf` -- INF for PnP install, `*IfType = IF_TYPE_PROP_VIRTUAL (53)`, `*MediaType = NdisMediumIP (19)`, and `LowerRange = nolower` for raw IP packets without Ethernet framing.
 - `driver.vcxproj` -- WDK 10.0.22621+ build.
 
 **Signing & HVCI:**
@@ -22,8 +22,8 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 - Working set bounded
 
 **Security:**
-- Minimal IOCTLs, validated lengths, fuzzed (same fuzz gate as tunnel).
-- Memory Integrity compatible.
+- Minimal IOCTLs, validated lengths, portable C boundary tests for raw IPv4/IPv6 parsing; kernel fuzzing and Driver Verifier remain pending.
+- Memory Integrity compatibility is intended but unverified until WDK/HVCI testing.
 
 **Build (Windows only, WDK 10.0.22621+):**
 ```powershell
