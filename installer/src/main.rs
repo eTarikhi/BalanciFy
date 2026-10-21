@@ -45,6 +45,80 @@ pub struct InstallJournal {
     entries: VecDeque<JournalEntry>,
 }
 
+fn json_quote(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len() + 2);
+    encoded.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => encoded.push_str("\\\""),
+            '\\' => encoded.push_str("\\\\"),
+            '\u{08}' => encoded.push_str("\\b"),
+            '\u{0c}' => encoded.push_str("\\f"),
+            '\n' => encoded.push_str("\\n"),
+            '\r' => encoded.push_str("\\r"),
+            '\t' => encoded.push_str("\\t"),
+            character if character <= '\u{1f}' => {
+                encoded.push_str(&format!("\\u{:04x}", character as u32));
+            }
+            character => encoded.push(character),
+        }
+    }
+    encoded.push('"');
+    encoded
+}
+
+fn serialize_install_step(step: &InstallStep) -> String {
+    match step {
+        InstallStep::Preflight => "{\"kind\":\"preflight\"}".to_string(),
+        InstallStep::DriverPackage { inf_path } => format!(
+            "{{\"kind\":\"driver_package\",\"inf_path\":{}}}",
+            json_quote(&inf_path.to_string_lossy())
+        ),
+        InstallStep::Service { name, bin_path } => format!(
+            "{{\"kind\":\"service\",\"name\":{},\"bin_path\":{}}}",
+            json_quote(name),
+            json_quote(&bin_path.to_string_lossy())
+        ),
+        InstallStep::Adapter { mtu } => format!("{{\"kind\":\"adapter\",\"mtu\":{mtu}}}"),
+        InstallStep::Runtimes { dotnet_bundled, winappsdk_bundled } => format!(
+            "{{\"kind\":\"runtimes\",\"dotnet_bundled\":{dotnet_bundled},\"winappsdk_bundled\":{winappsdk_bundled}}}"
+        ),
+        InstallStep::Gui { exe_path } => format!(
+            "{{\"kind\":\"gui\",\"exe_path\":{}}}",
+            json_quote(&exe_path.to_string_lossy())
+        ),
+        InstallStep::SbomSidecar { path } => format!(
+            "{{\"kind\":\"sbom_sidecar\",\"path\":{}}}",
+            json_quote(&path.to_string_lossy())
+        ),
+        InstallStep::SelfTest => "{\"kind\":\"self_test\"}".to_string(),
+    }
+}
+
+fn serialize_rollback_action(action: &RollbackAction) -> String {
+    match action {
+        RollbackAction::RemoveDriver { inf_path } => format!(
+            "{{\"kind\":\"remove_driver\",\"inf_path\":{}}}",
+            json_quote(&inf_path.to_string_lossy())
+        ),
+        RollbackAction::RemoveService { name } => format!(
+            "{{\"kind\":\"remove_service\",\"name\":{}}}",
+            json_quote(name)
+        ),
+        RollbackAction::RemoveAdapter => "{\"kind\":\"remove_adapter\"}".to_string(),
+        RollbackAction::RemoveRuntimes { dotnet_added, winappsdk_added } => format!(
+            "{{\"kind\":\"remove_runtimes\",\"dotnet_added\":{dotnet_added},\"winappsdk_added\":{winappsdk_added}}}"
+        ),
+        RollbackAction::RemoveGui => "{\"kind\":\"remove_gui\"}".to_string(),
+        RollbackAction::RestoreFile { path, backup } => format!(
+            "{{\"kind\":\"restore_file\",\"path\":{},\"backup\":{}}}",
+            json_quote(&path.to_string_lossy()),
+            backup.as_ref().map(|path| json_quote(&path.to_string_lossy())).unwrap_or_else(|| "null".to_string())
+        ),
+        RollbackAction::RestoreRoutes => "{\"kind\":\"restore_routes\"}".to_string(),
+    }
+}
+
 impl InstallJournal {
     pub fn push(&mut self, step: InstallStep, rollback: Option<RollbackAction>) {
         self.entries.push_back(JournalEntry {
@@ -63,7 +137,18 @@ impl InstallJournal {
     }
 
     pub fn save(&self, path: &PathBuf) -> std::io::Result<()> {
-        let json = format!("{{\"entries\":{}}}", self.entries.len());
+        let entries = self.entries.iter().enumerate().map(|(sequence, entry)| {
+            let rollback = entry
+                .rollback
+                .as_ref()
+                .map(serialize_rollback_action)
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{{\"sequence\":{sequence},\"step\":{},\"rollback\":{rollback}}}",
+                serialize_install_step(&entry.step)
+            )
+        }).collect::<Vec<_>>().join(",");
+        let json = format!("{{\"entries\":[{entries}]}}\n");
         std::fs::write(path, json)
     }
 }
@@ -313,9 +398,20 @@ impl Installer {
                 self.rollback()?;
                 return Err(e);
             }
-            let _ = self.journal.save(&self.journal_path);
+            if let Err(save_error) = self.journal.save(&self.journal_path) {
+                eprintln!("could not persist installer journal: {save_error}; rolling back");
+                if let Err(rollback_error) = self.rollback() {
+                    return Err(format!(
+                        "write installation journal failed: {save_error}; rollback also failed: {rollback_error}"
+                    ));
+                }
+                return Err(format!("write installation journal failed: {save_error}"));
+            }
         }
         self.discard_sidecar_backups();
+        if let Err(error) = self.journal.save(&self.journal_path) {
+            eprintln!("warning: installation succeeded but final journal update failed: {error}");
+        }
         println!("Install complete, journal at {}", self.journal_path.display());
         Ok(())
     }
@@ -375,7 +471,10 @@ impl Installer {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
-    let journal_path = PathBuf::from(args.get(1).map(|s| s.as_str()).unwrap_or("/tmp/balancify_install.json"));
+    let journal_path = args
+        .get(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("balancify_install.json"));
     println!("Balancify installer -- dry_run={} journal={}", dry_run, journal_path.display());
     let mut installer = Installer::new(journal_path, dry_run);
     match installer.run() {
@@ -406,9 +505,50 @@ mod tests {
 
     #[test]
     fn installer_dry_run_succeeds() {
-        let mut inst = Installer::new(PathBuf::from("/tmp/test_journal.json"), true);
+        let journal_path = std::env::temp_dir().join(format!("balancify-test-journal-{}.json", std::process::id()));
+        let mut inst = Installer::new(journal_path.clone(), true);
         assert!(inst.run().is_ok());
         assert_eq!(inst.journal.entries.len(), 9); // preflight, driver, service, adapter, runtimes, gui, two SBOMs, self-test
+        std::fs::remove_file(journal_path).unwrap();
+    }
+
+    #[test]
+    fn journal_serializes_step_and_rollback_details_with_json_escaping() {
+        let root = std::env::temp_dir().join(format!("balancify-journal-json-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let journal_path = root.join("journal.json");
+        let inventory_path = PathBuf::from("inventory\".spdx.json");
+        let mut journal = InstallJournal::default();
+        journal.push(
+            InstallStep::SbomSidecar { path: inventory_path.clone() },
+            Some(RollbackAction::RestoreFile {
+                path: inventory_path,
+                backup: Some(PathBuf::from(".backup/previous")),
+            }),
+        );
+
+        journal.save(&journal_path).unwrap();
+        let json = std::fs::read_to_string(&journal_path).unwrap();
+        assert!(json.contains(r#""kind":"sbom_sidecar""#));
+        assert!(json.contains(r#"inventory\".spdx.json"#));
+        assert!(json.contains(r#""kind":"restore_file""#));
+        assert!(json.contains(".backup/previous"));
+        assert!(json.ends_with('\n'));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn journal_write_failure_aborts_install_and_rolls_back() {
+        let root = std::env::temp_dir().join(format!("balancify-journal-failure-{}", std::process::id()));
+        let journal_path = root.join("journal.json");
+        std::fs::create_dir_all(&journal_path).unwrap();
+
+        let mut installer = Installer::new(journal_path, true);
+        let error = installer.run().unwrap_err();
+        assert!(error.contains("write installation journal failed"));
+        assert_eq!(installer.journal.entries.len(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

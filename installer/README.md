@@ -17,9 +17,13 @@ Implements §4.8 rev 2.1 + §8.3. One signed offline bundle; zero user prerequis
    pre-existing sidecar is preserved so a later step failure can restore it.
 8. **First-run self-test hook** (loop through embedded endpoint, local mode).
 
-Each step writes a journal entry; any failure executes the inverse operations
-in reverse order, including removal of runtimes we added. Sidecar rollback
-restores prior files, while a successful installation discards their backups.
+The JSON journal records each step and its inverse action. A journal persistence
+failure during installation aborts and triggers rollback rather than silently
+continuing; failure to write the post-commit backup-cleanup update is reported
+as a warning because installation has already succeeded. Other step failures
+execute inverse operations in reverse order, including removal of runtimes we
+added. Sidecar rollback restores prior files, while a successful installation
+discards their backups.
 The sidecar transaction protects against ordinary step failures; power-loss
 recovery and a production installer integration test remain separate work.
 
