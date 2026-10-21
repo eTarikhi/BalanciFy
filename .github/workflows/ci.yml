@@ -28,7 +28,7 @@ jobs:
       - name: test analyzer
         run: python3 -m unittest discover -s tools/lab -p 'test_*.py' -v
       - name: test SBOM generation logic
-        run: python3 -m unittest discover -s tools/ci -p 'test_sbom*.py' -v
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
       - name: test netem rig safety
         run: sh -n tools/lab/netem-rig.sh && sh tools/lab/test_netem_rig.sh
       - name: test raw IP packet validator
