@@ -1,8 +1,8 @@
 # Balancify — Development Progress Report
 
 **As of:** 22 October 2026 (Asia/Tehran)<br>
-**Repository state:** `main` at merge commit [`42efe79`](https://github.com/eTarikhi/BalanciFy/commit/42efe79ba9e41dc068c035547bf04daa41bde5c4); active continuation: `arena/1b78fd62-balancify`<br>
-**Latest verified main CI:** [Run 39690376384](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376384) — all four jobs succeeded.<br>
+**Repository state:** `main` at merge commit [`4834f18`](https://github.com/eTarikhi/BalanciFy/commit/4834f18); active continuation: `arena/6c62bbae-balancify`<br>
+**Latest verified main CI:** [Run 39694615286](https://github.com/eTarikhi/BalanciFy/actions/runs/39694615286) — all four jobs succeeded.<br>
 **Overall status:** active engineering prototype; **not release-ready**. Gates G2–G8 are not closed; G1 formal sign-off was not found in the repository evidence reviewed for this report.
 
 > **Measurement and evidence rule.** This report separates source/CI evidence from Windows driver execution, network measurements and release validation. Passing Rust tests or a synthetic benchmark does not prove that the product works through an NDIS driver, meets throughput/latency targets, installs offline, or is ready for release. Percent-complete figures and velocity forecasts are omitted where no auditable basis exists.
@@ -23,7 +23,7 @@ The project has a substantial first-party Rust software foundation: the merged b
 | User-facing product | Rust lab CLI and loopback IPC exist; production WinUI/.NET GUI and authenticated named-pipe service transport do not | Production UX and IPC remain unimplemented |
 | Installer / release | Journal and rollback logic are tested; no signed offline bundle or clean-machine install record | G4/G5 and release readiness remain open |
 | Supply chain | SPDX 2.3 and SPDX 3.0.1 generation/validation are part of CI | Inventory pipeline exists; reviewed VEX, signing, and installer-sidecar validation remain open |
-| Documentation deployment | Main run [39690376461](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376461) failed at “Setup Pages”; Pages API returned 404 on 22 Oct | Site is not live; a first-party static portal and narrowed artifact build are being prepared; Pages configuration still needs enabling |
+| Documentation deployment | Main run [39694615335](https://github.com/eTarikhi/BalanciFy/actions/runs/39694615335) failed at “Setup Pages”. Pages API GET returned 404; attempt to create the Pages site returned 403, “Resource not accessible by integration” | Portal/workflow are merged in PR #16; site is not live. A repository owner/admin must enable Pages with GitHub Actions as the source, then rerun deployment |
 
 ## 1. Retrospective analysis — work completed and evidence
 
@@ -83,7 +83,7 @@ The same CI run reports success for dependency/crypto policy audit and lab analy
 
 ![Delivery signal: integration versus acceptance evidence](assets/progress/delivery-signal-2026-10-22.svg)
 
-**Momentum is positive on software integration:** PR #14 merged as `e3f2e24`; the merge-triggered CI run passed all four jobs on both operating systems. The prior feature commits added installer journal collision/privacy tests, pinned-runner/Pages-action contract tests, and strict UTF-8 IPC decoding.
+**Software integration remains green:** PR #16 (the static portal and narrowed Pages artifact) merged as `4834f18`; main CI run `39694615286` passed all four jobs, including Ubuntu and Windows workspace tests. The Pages workflow now packages only the portal, but deployment is blocked because the repository Pages site is not enabled and this connection lacks permission to create it (API POST returned 403).
 
 **Velocity is not quantified.** The repository does not contain a consistent sprint cadence, estimated story-point history, stable backlog denominator, staffing record, or approved phase dates. Commit counts and test counts are not substitutes for scope-normalized throughput. Consequently this report provides no velocity slope, burn-down percentage, or completion percentage. A measured velocity/burn-down chart should be added only after agreeing a work-unit scheme and maintaining dated sprint snapshots.
 
@@ -120,7 +120,7 @@ The horizons below are **proposed planning windows after the required resources 
 | Production IPC/GUI remain absent | Product not user-operable | Loopback TCP lab adapter and CLI only | Define authenticated named-pipe ACL/caller identity, then implement and test against the service. |
 | Installer is not a distributable product | Cannot validate offline install, recovery or uninstall | Journal logic only; no signed bundle/clean VM run | Assign packaging engineer; create clean VM matrix and failure-injection rollback test. |
 | Signing/HVCI/VEX/external review lead time | Release gate delay | Procedures and SBOM inventory exist; executions/review not recorded | Start signing coordination and reviewer booking before G3/G6; record external dependencies and dates. |
-| Pages deployment cannot start | No public docs/distribution site | `Setup Pages` failed; Pages API returned 404 | Enable/configure Pages at repository level, then rerun workflow and verify published URL. |
+| Pages deployment cannot start | No public docs/distribution site | Main run `39694615335` failed at `Setup Pages`; Pages API GET returned 404 and create returned 403 `Resource not accessible by integration` | Repository owner/admin must enable Pages using GitHub Actions as the source; rerun the workflow and verify the published URL. |
 | Schedule/velocity estimates could mislead stakeholders | Poor forecasting | No sized backlog or resource-loaded plan | Establish owners, work-unit sizing, iteration cadence, planned-vs-actual dates before publishing burndown/ETA. |
 
 ## 3. Strategic alignment — position relative to the product strategy
@@ -154,8 +154,8 @@ Balancify has a credible, testable first-party software base and healthy cross-p
 
 ## Sources, definitions and reproducibility
 
-- Latest merged CI/check summaries: [run 39690376384](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376384); merged commit `42efe79`.
-- Pages deployment failure: [run 39690376461](https://github.com/eTarikhi/BalanciFy/actions/runs/39690376461); failed at `Setup Pages`; repository Pages API returned 404 on 2026-10-22. A small static portal is being built, but deployment will remain pending until Pages is enabled.
+- Latest merged CI/check summaries: [run 39694615286](https://github.com/eTarikhi/BalanciFy/actions/runs/39694615286); PR #16 merged as `4834f18`.
+- Pages deployment failure: [run 39694615335](https://github.com/eTarikhi/BalanciFy/actions/runs/39694615335); failed at `Setup Pages`. On 2026-10-22, Pages API GET returned 404 and create returned 403 `Resource not accessible by integration`. The portal and artifact workflow are merged, but an owner/admin must enable Pages before deployment can be verified.
 - Product gates and 47–58 week phase estimate: `docs/technical-blueprint.md`, especially §11.1–§11.3. Estimates assume a 5–6 engineer team and require re-baselining.
 - Demonstrated behavior and limitations: `docs/phase2/lab-progress.md`.
 - Proposed empirical acceptance and methodology: `docs/phase2/throughput-rows.md` and `docs/phase2/clean-machine-test.md`.
