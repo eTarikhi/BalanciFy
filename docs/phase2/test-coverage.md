@@ -1,7 +1,7 @@
 # Test coverage — 261 Linux / 260 Windows Rust tests + 7 SBOM tool tests, what is covered
 
-Date: 2026-10-21
-Status: continuous, CI green ubuntu+windows
+Date: 2026-10-22
+Status: continuous; PR #18 CI run 39710825203 passed, including pinned unsigned x64 WDK compile/link
 
 ## Counts
 
@@ -48,8 +48,9 @@ Total: 259 Rust tests passed on Linux and 258 on Windows in CI (the Unix-only st
 
 - `Cargo.lock` is committed and checked by the dependency audit; no lockfile regeneration was needed for this phase.
 - Simulated paths are not netem (delay and loss applied to frames in discrete-time rig, S2c real measurements pending, harness exists netem-rig.sh + throughput.rs)
-- Miniport in the loop is functional stub + WDF control device, not yet S2b socket test through it (needs test-signed load with Driver Verifier)
-- FlowData has authenticated selective ACKs in wire v2, but payload retransmission/repair for this non-striped lane remains out of scope
+- x64 WDK compile/link passed in CI run 39710066355 using pinned WDK 10.0.26100.6584 with signing disabled; the `.sys` artifact is unsigned and is not installation/runtime evidence.
+- Miniport in the loop is not yet the S2b socket path: test-signed installation, Driver Verifier, HVCI/VM, and packet-path tests remain pending.
+- Wire-v2 FlowData has authenticated selective FlowAck and bounded alternate-path RTO repair; CI tests tunnel and service behavior, but real network loss/reordering and NDIS integration remain untested.
 - Retransmission entries and cumulative ACK matching are keyed by `(session, seq)`; per-session Data sequence spaces coexist with a shared bounded byte budget.
 - Wintun fallback is stub, not real Wintun.dll bundling (feature-gated, exception file check, ADR-0009)
 - Throughput rows simulated, not real Rig B (wired 1 Gbps, Wi-Fi 6 300 Mbit/s, secure mode, pacing 80% capacity, per-flow off/on, 10 reps, iperf3 pending)

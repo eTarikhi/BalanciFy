@@ -47,6 +47,19 @@ class NdisOidContractTests(unittest.TestCase):
         mtu_read = MINIPORT_C.index("adapter->mtu = MiniportReadConfiguredMtu")
         self.assertLess(registration_set, mtu_read)
 
+    def test_set_mtu_cannot_diverge_from_ndis_cached_interface_attributes(self):
+        mtu_case = re.search(
+            r"case IOCTL_BALANCIFY_SET_MTU:\s*\{(.*?)\n\s*\}\n\s*case IOCTL_BALANCIFY_GET_STATS:",
+            IOCTL_C,
+            re.S,
+        )
+        self.assertIsNotNone(mtu_case)
+        body = mtu_case.group(1)
+        self.assertIn("adapter->mtu == mtu", body)
+        self.assertIn("STATUS_NOT_SUPPORTED", body)
+        self.assertNotIn("adapter->mtu = mtu", body)
+        self.assertNotIn("adapter->lookaheadSize =", body)
+
     def test_unimplemented_transmit_path_fails_instead_of_counting_success(self):
         send_callback = re.search(
             r"VOID MiniportSendNetBufferLists\(.*?\n\}", MINIPORT_C, re.S

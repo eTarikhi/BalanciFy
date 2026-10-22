@@ -11,7 +11,7 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 - `balancify.vcxproj` -- WDK 10.0.26100-compatible build; CI uses the pinned 10.0.26100.6584 NuGet kit for x64.
 
 **Known runtime/product gaps (not closed by the CI build):**
-- `IOCTL_BALANCIFY_SET_MTU` updates the adapter's local MTU/lookahead used by validation and OID queries, but does not notify or reconfigure the Windows network interface after the one-time general attributes are registered. Treat it as local-only until dynamic OS-visible MTU behavior is designed and VM-tested.
+- `IOCTL_BALANCIFY_SET_MTU` accepts a confirmation of the configured MTU, but rejects a different value with `STATUS_NOT_SUPPORTED`. NDIS handles OID_GEN_MAXIMUM_FRAME_SIZE for NDIS 6+ from initialization/restart attributes; this scaffold has no supported runtime reconfiguration path, so it must not mutate only the driver's local view ([Microsoft documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/oid-gen-maximum-frame-size)).
 - `IOCTL_BALANCIFY_SET_QUANTA` currently validates and logs the count only; no scheduler state is changed.
 - The transmit ring is not implemented; outbound NBLs deliberately complete with failure. End-to-end packet service behavior remains unavailable.
 

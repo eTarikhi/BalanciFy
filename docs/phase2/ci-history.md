@@ -1,8 +1,8 @@
 # CI history — historical baseline and active Arena continuation
 
-Date: 2026-10-21
+Date: 2026-10-22
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Active continuation: `arena/1e00c990-balancify`, commit `1980d6d`; PR #13 is merged as `6856b498d00f6863007fd8a7def9805ed6a954bc`, and PR #14 is open. Push CI run `39672966928` and PR #14 run `39672975335` passed all four jobs on Ubuntu 24.04 and Windows, including Rust workspace tests, lab/tool contract tests, and dependency/crypto policy audit. The continuation adds strict UTF-8 rejection in IPC string decoders, regression coverage for pinned runner/Pages action versions, and installer journal exclusive-reservation/private-mode checks. Production named-pipe authentication, live ETW trace validation, persisted UI state, production UI, reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, Pages deployment, and hardware performance remain unverified. See `continuous-development-log.md` for the verified continuation.
+Latest continuation: `arena/4c0db240-balancify`, commit `01761d1`; PR #18 is open. PR CI run `39710825203` passed all five jobs: x64 unsigned WDK compile/link, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. The build artifact and log are seven-day artifacts. This proves software compilation only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
 
 ## Progression
 
@@ -88,6 +88,15 @@ Active continuation: `arena/1e00c990-balancify`, commit `1980d6d`; PR #13 is mer
 - 39671965140 success exclusive default journal collision and Unix 0600 regression tests (commit 8edd075)
 - 39672229904 success pinned runner/Pages-action contract tests (commit 0f1183a)
 - 39672559082 success reject invalid UTF-8 in IPC strings (commit bd5fd54)
+- 39707892154 failure: first VS 2022 WDK compile exposed C4201 warning-as-error and driver signature/API mismatches
+- 39708304061 failure: corrected source diagnostics; remaining WDK-header warning guard applied
+- 39708604790 failure: NDIS warnings suppressed; `ntstrsafe.h` include order exposed missing status definitions
+- 39708838746 failure: compilation passed; link path incorrectly appended WDF libraries under `DDK_LIB_PATH`
+- 39709304092 failure: `/Qspectre` passed to the linker and rejected
+- 39709760791 failure: `.sys` compiled/linked, post-build signing could not find WDK NuGet x86 `signtool.exe`
+- 39710066355 success: unsigned x64 WDK compile/link, artifact + log uploaded; all five jobs passed
+- 39710470594 success: PR #18 validation on then-current head
+- 39710825203 success: PR #18 validation with all five jobs green
 
 ## Historical snapshot (pre-Arena continuation)
 

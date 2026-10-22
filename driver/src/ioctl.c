@@ -150,12 +150,19 @@ VOID BalancifyEvtIoDeviceControl(
             status = STATUS_INVALID_PARAMETER;
             break;
         }
-        // Update adapter MTU (Sec.6.1)
+        // GeneralAttributes (including MtuSize) are registered during adapter
+        // initialization and NDIS caches the maximum-frame-size value. Until a
+        // supported restart/reconfiguration path exists, this IOCTL can confirm
+        // the configured MTU but must not change only the driver's local view.
+        BOOLEAN mtuMatches;
         NdisAcquireSpinLock(&adapter->lock);
-        adapter->mtu = mtu;
-        if (adapter->lookaheadSize > mtu) adapter->lookaheadSize = mtu;
+        mtuMatches = (adapter->mtu == mtu) ? TRUE : FALSE;
         NdisReleaseSpinLock(&adapter->lock);
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU %lu\n", mtu));
+        if (!mtuMatches) {
+            status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU confirmed %lu\n", mtu));
         status = STATUS_SUCCESS;
         break;
     }
