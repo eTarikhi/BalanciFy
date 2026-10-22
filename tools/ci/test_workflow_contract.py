@@ -51,6 +51,7 @@ class WorkflowContractTests(unittest.TestCase):
         project = (ROOT / "driver/balancify.vcxproj").read_text(encoding="utf-8")
         self.assertIn("<WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>", project)
         self.assertIn("<AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>", project)
+        self.assertIn("/integritycheck /DYNAMICBASE /NXCOMPAT", project)
         linker = re.search(r"<Link>.*?</Link>", project, re.S)
         self.assertIsNotNone(linker)
         self.assertNotIn("/Qspectre", linker.group(0))
