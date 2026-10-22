@@ -65,7 +65,7 @@ strings x64\Release\balancify.sys | findstr BlaB
 - `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.26100.0, NDIS680_MINIPORT, NDIS 6.8, WDF
 
 **HVCI readiness trio (S15):**
-- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. Push run 39739119850 passed pinned x64 and ARM64 WDK compile/link on `windows-2022` with VS 2022, verified each PE machine type, and uploaded `balancify-driver-unsigned-x64` and `balancify-driver-unsigned-arm64` as seven-day artifacts. These are unsigned software build artifacts only; no signed install or hardware validation is claimed.
+- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. Push run 39781591855 passed pinned x64 and ARM64 WDK compile/link on `windows-2022` with VS 2022, verified each PE machine type, and passed the INF architecture/version contract tests; it uploaded `balancify-driver-unsigned-x64` and `balancify-driver-unsigned-arm64` as seven-day artifacts. These are unsigned software build artifacts only; no signed install or hardware validation is claimed.
 
 **Exception policy (Sec.11.2):**
 If G3/G7 blocked >4 weeks by signing/HVCI, product owner may ship flow-level only with bundled Wintun signed DLL (single allowed third-party runtime artifact, disclosed), while bonding + driver continue; must be retired next minor release.
