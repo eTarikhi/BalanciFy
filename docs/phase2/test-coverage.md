@@ -1,7 +1,7 @@
 # Test coverage — 261 Linux / 260 Windows Rust tests + 7 SBOM tool tests, what is covered
 
 Date: 2026-10-22
-Status: continuous; push run 39790140291 and PR run 39790148235 passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture/unsigned-status validation, INF contract tests, and the fail-closed MTU contract test
+Status: continuous; push run 39799406998 and PR run 39799412825 passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture/mitigation/unsigned-status checks, INF contract tests, and the fail-closed MTU contract test
 
 ## Counts
 
@@ -48,7 +48,7 @@ Total: 259 Rust tests passed on Linux and 258 on Windows in CI (the Unix-only st
 
 - `Cargo.lock` is committed and checked by the dependency audit; no lockfile regeneration was needed for this phase.
 - Simulated paths are not netem (delay and loss applied to frames in discrete-time rig, S2c real measurements pending, harness exists netem-rig.sh + throughput.rs)
-- x64 and ARM64 WDK compile/link, PE machine-type and unsigned-status checks, and INF architecture/version contract tests passed in push run 39790140291 using pinned WDK 10.0.26100.6584 with signing disabled; both `.sys` artifacts are unsigned and are not installation/runtime evidence.
+- x64 and ARM64 WDK compile/link, PE machine-type, DYNAMIC_BASE/FORCE_INTEGRITY/NX_COMPAT and unsigned-status checks, and INF architecture/version contract tests passed in push run 39799406998 using pinned WDK 10.0.26100.6584 with signing disabled; both `.sys` artifacts are unsigned and are not installation/runtime evidence.
 - Miniport in the loop is not yet the S2b socket path: test-signed installation, Driver Verifier, HVCI/VM, and packet-path tests remain pending.
 - Wire-v2 FlowData has authenticated selective FlowAck and bounded alternate-path RTO repair; CI tests tunnel and service behavior, but real network loss/reordering and NDIS integration remain untested.
 - Retransmission entries and cumulative ACK matching are keyed by `(session, seq)`; per-session Data sequence spaces coexist with a shared bounded byte budget.
