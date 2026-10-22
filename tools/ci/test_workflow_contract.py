@@ -32,7 +32,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_wdk_build_job_pins_tooling_and_builds_x64_driver(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("driver-build-x64:", workflow)
-        self.assertIn("runs-on: windows-2025", workflow)
+        self.assertIn("runs-on: windows-2022", workflow)
         self.assertIn("version: 10.0.26100.6584", workflow)
         self.assertIn("vs-version: '[17.0,18.0)'", workflow)
         self.assertRegex(
