@@ -39,10 +39,13 @@ class WorkflowContractTests(unittest.TestCase):
             workflow,
             r"uses:\s+microsoft/windows-drivers-rs/\.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8\b",
         )
-        self.assertIn("msbuild driver\\balancify.vcxproj", workflow)
+        self.assertIn("driver\\balancify.vcxproj", workflow)
         self.assertIn("/p:SignMode=Off", workflow)
         self.assertIn("name: balancify-driver-unsigned-x64", workflow)
         self.assertIn("path: driver/x64/Release/balancify.sys", workflow)
+        x64_job = workflow.split("driver-build-x64:", 1)[1].split("driver-build-arm64:", 1)[0]
+        self.assertIn("Start-Process -FilePath 'msbuild'", x64_job)
+        self.assertIn("-RedirectStandardOutput $stdout -RedirectStandardError $stderr", x64_job)
         project = (ROOT / "driver/balancify.vcxproj").read_text(encoding="utf-8")
         self.assertIn("<WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>", project)
         self.assertIn("<AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>", project)
@@ -56,7 +59,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("target: arm64", arm64_job)
         self.assertIn("/p:Platform=ARM64", arm64_job)
         self.assertIn("name: balancify-driver-unsigned-arm64", arm64_job)
-        self.assertIn("$PSNativeCommandUseErrorActionPreference = $false", arm64_job)
+        self.assertIn("Start-Process -FilePath 'msbuild'", arm64_job)
+        self.assertIn("-RedirectStandardOutput $stdout -RedirectStandardError $stderr", arm64_job)
 
 
 if __name__ == "__main__":

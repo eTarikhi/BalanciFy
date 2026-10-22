@@ -177,11 +177,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
           $log = Join-Path $env:RUNNER_TEMP 'wdk-build.log'
-          & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off 2>&1 | Tee-Object -FilePath $log
-          $buildExitCode = $LASTEXITCODE
+          $stdout = "$log.stdout"
+          $stderr = "$log.stderr"
+          $build = Start-Process -FilePath 'msbuild' -ArgumentList @('driver\balancify.vcxproj', '/m', '/nologo', '/v:minimal', '/p:Configuration=Release', '/p:Platform=x64', '/p:SignMode=Off') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $buildExitCode = $build.ExitCode
+          Get-Content $stdout,$stderr -ErrorAction SilentlyContinue | Set-Content -Path $log -Encoding utf8
           $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
+          Write-Output $tail
           "### WDK x64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $tail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $checkId = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "WDK driver build (x64)" and .status == "in_progress") | .id][0] // empty'
@@ -228,11 +231,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
           $log = Join-Path $env:RUNNER_TEMP 'wdk-arm64-build.log'
-          & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=ARM64 /p:SignMode=Off 2>&1 | Tee-Object -FilePath $log
-          $buildExitCode = $LASTEXITCODE
+          $stdout = "$log.stdout"
+          $stderr = "$log.stderr"
+          $build = Start-Process -FilePath 'msbuild' -ArgumentList @('driver\balancify.vcxproj', '/m', '/nologo', '/v:minimal', '/p:Configuration=Release', '/p:Platform=ARM64', '/p:SignMode=Off') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $buildExitCode = $build.ExitCode
+          Get-Content $stdout,$stderr -ErrorAction SilentlyContinue | Set-Content -Path $log -Encoding utf8
           $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
+          Write-Output $tail
           "### WDK ARM64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $tail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $checkId = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "WDK driver build (ARM64)" and .status == "in_progress") | .id][0] // empty'
