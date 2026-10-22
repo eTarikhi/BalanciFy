@@ -4,7 +4,7 @@
 // load with Driver Verifier and packet loopback through it.
 //
 // Build: msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64
-// Requires WDK 10.0.22621+, SDK 10.0.22621+.
+// CI build kit: Microsoft WDK NuGet 10.0.26100.6584 + Windows SDK 10.0.26100.
 //
 // References:
 // - NDIS 6.8 miniport driver model (Windows Driver Kit docs)

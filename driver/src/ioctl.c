@@ -1,11 +1,9 @@
 // Balancify WDF control device + IOCTLs -- Phase 2 S2b
 // Minimal control device for service to talk to miniport: set MTU, inject NBL, query stats
 // Length-validated, fuzzed same gate as tunnel (no third-party kernel component in data path)
-// Build with WDK 10.0.22621+, test-signed, Driver Verifier on
+// CI build kit: WDK 10.0.26100.6584. Test signing and Driver Verifier are separate validation steps.
 // References: blueprint Sec.6.1 TAP-like adapter, Sec.4.5 pause/resume, Sec.8.2 diagnostics, C2
 
-#include <ndis.h>
-#include <wdf.h>
 #include <ntstrsafe.h>
 #include "miniport.h"
 #include "ip_packet_validation.h"
