@@ -40,6 +40,9 @@ class WorkflowContractTests(unittest.TestCase):
             r"uses:\s+microsoft/windows-drivers-rs/\.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8\b",
         )
         self.assertIn("msbuild driver\\balancify.vcxproj", workflow)
+        self.assertIn("/p:SignMode=Off", workflow)
+        self.assertIn("name: balancify-driver-unsigned-x64", workflow)
+        self.assertIn("path: driver/x64/Release/balancify.sys", workflow)
         project = (ROOT / "driver/balancify.vcxproj").read_text(encoding="utf-8")
         self.assertIn("<WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>", project)
         self.assertIn("<AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>", project)

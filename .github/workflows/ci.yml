@@ -178,7 +178,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'wdk-build.log'
-          & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=x64 2>&1 | Tee-Object -FilePath $log
+          & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off 2>&1 | Tee-Object -FilePath $log
           $buildExitCode = $LASTEXITCODE
           $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
           "### WDK x64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -189,6 +189,14 @@ jobs:
             gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
           }
           if ($buildExitCode -ne 0) { exit $buildExitCode }
+      - name: Upload unsigned x64 driver
+        if: success()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-driver-unsigned-x64
+          path: driver/x64/Release/balancify.sys
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload WDK build log
         if: always()
         uses: actions/upload-artifact@v7.0.2
