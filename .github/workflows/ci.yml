@@ -155,6 +155,22 @@ jobs:
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test results" -f "output[summary]=$SUMMARY" || true
           fi
 
-  # Phase 4: add jobs for (a) WDK driver build + Driver Verifier lab,
-  # (b) WinUI shell build, (c) installer clean-machine VM matrix,
-  # (d) SPDX 3.0 SBOM + VEX generation (Microsoft sbom-tool).
+  driver-build-x64:
+    name: WDK driver build (x64)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - name: Install pinned Microsoft WDK
+        uses: microsoft/windows-drivers-rs/.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8
+        with:
+          version: 10.0.26100.6584
+          source: nuget
+          host: amd64
+          target: amd64
+      - name: Build x64 release driver
+        shell: pwsh
+        run: msbuild driver\balancify.vcxproj /m /nologo /p:Configuration=Release /p:Platform=x64
+
+  # Still pending: Driver Verifier / HVCI VM execution, WinUI shell build,
+  # clean-machine installer matrix, and reviewed VEX generation.

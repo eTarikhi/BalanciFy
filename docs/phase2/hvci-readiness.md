@@ -21,7 +21,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - Adapter context: miniportAdapterHandle, netBufferListPool, controlDevice, spinlock, paused, mtu, tx/rx counters
 - NBL pool: `NdisAllocateNetBufferListPool` with `fAllocateNetBuffer=TRUE`, `ProtocolId=NDIS_PROTOCOL_ID_DEFAULT`, `PoolTag=BALANCIFY_POOL_TAG`, created in InitializeEx, freed in HaltEx
 - No executable pools: uses `NormalPoolPriority` (NonPagedPoolNx equivalent via NDIS), no `NonPagedPoolExecute`, no inline assembly, no RWX sections
-- WDK build flags (now in vcxproj 9115e4f): `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, 10.0.22621.0, NDIS620_MINIPORT, NDIS 6.8
+- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI now has an x64 build job using pinned WDK NuGet 10.0.26100.6584; its first result is pending.
 - Send path: counts txPackets/txBytes, completes NBL immediately (skeleton, real impl copies to service ring)
 - Return path: for RX NBLs injected via IOCTL, frees MDL chain via `NdisFreeMdl` then `NdisFreeNetBufferList`
 
@@ -73,18 +73,18 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 ## Lab progress
 
 - Code: NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists implemented (ADR-0030), length validation, SDDL, no executable pools
-- Build: `driver/balancify.vcxproj` exists (9115e4f) with HVCI trio flags, PoolTag BlaB, KMDF 1.33, Universal, 10.0.22621.0 — `msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64` (requires WDK)
+- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal — CI now invokes `msbuild driver/balancify.vcxproj /m /nologo /p:Configuration=Release /p:Platform=x64`; first hosted WDK build result is pending.
 - Docs: this file + `clean-machine-test.md` + `throughput-rows.md` + `lab-progress.md`
-- Real VM run: pending (requires WDK 10.0.22621+, Hyper-V VM Gen2 Secure Boot vTPM VBS, test-signing bcdedit, pnputil)
-- CI: driver not yet built in CI (Rust only), future add WDK build job (Phase 4 job (a) in ci.yml), currently verified via docs + code review + pool flags
+- Real VM run: pending (requires a WDK-built driver, Hyper-V VM Gen2 Secure Boot/vTPM/VBS, test-signing, and pnputil install)
+- CI: an x64 WDK build job has been added using Microsoft WDK NuGet 10.0.26100.6584; first run pending. This compiles only and does not establish install, Driver Verifier, HVCI, or packet-path behavior.
 
 ## Next actions
 
-1. Add WDK build to CI (windows-2022 runner with WDK, `msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64`)
-2. Run Driver Verifier on test-signed VM with `0x209BB` flags, record bugcheck or clean run
-3. Run HLK HVCI readiness test, record pass/fail
-4. Run on VBS/Memory-Integrity VM, record `msinfo32` + driver load + traffic
-5. Document results in this file with date, Windows build, hardware, driver version
+1. Validate the new x64 WDK CI job; resolve any compile issues, then archive the build log and unsigned output as evidence.
+2. Review remaining NDIS/WDF lifecycle issues and decide the safe first-load procedure.
+3. Run Driver Verifier on a test-signed VM with `0x209BB` flags; record bugcheck or clean run.
+4. Run the HLK HVCI readiness test and VBS/Memory-Integrity VM check; record pass/fail and traffic behavior.
+5. Document results here with date, Windows build, hardware, and driver version. CI compilation alone does not close G2.
 
 ## References
 

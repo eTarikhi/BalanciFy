@@ -29,6 +29,17 @@ class WorkflowContractTests(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertRegex(text, rf"uses:\s+{re.escape(action)}@{re.escape(version)}\b")
 
+    def test_wdk_build_job_pins_tooling_and_builds_x64_driver(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("driver-build-x64:", workflow)
+        self.assertIn("runs-on: windows-2025", workflow)
+        self.assertIn("version: 10.0.26100.6584", workflow)
+        self.assertRegex(
+            workflow,
+            r"uses:\s+microsoft/windows-drivers-rs/\.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8\b",
+        )
+        self.assertIn("msbuild driver\\balancify.vcxproj", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
