@@ -34,11 +34,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("driver-build-x64:", workflow)
         self.assertIn("runs-on: windows-2025", workflow)
         self.assertIn("version: 10.0.26100.6584", workflow)
+        self.assertIn("vs-version: '[17.0,18.0)'", workflow)
         self.assertRegex(
             workflow,
             r"uses:\s+microsoft/windows-drivers-rs/\.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8\b",
         )
         self.assertIn("msbuild driver\\balancify.vcxproj", workflow)
+        project = (ROOT / "driver/balancify.vcxproj").read_text(encoding="utf-8")
+        self.assertIn("<WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>", project)
 
 
 if __name__ == "__main__":

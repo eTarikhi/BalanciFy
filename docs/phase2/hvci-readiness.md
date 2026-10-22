@@ -21,7 +21,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - Adapter context: miniportAdapterHandle, netBufferListPool, controlDevice, spinlock, paused, mtu, tx/rx counters
 - NBL pool: `NdisAllocateNetBufferListPool` with `fAllocateNetBuffer=TRUE`, `ProtocolId=NDIS_PROTOCOL_ID_DEFAULT`, `PoolTag=BALANCIFY_POOL_TAG`, created in InitializeEx, freed in HaltEx
 - No executable pools: uses `NormalPoolPriority` (NonPagedPoolNx equivalent via NDIS), no `NonPagedPoolExecute`, no inline assembly, no RWX sections
-- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584; first compile attempt failed at MSBuild (run 39706740581), and the rerun now publishes diagnostic logs.
+- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Initial MSBuild failed loading the kit's `Microsoft.DriverKit.Build.Tasks.18.0.dll`; WDK 10.0.26100 is being paired with VS 2022 (MSBuild 17.x) and redundant MASM imports removed.
 - Send path: counts txPackets/txBytes, completes NBL immediately (skeleton, real impl copies to service ring)
 - Return path: for RX NBLs injected via IOCTL, frees MDL chain via `NdisFreeMdl` then `NdisFreeNetBufferList`
 
@@ -73,10 +73,10 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 ## Lab progress
 
 - Code: NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists implemented (ADR-0030), length validation, SDDL, no executable pools
-- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI run 39706740581 installed WDK successfully but failed the MSBuild step; diagnostic-capture was added for the next run. No WDK build pass is claimed.
+- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI installed WDK successfully but MSBuild tried to load a missing v18 task assembly; the workflow now pins VS 2022/MSBuild 17 and removes duplicate MASM imports. No WDK build pass is claimed until the next run succeeds.
 - Docs: this file + `clean-machine-test.md` + `throughput-rows.md` + `lab-progress.md`
 - Real VM run: pending (requires a WDK-built driver, Hyper-V VM Gen2 Secure Boot/vTPM/VBS, test-signing, and pnputil install)
-- CI: an x64 WDK build job uses Microsoft WDK NuGet 10.0.26100.6584. First build run 39706740581 failed during MSBuild after successful WDK installation; subsequent runs capture the tail in the check summary and upload a short-lived log. This job does not establish install, Driver Verifier, HVCI, or packet-path behavior.
+- CI: the x64 job pins Microsoft WDK NuGet 10.0.26100.6584 and VS 2022/MSBuild 17.x, captures diagnostics in the check summary, and uploads a short-lived build log. Initial attempts failed loading the v18 task assembly; rerun is pending. Even a successful compile does not establish install, Driver Verifier, HVCI, or packet-path behavior.
 
 ## Next actions
 
