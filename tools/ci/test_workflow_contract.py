@@ -56,6 +56,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("target: arm64", arm64_job)
         self.assertIn("/p:Platform=ARM64", arm64_job)
         self.assertIn("name: balancify-driver-unsigned-arm64", arm64_job)
+        self.assertIn("$PSNativeCommandUseErrorActionPreference = $false", arm64_job)
 
 
 if __name__ == "__main__":

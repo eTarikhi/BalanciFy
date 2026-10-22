@@ -177,6 +177,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           $log = Join-Path $env:RUNNER_TEMP 'wdk-build.log'
           & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off 2>&1 | Tee-Object -FilePath $log
           $buildExitCode = $LASTEXITCODE
@@ -227,6 +228,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           $log = Join-Path $env:RUNNER_TEMP 'wdk-arm64-build.log'
           & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=ARM64 /p:SignMode=Off 2>&1 | Tee-Object -FilePath $log
           $buildExitCode = $LASTEXITCODE
