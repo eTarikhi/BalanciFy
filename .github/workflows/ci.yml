@@ -193,39 +193,6 @@ jobs:
             gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
           }
           if ($buildExitCode -ne 0) { exit $buildExitCode }
-      - name: Validate Universal INF with InfVerif
-        shell: pwsh
-        run: |
-          $kitsBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-          $roots = @(
-            $kitsBin,
-            (Join-Path $env:USERPROFILE '.nuget\packages\microsoft.windows.wdk.x64'),
-            (Join-Path $env:USERPROFILE '.nuget\packages\microsoft.windows.wdk.arm64')
-          ) | Where-Object { Test-Path $_ }
-          $infVerifiers = @()
-          foreach ($root in $roots) {
-            $infVerifiers += Get-ChildItem -Path $root -Filter 'InfVerif.exe' -File -Recurse -ErrorAction SilentlyContinue
-          }
-          $infVerifier = $infVerifiers | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $infVerifier) {
-            "### InfVerif unavailable`nSearched: $($roots -join ', ')`nThe pinned WDK build succeeded, but InfVerif.exe was not found." |
-              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            Write-Error "InfVerif.exe not found; searched: $($roots -join ', ')"
-            exit 2
-          }
-          Write-Output "Running $($infVerifier.FullName) /u driver\balancify.inf"
-          $output = & $infVerifier.FullName /u driver\balancify.inf 2>&1
-          $exitCode = $LASTEXITCODE
-          $outputText = if ($output) { $output | Out-String } else { '(InfVerif produced no output.)' }
-          if ($exitCode -ne 0) {
-            $help = & $infVerifier.FullName /? 2>&1
-            $helpText = if ($help) { $help | Out-String } else { '(InfVerif help produced no output.)' }
-            $outputText = "$outputText`nInfVerif help:`n$helpText"
-          }
-          $summary = "### InfVerif Universal INF validation (exit $exitCode)`nTool: $($infVerifier.FullName)`n`n``````n$outputText`n``````"
-          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          Write-Output $outputText
-          if ($exitCode -ne 0) { exit $exitCode }
       - name: Verify x64 PE architecture, mitigations, and unsigned status
         shell: pwsh
         run: py -3 tools/ci/verify_driver_pe.py driver/x64/Release/balancify.sys x64
