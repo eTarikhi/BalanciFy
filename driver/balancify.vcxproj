@@ -47,7 +47,7 @@
   <!-- HVCI readiness: integritycheck, NX, Spectre, PoolTag, etc. -->
   <PropertyGroup>
     <Driver_SpectreMitigation>Spectre</Driver_SpectreMitigation>
-    <Link_AdditionalOptions>/integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre %(AdditionalOptions)</Link_AdditionalOptions>
+    <Link_AdditionalOptions>/integritycheck /DYNAMICBASE /NXCOMPAT %(AdditionalOptions)</Link_AdditionalOptions>
     <ClCompile_AdditionalOptions>/Qspectre %(AdditionalOptions)</ClCompile_AdditionalOptions>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
@@ -61,7 +61,7 @@
       <AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalOptions>/integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre /RELEASE %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/integritycheck /DYNAMICBASE /NXCOMPAT /RELEASE %(AdditionalOptions)</AdditionalOptions>
       <AdditionalDependencies>$(DDK_LIB_PATH)\ndis.lib;$(DDK_LIB_PATH)\wdf\kmdf\x64\1.33\WdfLdr.lib;$(DDK_LIB_PATH)\wdf\kmdf\x64\1.33\WdfDriverEntry.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>

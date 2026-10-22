@@ -42,6 +42,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("msbuild driver\\balancify.vcxproj", workflow)
         project = (ROOT / "driver/balancify.vcxproj").read_text(encoding="utf-8")
         self.assertIn("<WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>", project)
+        self.assertIn("<AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>", project)
+        linker = re.search(r"<Link>.*?</Link>", project, re.S)
+        self.assertIsNotNone(linker)
+        self.assertNotIn("/Qspectre", linker.group(0))
 
 
 if __name__ == "__main__":
