@@ -1,8 +1,8 @@
 # CI history — historical baseline and active Arena continuation
 
-Date: 2026-10-21
+Date: 2026-10-22
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Active continuation: `arena/1e00c990-balancify`, commit `1980d6d`; PR #13 is merged as `6856b498d00f6863007fd8a7def9805ed6a954bc`, and PR #14 is open. Push CI run `39672966928` and PR #14 run `39672975335` passed all four jobs on Ubuntu 24.04 and Windows, including Rust workspace tests, lab/tool contract tests, and dependency/crypto policy audit. The continuation adds strict UTF-8 rejection in IPC string decoders, regression coverage for pinned runner/Pages action versions, and installer journal exclusive-reservation/private-mode checks. Production named-pipe authentication, live ETW trace validation, persisted UI state, production UI, reviewed VEX, WDK/NDIS runtime, HVCI, clean-machine installation, Pages deployment, and hardware performance remain unverified. See `continuous-development-log.md` for the verified continuation.
+Latest code-validation head: `b326a7a` on `arena/4c0db240-balancify`; PR #18 remains open. Push run `39787330013` and PR run `39787341195` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status validation, INF contract tests, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. Both driver binaries and build logs are seven-day artifacts. This is software compile/link evidence only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
 
 ## Progression
 
@@ -88,6 +88,28 @@ Active continuation: `arena/1e00c990-balancify`, commit `1980d6d`; PR #13 is mer
 - 39671965140 success exclusive default journal collision and Unix 0600 regression tests (commit 8edd075)
 - 39672229904 success pinned runner/Pages-action contract tests (commit 0f1183a)
 - 39672559082 success reject invalid UTF-8 in IPC strings (commit bd5fd54)
+- 39707892154 failure: first VS 2022 WDK compile exposed C4201 warning-as-error and driver signature/API mismatches
+- 39708304061 failure: corrected source diagnostics; remaining WDK-header warning guard applied
+- 39708604790 failure: NDIS warnings suppressed; `ntstrsafe.h` include order exposed missing status definitions
+- 39708838746 failure: compilation passed; link path incorrectly appended WDF libraries under `DDK_LIB_PATH`
+- 39709304092 failure: `/Qspectre` passed to the linker and rejected
+- 39709760791 failure: `.sys` compiled/linked, post-build signing could not find WDK NuGet x86 `signtool.exe`
+- 39710066355 success: unsigned x64 WDK compile/link, artifact + log uploaded; all five jobs passed
+- 39710470594 success: PR #18 validation on then-current head
+- 39710825203 success: PR #18 validation with all five jobs green
+- 39729079329 success: fail-closed MTU contract change and updated phase evidence; all five push jobs passed
+- 39729084768 success: PR #18 head `af51705`; all five jobs passed including unsigned x64 WDK compile/link
+- 39729890884 failure: first ARM64 WDK job exposed NDIS-version selection behavior not visible in x64 build
+- 39730268579 failure: ARM64 compile diagnostics preserved for investigation
+- 39730720752 failure: ARM64 target requires an explicit miniport role; x64 remained green
+- 39732654296 failure: explicit miniport role exposed that NDIS 6.20 is unsupported on ARM64 (minimum target API is 6.30)
+- 39734805048 failure: ARM64 still rejected the 6.20 API version; x64 remained green
+- 39736821998 success: select NDIS 6.8 explicitly; all six push jobs passed, including unsigned x64 and ARM64 WDK compile/link
+- 39736828475 success: PR #18 head `baf3902`; all six jobs passed, including unsigned x64 and ARM64 WDK compile/link
+- 39739119850 success: dual-architecture WDK compile/link and PE machine-type verification; all six push jobs passed
+- 39739125907 success: PR #18 head `bbf3586`; all six jobs passed, including x64/ARM64 WDK compile/link and PE machine-type verification
+- 39787330013 success: commit `b326a7a` passed dual-architecture WDK compile/link, PE machine type and empty certificate-table checks, and x64/ARM64 INF contract tests; all six push jobs passed
+- 39787341195 success: PR #18 head `b326a7a`; all six jobs passed, including WDK, unsigned PE, and INF checks
 
 ## Historical snapshot (pre-Arena continuation)
 

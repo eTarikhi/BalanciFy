@@ -1,12 +1,9 @@
 // Balancify WDF control device + IOCTLs -- Phase 2 S2b
 // Minimal control device for service to talk to miniport: set MTU, inject NBL, query stats
 // Length-validated, fuzzed same gate as tunnel (no third-party kernel component in data path)
-// Build with WDK 10.0.22621+, test-signed, Driver Verifier on
+// CI build kit: WDK 10.0.26100.6584. Test signing and Driver Verifier are separate validation steps.
 // References: blueprint Sec.6.1 TAP-like adapter, Sec.4.5 pause/resume, Sec.8.2 diagnostics, C2
 
-#include <ndis.h>
-#include <wdf.h>
-#include <ntstrsafe.h>
 #include "miniport.h"
 #include "ip_packet_validation.h"
 
@@ -153,12 +150,19 @@ VOID BalancifyEvtIoDeviceControl(
             status = STATUS_INVALID_PARAMETER;
             break;
         }
-        // Update adapter MTU (Sec.6.1)
+        // GeneralAttributes (including MtuSize) are registered during adapter
+        // initialization and NDIS caches the maximum-frame-size value. Until a
+        // supported restart/reconfiguration path exists, this IOCTL can confirm
+        // the configured MTU but must not change only the driver's local view.
+        BOOLEAN mtuMatches;
         NdisAcquireSpinLock(&adapter->lock);
-        adapter->mtu = mtu;
-        if (adapter->lookaheadSize > mtu) adapter->lookaheadSize = mtu;
+        mtuMatches = (adapter->mtu == mtu) ? TRUE : FALSE;
         NdisReleaseSpinLock(&adapter->lock);
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU %lu\n", mtu));
+        if (!mtuMatches) {
+            status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_MTU confirmed %lu\n", mtu));
         status = STATUS_SUCCESS;
         break;
     }
@@ -262,8 +266,6 @@ VOID BalancifyEvtIoDeviceControl(
         nblContext->packetBuffer = packetCopy;
         nblContext->packetLength = (ULONG)inputBufferLength;
 
-        NBL_SET_PORT_NUMBER(nbl, 0);
-
         NdisAcquireSpinLock(&adapter->lock);
         paused = (BOOLEAN)adapter->pauseState.paused;
         canIndicate = BalancifyTrackReceiveIndication(&adapter->pauseState) ? TRUE : FALSE;
@@ -317,8 +319,9 @@ VOID BalancifyEvtIoDeviceControl(
         status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
         // For skeleton: just log, real impl would update DRR weights via shared memory or service ring
-        ULONG count = (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA));
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_QUANTA count=%lu\n", count));
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "Balancify: SET_QUANTA count=%lu\n",
+            (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA))));
         status = STATUS_SUCCESS;
         break;
     }

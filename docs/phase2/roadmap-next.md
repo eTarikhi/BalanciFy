@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
-Date: 2026-10-21
-Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (push run `39672966928`, PR #14 run `39672975335`, head `1980d6d`); hardware gates remain pending
+Date: 2026-10-22
+Status: in progress; PR #18 push run `39787330013` and PR run `39787341195` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status verification, and INF contract tests. Hardware/product acceptance gates remain pending.
 
 ## Completed since last green (39191895800)
 
@@ -17,7 +17,7 @@ Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (push 
 - Rust lab CLI IPC client (`balancify-app` crate; home/rules/diagnostics/tray and support modes, 1Hz event subscription, ECN/delay rendering); the production WinUI 3/.NET shell remains unimplemented
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
-- Driver control source hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. The miniport and INF now consistently use NdisMediumIP for raw packets; OIDs report bounded lookahead and packet counters; the miniport reads the INF Mtu parameter with a safe default; INJECT_NBL validates IPv4/IPv6 declared lengths and the configured MTU, and rejects paused requests. MiniportPause now defers completion until active receive indications/returns and send callback chains are drained, with a portable-tested state helper. Until the service transmit ring exists, outbound NBLs fail explicitly with `NDIS_STATUS_FAILURE` and increment transmit errors, avoiding false transmit-success counters; sends during pause are rejected with `NDIS_STATUS_PAUSED`. The KMDF symbolic-link and queue teardown paths were corrected. This remains source-only and unbuilt; WDK/Verifier validation is pending.
+- Driver control source is hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. Miniport and INF consistently use NdisMediumIP; INJECT_NBL validates exact IPv4/IPv6 lengths and MTU, while pause waits for active indications, returned NBLs, and send callback chains. PR #18 adds pinned WDK 10.0.26100.6584 x64 and ARM64 builds and fixes the compile/link issues they exposed. Push run `39787330013` compiled and linked both unsigned targets, verified their PE machine types and empty certificate tables, passed INF architecture/version contract tests, and uploaded seven-day artifacts; it passed all six jobs. PR run `39787341195` also passed all six jobs on the same head. This is compile/link evidence only: no signed install, Verifier, HVCI, VM, or packet-path behavior has been verified. The transmit ring remains unimplemented and TX deliberately fails.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
 - Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
@@ -28,8 +28,8 @@ Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (push 
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
 
-1. **Complete and build the driver source**: source now registers attributes, exposes a minimal OID set, aligns the INF/miniport on NdisMediumIP for raw packets, validates injected IP versions/lengths against MTU, and drains the WDF queue before teardown. Review remaining NDIS/WDF lifecycle details and build x64 + ARM64 using WDK 10.0.22621+ (not available in this sandbox).
-2. **S2b socket test through miniport**: only after a successful WDK build, run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on a test-signed Hyper-V VM with Driver Verifier and Memory Integrity configured.
+1. **Finish static driver/runtime design**: x64 and ARM64 source now compile and link with pinned WDK CI. Review NDIS/WDF lifecycle details, implement the missing service transmit ring, and complete Windows runtime validation; the MTU/configuration contract fails closed pending a proper NDIS reconfiguration path.
+2. **S2b socket test through miniport**: obtain a test-signed driver, then run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on an isolated Hyper-V VM with Driver Verifier and Memory Integrity configured. The unsigned CI artifact cannot be installed as acceptance evidence.
 3. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 
 ## Next for G3 (gate: performance + HVCI)
@@ -48,10 +48,10 @@ Status: in progress; latest software CI green on Ubuntu 24.04 and Windows (push 
 
 - `Cargo.lock` is committed and checked by the dependency audit.
 - Simulated paths are not netem — S2c/Rig B measurements remain pending; raw iperf3 link baselines are not end-to-end BalanciFy measurements.
-- Miniport source is not operational: NDIS attributes are now registered in source, but no WDK build, test-signed install, or Verifier run has been completed.
+- Miniport source compiles/links for x64 in CI, but remains non-operational: unsigned artifact only, no test-signed install, Verifier/HVCI, VM, or packet-path run. The transmit ring is absent; SET_QUANTA remains a logging stub; SET_MTU now refuses changes that would diverge from NDIS-cached interface attributes.
 - The local service adapter uses loopback TCP only; production named-pipe ACLs and Windows caller authentication remain pending.
 - Single session per service default — multi-session demux exists but service opens one session unless per-flow/per-class toggled.
-- Flow-level ACK frames are supported in tunnel wire v2, but no FlowData retransmission/repair is provided: loss can suppress capacity samples while delivered payload remains unaffected.
+- Wire-v2 FlowData uses authenticated selective FlowAck, and bounded RTO repair resends unacknowledged payload on an alternate path. CI tests the tunnel and service integration; real network loss/reordering and driver-path behavior remain unmeasured.
 
 ## References
 

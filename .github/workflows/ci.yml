@@ -155,6 +155,120 @@ jobs:
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CRID" -f "output[title]=cargo test results" -f "output[summary]=$SUMMARY" || true
           fi
 
-  # Phase 4: add jobs for (a) WDK driver build + Driver Verifier lab,
-  # (b) WinUI shell build, (c) installer clean-machine VM matrix,
-  # (d) SPDX 3.0 SBOM + VEX generation (Microsoft sbom-tool).
+  driver-build-x64:
+    name: WDK driver build (x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+        with:
+          # WDK 10.0.26100's MSBuild tasks target VS 2022 (17.x).
+          vs-version: '[17.0,18.0)'
+          msbuild-architecture: x64
+      - name: Install pinned Microsoft WDK
+        uses: microsoft/windows-drivers-rs/.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8
+        with:
+          version: 10.0.26100.6584
+          source: nuget
+          host: amd64
+          target: amd64
+      - name: Build x64 release driver
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'wdk-build.log'
+          $stdout = "$log.stdout"
+          $stderr = "$log.stderr"
+          $build = Start-Process -FilePath 'msbuild' -ArgumentList @('driver\balancify.vcxproj', '/m', '/nologo', '/v:minimal', '/p:Configuration=Release', '/p:Platform=x64', '/p:SignMode=Off') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $buildExitCode = $build.ExitCode
+          Get-Content $stdout,$stderr -ErrorAction SilentlyContinue | Set-Content -Path $log -Encoding utf8
+          $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
+          Write-Output $tail
+          "### WDK x64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $tail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $checkId = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "WDK driver build (x64)" and .status == "in_progress") | .id][0] // empty'
+          if ($checkId) {
+            $title = if ($buildExitCode -eq 0) { 'WDK x64 build results' } else { 'WDK x64 build diagnostics' }
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
+          }
+          if ($buildExitCode -ne 0) { exit $buildExitCode }
+      - name: Verify x64 driver architecture and unsigned status
+        shell: pwsh
+        run: py -3 tools/ci/verify_driver_pe.py driver/x64/Release/balancify.sys x64
+      - name: Upload unsigned x64 driver
+        if: success()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-driver-unsigned-x64
+          path: driver/x64/Release/balancify.sys
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload WDK build log
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-wdk-build-log
+          path: ${{ runner.temp }}/wdk-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  driver-build-arm64:
+    name: WDK driver build (ARM64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+        with:
+          vs-version: '[17.0,18.0)'
+          msbuild-architecture: x64
+      - name: Install pinned Microsoft WDK
+        uses: microsoft/windows-drivers-rs/.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8
+        with:
+          version: 10.0.26100.6584
+          source: nuget
+          host: amd64
+          target: arm64
+      - name: Build ARM64 release driver
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'wdk-arm64-build.log'
+          $stdout = "$log.stdout"
+          $stderr = "$log.stderr"
+          $build = Start-Process -FilePath 'msbuild' -ArgumentList @('driver\balancify.vcxproj', '/m', '/nologo', '/v:minimal', '/p:Configuration=Release', '/p:Platform=ARM64', '/p:SignMode=Off') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $buildExitCode = $build.ExitCode
+          Get-Content $stdout,$stderr -ErrorAction SilentlyContinue | Set-Content -Path $log -Encoding utf8
+          $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
+          Write-Output $tail
+          "### WDK ARM64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $tail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $checkId = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "WDK driver build (ARM64)" and .status == "in_progress") | .id][0] // empty'
+          if ($checkId) {
+            $title = if ($buildExitCode -eq 0) { 'WDK ARM64 build results' } else { 'WDK ARM64 build diagnostics' }
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
+          }
+          if ($buildExitCode -ne 0) { exit $buildExitCode }
+      - name: Verify ARM64 driver architecture and unsigned status
+        shell: pwsh
+        run: py -3 tools/ci/verify_driver_pe.py driver/ARM64/Release/balancify.sys ARM64
+      - name: Upload unsigned ARM64 driver
+        if: success()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-driver-unsigned-arm64
+          path: driver/ARM64/Release/balancify.sys
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload WDK ARM64 build log
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-wdk-arm64-build-log
+          path: ${{ runner.temp }}/wdk-arm64-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Still pending: Driver Verifier / HVCI VM execution, WinUI shell build,
+  # clean-machine installer matrix, and reviewed VEX generation.

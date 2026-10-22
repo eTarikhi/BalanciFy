@@ -7,9 +7,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 MINIPORT_C = (ROOT / "driver/src/miniport.c").read_text(encoding="utf-8")
 IOCTL_C = (ROOT / "driver/src/ioctl.c").read_text(encoding="utf-8")
 INF = (ROOT / "driver/balancify.inf").read_text(encoding="utf-8")
+MINIPORT_H = (ROOT / "driver/src/miniport.h").read_text(encoding="utf-8")
 
 
 class NdisOidContractTests(unittest.TestCase):
+    def test_ndis_version_contract_is_defined_before_wdk_headers(self):
+        for macro in ("NDIS_MINIPORT_DRIVER", "NDIS680_MINIPORT", "NDIS_SUPPORT_NDIS680"):
+            define = MINIPORT_H.index(f"#define {macro} 1")
+            self.assertLess(define, MINIPORT_H.index("#include <ndis.h>"))
+
     def test_every_advertised_oid_has_a_query_handler(self):
         match = re.search(
             r"static const NDIS_OID gSupportedOids\[\]\s*=\s*\{(.*?)\};",
@@ -47,6 +53,19 @@ class NdisOidContractTests(unittest.TestCase):
         mtu_read = MINIPORT_C.index("adapter->mtu = MiniportReadConfiguredMtu")
         self.assertLess(registration_set, mtu_read)
 
+    def test_set_mtu_cannot_diverge_from_ndis_cached_interface_attributes(self):
+        mtu_case = re.search(
+            r"case IOCTL_BALANCIFY_SET_MTU:\s*\{(.*?)\n\s*\}\n\s*case IOCTL_BALANCIFY_GET_STATS:",
+            IOCTL_C,
+            re.S,
+        )
+        self.assertIsNotNone(mtu_case)
+        body = mtu_case.group(1)
+        self.assertIn("adapter->mtu == mtu", body)
+        self.assertIn("STATUS_NOT_SUPPORTED", body)
+        self.assertNotIn("adapter->mtu = mtu", body)
+        self.assertNotIn("adapter->lookaheadSize =", body)
+
     def test_unimplemented_transmit_path_fails_instead_of_counting_success(self):
         send_callback = re.search(
             r"VOID MiniportSendNetBufferLists\(.*?\n\}", MINIPORT_C, re.S
@@ -54,7 +73,7 @@ class NdisOidContractTests(unittest.TestCase):
         self.assertIsNotNone(send_callback)
         body = send_callback.group(0)
         self.assertIn(
-            "NET_BUFFER_LIST_STATUS(curr, paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE)",
+            "NET_BUFFER_LIST_STATUS(curr) = paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE;",
             body,
         )
         self.assertIn("adapter->txErrors++", body)
@@ -78,6 +97,16 @@ class NdisOidContractTests(unittest.TestCase):
         returned = IOCTL_C.index("BalancifyReceiveIndicationReturned(&adapter->pauseState)")
         self.assertLess(track, indicate)
         self.assertLess(indicate, returned)
+
+    def test_universal_inf_targets_both_wdk_architectures_and_ndis_68(self):
+        self.assertRegex(INF, r"(?m)^DriverPackageType\s*=\s*Universal\s*$")
+        self.assertRegex(INF, r"(?m)^%Provider%\s*=\s*Balancify,\s*NTamd64,\s*NTarm64\s*$")
+        for architecture in ("NTamd64", "NTarm64"):
+            self.assertIn(f"[Balancify.{architecture}]", INF)
+            self.assertRegex(INF, rf"(?s)\[Balancify\.{architecture}\].*?Balancify\.ndi, ROOT\\Balancify")
+        self.assertRegex(INF, r"(?m)^HKR, Parameters, MajorNdisVersion, .*?, 6\s*$")
+        self.assertRegex(INF, r"(?m)^HKR, Parameters, MinorNdisVersion, .*?, 80(?:\s|;)")
+        self.assertIn("ServiceBinary = %12%\\balancify.sys", INF)
 
     def test_raw_ip_inf_and_ndis_attributes_agree(self):
         self.assertRegex(INF, r"(?m)^\*MediaType\s*=\s*19\s*;\s*NdisMediumIP")

@@ -4,7 +4,7 @@
 // load with Driver Verifier and packet loopback through it.
 //
 // Build: msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64
-// Requires WDK 10.0.22621+, SDK 10.0.22621+.
+// CI build kit: Microsoft WDK NuGet 10.0.26100.6584 + Windows SDK 10.0.26100.
 //
 // References:
 // - NDIS 6.8 miniport driver model (Windows Driver Kit docs)
@@ -15,7 +15,7 @@
 
 // Forward decls
 DRIVER_INITIALIZE DriverEntry;
-DRIVER_UNLOAD DriverUnload;
+EVT_WDF_DRIVER_UNLOAD DriverUnload;
 MINIPORT_INITIALIZE MiniportInitializeEx;
 MINIPORT_HALT MiniportHaltEx;
 MINIPORT_PAUSE MiniportPause;
@@ -118,7 +118,7 @@ static NDIS_MINIPORT_DRIVER_CHARACTERISTICS gCharacteristics = {
 };
 
 _Use_decl_annotations_
-NDIS_STATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
     NDIS_STATUS status;
     WDF_DRIVER_CONFIG wdfConfig;
     WDFDRIVER wdfDriver;
@@ -149,8 +149,8 @@ NDIS_STATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPat
 }
 
 _Use_decl_annotations_
-VOID DriverUnload(PDRIVER_OBJECT DriverObject) {
-    UNREFERENCED_PARAMETER(DriverObject);
+VOID DriverUnload(WDFDRIVER Driver) {
+    UNREFERENCED_PARAMETER(Driver);
     if (gDriverHandle) {
         NdisMDeregisterMiniportDriver(gDriverHandle);
         gDriverHandle = NULL;
@@ -379,7 +379,7 @@ VOID MiniportSendNetBufferLists(
             }
             NdisReleaseSpinLock(&adapter->lock);
         }
-        NET_BUFFER_LIST_STATUS(curr, paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE);
+        NET_BUFFER_LIST_STATUS(curr) = paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE;
 
         if (sendFlags & NDIS_SEND_FLAGS_DISPATCH_LEVEL) {
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);

@@ -1,6 +1,6 @@
 ; Balancify NDIS virtual miniport INF — HVCI-ready, test-signing, S15
 ; For attestation signing, HLK HVCI readiness, VBS/MI VM
-; WDK 10.0.22621+, NDIS 6.8, KMDF 1.33, Universal
+; WDK/SDK 10.0.26100, NDIS 6.8, KMDF 1.33, Universal; CI kit 10.0.26100.6584
 
 [Version]
 Signature = "$WINDOWS NT$"
