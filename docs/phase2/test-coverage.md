@@ -1,7 +1,7 @@
 # Test coverage — 261 Linux / 260 Windows Rust tests + 7 SBOM tool tests, what is covered
 
 Date: 2026-10-22
-Status: continuous; push run 39787330013 and PR run 39787341195 passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture/unsigned-status validation, INF contract tests, and the fail-closed MTU contract test
+Status: continuous; push run 39790140291 and PR run 39790148235 passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture/unsigned-status validation, INF contract tests, and the fail-closed MTU contract test
 
 ## Counts
 
@@ -42,13 +42,13 @@ Status: continuous; push run 39787330013 and PR run 39787341195 passed all six j
 - SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-Total: 259 Rust tests passed on Linux and 258 on Windows in CI (the Unix-only state-path test is cfg-gated), plus 7 Python SBOM tests and standards-parser validation. Current local contract checks add 21 Python CI tests (including PE architecture and unsigned-artifact parser cases) and 9 driver packet/OID/INF tests; project XML parsing and `git diff --check` also pass. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
+Total: 259 Rust tests passed on Linux and 258 on Windows in CI (the Unix-only state-path test is cfg-gated), plus 7 Python SBOM tests and standards-parser validation. Current local contract checks add 23 Python CI tests (including PE architecture and unsigned-artifact parser and portal-status cases) and 9 driver packet/OID/INF tests; project XML parsing and `git diff --check` also pass. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 
 - `Cargo.lock` is committed and checked by the dependency audit; no lockfile regeneration was needed for this phase.
 - Simulated paths are not netem (delay and loss applied to frames in discrete-time rig, S2c real measurements pending, harness exists netem-rig.sh + throughput.rs)
-- x64 and ARM64 WDK compile/link, PE machine-type and unsigned-status checks, and INF architecture/version contract tests passed in push run 39787330013 using pinned WDK 10.0.26100.6584 with signing disabled; both `.sys` artifacts are unsigned and are not installation/runtime evidence.
+- x64 and ARM64 WDK compile/link, PE machine-type and unsigned-status checks, and INF architecture/version contract tests passed in push run 39790140291 using pinned WDK 10.0.26100.6584 with signing disabled; both `.sys` artifacts are unsigned and are not installation/runtime evidence.
 - Miniport in the loop is not yet the S2b socket path: test-signed installation, Driver Verifier, HVCI/VM, and packet-path tests remain pending.
 - Wire-v2 FlowData has authenticated selective FlowAck and bounded alternate-path RTO repair; CI tests tunnel and service behavior, but real network loss/reordering and NDIS integration remain untested.
 - Retransmission entries and cumulative ACK matching are keyed by `(session, seq)`; per-session Data sequence spaces coexist with a shared bounded byte budget.

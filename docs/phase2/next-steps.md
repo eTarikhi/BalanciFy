@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-22
-Status: continuous on `arena/4c0db240-balancify`; PR #18 is open. Push run `39787330013` and PR run `39787341195` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status verification, and INF contract tests. Hardware/product gates remain pending.
+Status: continuous on `arena/81ef53da-balancify`; PR #18 merged as `a1ec9b0`. Push run `39790140291` and PR run `39790148235` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status verification, and INF contract tests. Hardware/product gates remain pending.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -12,14 +12,14 @@ User instruction: "continue the development process without stopping to report" 
 - Fixed format! escaping (remove backslash+quote) and on_ack_with_rtt arg order (None, now)
 - Support bundle per-path ECN/delay diag (cc methods ecn_ce, delay_events_path, rtt_min, rtt_last, CongestionDiag per_path Vec<PathCongestionDiag> with cwnd/in_flight/ecn_ce/delay_events/rtt_min/last_ms, test bundle_includes_per_path_ecn_delay)
 - Driver WDF control device + IOCTLs (SET_MTU, GET_STATS, INJECT_NBL, SET_QUANTA) for G2 S2b, length-validated, WdfDriverCreate, BalancifyCreateControlDevice in MiniportInitializeEx, non-ASCII fixed
-- PR #18 adds pinned x64 and ARM64 WDK/VS 2022 compile-link CI with diagnostics and unsigned artifacts; push run 39787330013 passed all six jobs, including PE and INF contract verification. Static review makes SET_MTU reject changes that would diverge from NDIS-cached initialization/restart MTU attributes. Signed install, Verifier/HVCI, VM, and packet path remain pending.
+- Merged PR #18 added pinned x64 and ARM64 WDK/VS 2022 compile-link CI with diagnostics and unsigned artifacts; push run 39790140291 passed all six jobs, including PE and INF contract verification. Static review makes SET_MTU reject changes that would diverge from NDIS-cached initialization/restart MTU attributes. Signed install, Verifier/HVCI, VM, and packet path remain pending.
 - App shell relay & bundle modes (Sec.8.2) — render relay stats, support bundle redacted, ECN/delay counters
 - ECN bench (cwnd 80% ECN vs 50% loss, delay 10% reduction, per-path ECN/delay/rtt_min/last)
 - Docs: ADR-0021 ETW wiring, ADR-0022 support bundle per-path, ADR-0023 relay ECN stats, ADR-0024 driver WDF control, ADR-0025 app shell relay & bundle, ADR-0026 ECN bench, plus continuous-development-log, security-hardening, test-coverage
 - Control-frame authentication/replay hardening and relay/session idle protections; wire v2 selective FlowAck for peer-receipt capacity sampling, with bounded per-session accounting and duplicate re-ACK (CI 39476560004).
 - Client transport hardening (per-user absolute state roots, relay-source filtering, fatal UDP send errors, and single-use handshake responses) merged in PR #6; prior PR #5 was closed as superseded.
 - FlowData selective repair merged in PR #7 / ADR-0036: retain bounded plaintext until authenticated FlowAck, reinject once after RTO on an alternate path, and rely on replay rejection plus duplicate re-ACK to preserve at-most-once delivery. Tunnel and service timer regressions, including uplink removal before retry, pass.
-- PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. PR #18 adds pinned x64/ARM64 WDK builds and fixes the compiler/linker findings. CI run `39787330013` compiled/linked both architectures, verified their PE machine types and empty certificate tables, and exercised the INF architecture/version contract with signing disabled; this does not establish installation or runtime behavior. The TX ring and functional quanta control remain incomplete.
+- PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. Merged PR #18 added pinned x64/ARM64 WDK builds and fixes the compiler/linker findings. CI run `39790140291` compiled/linked both architectures, verified their PE machine types and empty certificate tables, and exercised the INF architecture/version contract with signing disabled; this does not establish installation or runtime behavior. The TX ring and functional quanta control remain incomplete.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
 CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success per-path diag, 39234403709 success, 39234666177 success, 39234937199 success, 39235214291 success, 39235545738 success driver, 39235817239 success, 39236091314 success app, 39236360963 success, 39236639218 success ECN bench, 39236895693 success, 39237159469 success, 39237431952 success test coverage
@@ -37,7 +37,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 ## Process
 
 - Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; twelve SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
-- Use `gh run list --limit 1 --branch arena/4c0db240-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
+- Use `gh run list --limit 1 --branch arena/81ef53da-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
 - Workspace dependency policy: `[workspace.dependencies]` intentionally empty per blueprint Sec.4.8 — do not add unpinned dependencies casually

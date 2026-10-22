@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Latest code-validation head: `b326a7a` on `arena/4c0db240-balancify`; PR #18 remains open. Push run `39787330013` and PR run `39787341195` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status validation, INF contract tests, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. Both driver binaries and build logs are seven-day artifacts. This is software compile/link evidence only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
+Latest code-validation head: `f46bac2` was merged into main by PR #18 as `a1ec9b0`; current continuation branch is `arena/81ef53da-balancify`. Push run `39790140291` and PR run `39790148235` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status validation, INF contract tests, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. Both driver binaries and build logs are seven-day artifacts. This is software compile/link evidence only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
 
 ## Progression
 
@@ -110,6 +110,8 @@ Latest code-validation head: `b326a7a` on `arena/4c0db240-balancify`; PR #18 rem
 - 39739125907 success: PR #18 head `bbf3586`; all six jobs passed, including x64/ARM64 WDK compile/link and PE machine-type verification
 - 39787330013 success: commit `b326a7a` passed dual-architecture WDK compile/link, PE machine type and empty certificate-table checks, and x64/ARM64 INF contract tests; all six push jobs passed
 - 39787341195 success: PR #18 head `b326a7a`; all six jobs passed, including WDK, unsigned PE, and INF checks
+- 39790140291 success: PR #18 code head `f46bac2`; all six push jobs passed, including x64/ARM64 unsigned PE checks
+- 39790148235 success: PR #18 code head `f46bac2`; all six PR checks passed; PR #18 merged to main as `a1ec9b0`
 
 ## Historical snapshot (pre-Arena continuation)
 
