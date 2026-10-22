@@ -1,7 +1,7 @@
 # Test coverage — 261 Linux / 260 Windows Rust tests + 7 SBOM tool tests, what is covered
 
 Date: 2026-10-22
-Status: continuous; PR #18 CI run 39710825203 passed, including pinned unsigned x64 WDK compile/link
+Status: continuous; PR #18 CI run 39729084768 passed, including pinned unsigned x64 WDK compile/link and the fail-closed MTU contract test
 
 ## Counts
 

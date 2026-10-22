@@ -1,7 +1,7 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-22
-Status: continuous; active branch `arena/4c0db240-balancify`, PR #18 open at `01761d1`; CI run `39710825203` passed all five jobs, including unsigned x64 WDK compile/link. Signed installation and hardware acceptance remain pending.
+Status: continuous; active branch `arena/4c0db240-balancify`, PR #18 open at `af51705`; push run `39729079329` and PR run `39729084768` passed all five jobs, including unsigned x64 WDK compile/link. Signed installation and hardware acceptance remain pending.
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
@@ -9,7 +9,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## WDK compile continuation (2026-10-22)
 
-- PR #18 adds a pinned Windows 2022 / VS 2022 / WDK 10.0.26100.6584 x64 build, compiler-log reporting, and seven-day unsigned-driver/build-log artifacts. Initial real WDK compilation exposed warning, signature, API, linker-flag, and library-path issues; these were corrected iteratively. CI run `39710066355` and PR run `39710825203` passed all five jobs. The unsigned `balancify.sys` artifact is build evidence only.
+- PR #18 adds a pinned Windows 2022 / VS 2022 / WDK 10.0.26100.6584 x64 build, compiler-log reporting, and seven-day unsigned-driver/build-log artifacts. Initial real WDK compilation exposed warning, signature, API, linker-flag, and library-path issues; these were corrected iteratively. CI `39710066355`, push run `39729079329`, and PR run `39729084768` passed all five jobs. The unsigned `balancify.sys` artifact is build evidence only.
 - The compiler-discovered code fixes align `DriverEntry` and WDF unload callback signatures, use the NDIS NBL status lvalue, remove the undefined port macro, scope C4201 suppression to WDK headers, and fix WDF header/API inclusion.
 - Static review found custom `SET_MTU` could mutate only driver-local MTU while NDIS caches maximum frame size from initialization/restart. Microsoft documents that NDIS handles OID_GEN_MAXIMUM_FRAME_SIZE for NDIS 6+ and that its value is supplied during initialization/restart. The IOCTL is now fail-closed: it confirms the configured MTU and returns `STATUS_NOT_SUPPORTED` for changes until a proper restart/reconfiguration design exists. A portable source-contract test guards that behavior.
 - Remaining S2b gaps are real: no signed install, Driver Verifier, HVCI VM/HLK, packet-path behavior, working TX ring, or operational quanta scheduler. Do not treat CI success as G2 acceptance.

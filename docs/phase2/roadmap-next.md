@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
 Date: 2026-10-22
-Status: in progress; PR #18 (`01761d1`) CI run `39710825203` passed all five jobs, including unsigned x64 WDK compile/link. Hardware/product acceptance gates remain pending.
+Status: in progress; PR #18 (`af51705`) CI run `39729084768` passed all five jobs, including unsigned x64 WDK compile/link and the fail-closed MTU contract test. Hardware/product acceptance gates remain pending.
 
 ## Completed since last green (39191895800)
 

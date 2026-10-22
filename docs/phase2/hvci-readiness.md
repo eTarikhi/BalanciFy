@@ -21,7 +21,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - Adapter context: miniportAdapterHandle, netBufferListPool, controlDevice, spinlock, paused, mtu, tx/rx counters
 - NBL pool: `NdisAllocateNetBufferListPool` with `fAllocateNetBuffer=TRUE`, `ProtocolId=NDIS_PROTOCOL_ID_DEFAULT`, `PoolTag=BALANCIFY_POOL_TAG`, created in InitializeEx, freed in HaltEx
 - No executable pools: uses `NormalPoolPriority` (NonPagedPoolNx equivalent via NDIS), no `NonPagedPoolExecute`, no inline assembly, no RWX sections
-- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Run 39710066355 successfully compiled and linked the x64 driver with signing disabled; the unsigned `balancify.sys` and build log were uploaded as seven-day artifacts. This validates the CI compile/link path only—not signed installation, Driver Verifier, HVCI, or packet-path behavior.
+- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Run 39729084768 successfully compiled and linked the x64 driver with signing disabled; the unsigned `balancify.sys` and build log were uploaded as seven-day artifacts. This validates the CI compile/link path only—not signed installation, Driver Verifier, HVCI, or packet-path behavior.
 - Send path: service transmit ring is absent; each NET_BUFFER increments `txErrors` and completes with `NDIS_STATUS_FAILURE` (or `NDIS_STATUS_PAUSED` during pause). TX success/byte counters remain zero.
 - Return path: for RX NBLs injected via IOCTL, frees MDL chain via `NdisFreeMdl` then `NdisFreeNetBufferList`
 
@@ -73,10 +73,10 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 ## Lab progress
 
 - Code: NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists implemented (ADR-0030), length validation, SDDL, no executable pools
-- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI run 39710066355 installed the pinned WDK and successfully compiled/linked `balancify.sys` on `windows-2022`/VS 2022 with `SignMode=Off`; unsigned driver and log artifacts are retained for seven days. No signed install or hardware acceptance is implied.
+- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI run 39729084768 installed the pinned WDK and successfully compiled/linked `balancify.sys` on `windows-2022`/VS 2022 with `SignMode=Off`; unsigned driver and log artifacts are retained for seven days. No signed install or hardware acceptance is implied.
 - Docs: this file + `clean-machine-test.md` + `throughput-rows.md` + `lab-progress.md`
 - Real VM run: pending (requires a WDK-built driver, Hyper-V VM Gen2 Secure Boot/vTPM/VBS, test-signing, and pnputil install)
-- CI: run 39710066355 passed all five jobs: x64 WDK compile/link, Rust Windows and Linux tests, lab analysis tests, and dependency/crypto audit. It uploaded `balancify-driver-unsigned-x64` (8,035 bytes) and `balancify-wdk-build-log` artifacts with seven-day retention. This is software/CI evidence only; signed installation, Driver Verifier, HVCI/VM, and packet-path behavior remain unverified.
+- CI: PR run 39729084768 passed all five jobs: x64 WDK compile/link, Rust Windows and Linux tests, lab analysis tests, and dependency/crypto audit. It uploaded `balancify-driver-unsigned-x64` and `balancify-wdk-build-log` artifacts with seven-day retention. This is software/CI evidence only; signed installation, Driver Verifier, HVCI/VM, and packet-path behavior remain unverified.
 
 ## Next actions
 

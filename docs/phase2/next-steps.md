@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-22
-Status: continuous on `arena/4c0db240-balancify`; PR #18 is open and CI run `39710825203` passed all five jobs, including unsigned x64 WDK compile/link. Hardware/product gates remain pending.
+Status: continuous on `arena/4c0db240-balancify`; PR #18 is open at `af51705`. Push run `39729079329` and PR run `39729084768` passed all five jobs, including unsigned x64 WDK compile/link and fail-closed MTU behavior. Hardware/product gates remain pending.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 

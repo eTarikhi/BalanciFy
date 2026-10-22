@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Latest continuation: `arena/4c0db240-balancify`, commit `01761d1`; PR #18 is open. PR CI run `39710825203` passed all five jobs: x64 unsigned WDK compile/link, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. The build artifact and log are seven-day artifacts. This proves software compilation only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
+Latest continuation: `arena/4c0db240-balancify`, commit `af51705`; PR #18 is open. Push run `39729079329` and PR run `39729084768` passed all five jobs: x64 unsigned WDK compile/link, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. The build artifact and log are seven-day artifacts. This proves software compilation only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
 
 ## Progression
 
@@ -97,6 +97,8 @@ Latest continuation: `arena/4c0db240-balancify`, commit `01761d1`; PR #18 is ope
 - 39710066355 success: unsigned x64 WDK compile/link, artifact + log uploaded; all five jobs passed
 - 39710470594 success: PR #18 validation on then-current head
 - 39710825203 success: PR #18 validation with all five jobs green
+- 39729079329 success: fail-closed MTU contract change and updated phase evidence; all five push jobs passed
+- 39729084768 success: PR #18 head `af51705`; all five jobs passed including unsigned x64 WDK compile/link
 
 ## Historical snapshot (pre-Arena continuation)
 
