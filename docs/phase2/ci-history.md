@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Latest continuation: `arena/4c0db240-balancify`, commit `baf3902`; PR #18 is open. Push run `39736821998` passed all six jobs, including unsigned x64 and ARM64 WDK compile/link, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. Both driver binaries and build logs are seven-day artifacts. PR run `39736828475` also passed all six jobs on the same head. This is software compile/link evidence only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
+Latest code-validation head: `bbf3586` on `arena/4c0db240-balancify`; PR #18 remains open. Push run `39739119850` and PR run `39739125907` passed all six jobs, including unsigned x64/ARM64 WDK compile/link and PE machine-type validation, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. Both driver binaries and build logs are seven-day artifacts. This is software compile/link evidence only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
 
 ## Progression
 
@@ -106,6 +106,8 @@ Latest continuation: `arena/4c0db240-balancify`, commit `baf3902`; PR #18 is ope
 - 39734805048 failure: ARM64 still rejected the 6.20 API version; x64 remained green
 - 39736821998 success: select NDIS 6.8 explicitly; all six push jobs passed, including unsigned x64 and ARM64 WDK compile/link
 - 39736828475 success: PR #18 head `baf3902`; all six jobs passed, including unsigned x64 and ARM64 WDK compile/link
+- 39739119850 success: dual-architecture WDK compile/link and PE machine-type verification; all six push jobs passed
+- 39739125907 success: PR #18 head `bbf3586`; all six jobs passed, including x64/ARM64 WDK compile/link and PE machine-type verification
 
 ## Historical snapshot (pre-Arena continuation)
 
