@@ -60,7 +60,7 @@ strings x64\Release\balancify.sys | findstr BlaB
 - `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8, WDF
 
 **HVCI readiness trio (S15):**
-- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. An x64 WDK build job using pinned WDK NuGet 10.0.26100.6584 is now configured in CI; its first result and all real VM validation remain pending.
+- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. The pinned x64 WDK build job is configured in CI; first run 39706740581 installed WDK but failed the MSBuild step. This is not a build pass or runtime validation.
 
 **Exception policy (Sec.11.2):**
 If G3/G7 blocked >4 weeks by signing/HVCI, product owner may ship flow-level only with bundled Wintun signed DLL (single allowed third-party runtime artifact, disclosed), while bonding + driver continue; must be retired next minor release.

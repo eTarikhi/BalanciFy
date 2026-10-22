@@ -170,7 +170,23 @@ jobs:
           target: amd64
       - name: Build x64 release driver
         shell: pwsh
-        run: msbuild driver\balancify.vcxproj /m /nologo /p:Configuration=Release /p:Platform=x64
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'wdk-build.log'
+          & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=x64 2>&1 | Tee-Object -FilePath $log
+          $buildExitCode = $LASTEXITCODE
+          "### WDK x64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if (Test-Path $log) {
+            Get-Content $log -Tail 160 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          if ($buildExitCode -ne 0) { exit $buildExitCode }
+      - name: Upload WDK build log
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-wdk-build-log
+          path: ${{ runner.temp }}/wdk-build.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Still pending: Driver Verifier / HVCI VM execution, WinUI shell build,
   # clean-machine installer matrix, and reviewed VEX generation.
