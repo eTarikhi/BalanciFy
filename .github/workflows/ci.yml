@@ -206,5 +206,55 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  driver-build-arm64:
+    name: WDK driver build (ARM64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+        with:
+          vs-version: '[17.0,18.0)'
+          msbuild-architecture: x64
+      - name: Install pinned Microsoft WDK
+        uses: microsoft/windows-drivers-rs/.github/actions/install-wdk@c4ae6815484398dc9d28fbe97e6c02d44f9f49a8
+        with:
+          version: 10.0.26100.6584
+          source: nuget
+          host: amd64
+          target: arm64
+      - name: Build ARM64 release driver
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'wdk-arm64-build.log'
+          & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=ARM64 /p:SignMode=Off 2>&1 | Tee-Object -FilePath $log
+          $buildExitCode = $LASTEXITCODE
+          $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
+          "### WDK ARM64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $tail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $checkId = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "WDK driver build (ARM64)" and .status == "in_progress") | .id][0] // empty'
+          if ($checkId) {
+            $title = if ($buildExitCode -eq 0) { 'WDK ARM64 build results' } else { 'WDK ARM64 build diagnostics' }
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
+          }
+          if ($buildExitCode -ne 0) { exit $buildExitCode }
+      - name: Upload unsigned ARM64 driver
+        if: success()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-driver-unsigned-arm64
+          path: driver/ARM64/Release/balancify.sys
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload WDK ARM64 build log
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-wdk-arm64-build-log
+          path: ${{ runner.temp }}/wdk-arm64-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Still pending: Driver Verifier / HVCI VM execution, WinUI shell build,
   # clean-machine installer matrix, and reviewed VEX generation.

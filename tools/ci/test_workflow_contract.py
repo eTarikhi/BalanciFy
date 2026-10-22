@@ -50,6 +50,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIsNotNone(linker)
         self.assertNotIn("/Qspectre", linker.group(0))
         self.assertNotIn("$(DDK_LIB_PATH)\\wdf", project)
+        self.assertIn("driver-build-arm64:", workflow)
+        arm64_job = workflow.split("driver-build-arm64:", 1)[1].split("# Still pending:", 1)[0]
+        self.assertIn("name: WDK driver build (ARM64)", arm64_job)
+        self.assertIn("target: arm64", arm64_job)
+        self.assertIn("/p:Platform=ARM64", arm64_job)
+        self.assertIn("name: balancify-driver-unsigned-arm64", arm64_job)
 
 
 if __name__ == "__main__":
