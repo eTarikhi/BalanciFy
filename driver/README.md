@@ -60,7 +60,7 @@ strings x64\Release\balancify.sys | findstr BlaB
 - `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8, WDF
 
 **HVCI readiness trio (S15):**
-- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. The pinned x64 WDK build job uses `windows-2022` with VS 2022 and successfully compiled/linked `balancify.sys` in run 39709760791; post-build signing then failed because the NuGet WDK resolved a missing x86 `signtool.exe`. CI now requests unsigned output and will publish that `.sys` as a short-lived artifact. A successful unsigned build still does not constitute signed install or hardware validation.
+- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. CI run 39710066355 passed the pinned x64 WDK compile/link on `windows-2022` with VS 2022 and uploaded `balancify.sys` as the `balancify-driver-unsigned-x64` seven-day artifact (8,035 bytes). This is unsigned software build evidence only; no signed install or hardware validation is claimed.
 
 **Exception policy (Sec.11.2):**
 If G3/G7 blocked >4 weeks by signing/HVCI, product owner may ship flow-level only with bundled Wintun signed DLL (single allowed third-party runtime artifact, disclosed), while bonding + driver continue; must be retired next minor release.

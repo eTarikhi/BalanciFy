@@ -1,6 +1,6 @@
 # HVCI readiness trio — S15
 
-Date: 2026-10-19
+Date: 2026-10-22
 Status: in progress (code ready, real VM run pending)
 
 ## Requirement
@@ -21,7 +21,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - Adapter context: miniportAdapterHandle, netBufferListPool, controlDevice, spinlock, paused, mtu, tx/rx counters
 - NBL pool: `NdisAllocateNetBufferListPool` with `fAllocateNetBuffer=TRUE`, `ProtocolId=NDIS_PROTOCOL_ID_DEFAULT`, `PoolTag=BALANCIFY_POOL_TAG`, created in InitializeEx, freed in HaltEx
 - No executable pools: uses `NormalPoolPriority` (NonPagedPoolNx equivalent via NDIS), no `NonPagedPoolExecute`, no inline assembly, no RWX sections
-- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Source compilation and linking now succeed; the first full MSBuild failed only in the post-build signing task because the NuGet WDK pointed to a missing x86 `signtool.exe`. CI now requests an unsigned build; successful unsigned compilation will not constitute signed installation or HVCI validation.
+- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Run 39710066355 successfully compiled and linked the x64 driver with signing disabled; the unsigned `balancify.sys` and build log were uploaded as seven-day artifacts. This validates the CI compile/link path only—not signed installation, Driver Verifier, HVCI, or packet-path behavior.
 - Send path: counts txPackets/txBytes, completes NBL immediately (skeleton, real impl copies to service ring)
 - Return path: for RX NBLs injected via IOCTL, frees MDL chain via `NdisFreeMdl` then `NdisFreeNetBufferList`
 
@@ -73,14 +73,14 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 ## Lab progress
 
 - Code: NBL pool + INJECT_NBL via NdisMIndicateReceiveNetBufferLists implemented (ADR-0030), length validation, SDDL, no executable pools
-- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI installed WDK successfully and compiled/linked `balancify.sys`; the post-build signing task failed because the WDK NuGet install resolved `signtool.exe` to a missing x86 path. The workflow now uses `windows-2022`/VS 2022 and requests unsigned output (`SignMode=Off`); its result is pending.
+- Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI run 39710066355 installed the pinned WDK and successfully compiled/linked `balancify.sys` on `windows-2022`/VS 2022 with `SignMode=Off`; unsigned driver and log artifacts are retained for seven days. No signed install or hardware acceptance is implied.
 - Docs: this file + `clean-machine-test.md` + `throughput-rows.md` + `lab-progress.md`
 - Real VM run: pending (requires a WDK-built driver, Hyper-V VM Gen2 Secure Boot/vTPM/VBS, test-signing, and pnputil install)
-- CI: the x64 job pins Microsoft WDK NuGet 10.0.26100.6584 and uses `windows-2022` with VS 2022/MSBuild 17.x, captures diagnostics in the check summary, and uploads a short-lived build log. Run 39709760791 compiled and linked `balancify.sys`, then failed in post-build signing because `signtool.exe` was resolved to a nonexistent x86 WDK path. The next run requests unsigned output and will retain the `.sys` as a short-lived artifact if successful. This does not establish signed installation, Driver Verifier, HVCI, or packet-path behavior.
+- CI: run 39710066355 passed all five jobs: x64 WDK compile/link, Rust Windows and Linux tests, lab analysis tests, and dependency/crypto audit. It uploaded `balancify-driver-unsigned-x64` (8,035 bytes) and `balancify-wdk-build-log` artifacts with seven-day retention. This is software/CI evidence only; signed installation, Driver Verifier, HVCI/VM, and packet-path behavior remain unverified.
 
 ## Next actions
 
-1. Validate the new x64 WDK CI job; resolve any compile issues, then archive the build log and unsigned output as evidence.
+1. Preserve the unsigned CI artifact as software evidence; review the driver lifecycle and prepare a test-signed, isolated VM build.
 2. Review remaining NDIS/WDF lifecycle issues and decide the safe first-load procedure.
 3. Run Driver Verifier on a test-signed VM with `0x209BB` flags; record bugcheck or clean run.
 4. Run the HLK HVCI readiness test and VBS/Memory-Integrity VM check; record pass/fail and traffic behavior.
@@ -90,5 +90,5 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 
 - Microsoft Learn: VBS / Memory Integrity OEM guidance, Driver Verifier, HLK tests, NDIS 6.8 miniport
 - Blueprint Sec.9.4, Sec.9.5, S15, G3
-- Code: `driver/src/miniport.c`, `driver/src/ioctl.c`, `driver/balancify.vcxproj` (to be created), `driver/balancify.inf` (to be created)
+- Code: `driver/src/miniport.c`, `driver/src/ioctl.c`, `driver/balancify.vcxproj`, `driver/balancify.inf`
 - CI: 4d05142 success (Rust only), f89a617 success
