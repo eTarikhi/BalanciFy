@@ -4,7 +4,6 @@
 // CI build kit: WDK 10.0.26100.6584. Test signing and Driver Verifier are separate validation steps.
 // References: blueprint Sec.6.1 TAP-like adapter, Sec.4.5 pause/resume, Sec.8.2 diagnostics, C2
 
-#include <ntstrsafe.h>
 #include "miniport.h"
 #include "ip_packet_validation.h"
 
