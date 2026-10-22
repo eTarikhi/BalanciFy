@@ -32,7 +32,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
   - `IOCTL_BALANCIFY_SET_MTU`: ULONG mtu, validates 576..9000 and only confirms the configured value; different values return `STATUS_NOT_SUPPORTED` because dynamic NDIS MTU reconfiguration is not implemented
   - `IOCTL_BALANCIFY_GET_STATS`: returns BALANCIFY_STATS (tx/rx packets/bytes, mtu, paused)
   - `IOCTL_BALANCIFY_INJECT_NBL`: raw IPv4/IPv6 packet limited by the current MTU; validates version-specific header and exact declared packet length, returns `STATUS_DEVICE_NOT_READY` while paused, then allocates an MDL/NBL and indicates the IP-only NBL via `NdisMIndicateReceiveNetBufferLists`. The miniport/INF now use `NdisMediumIP` / `*MediaType = 19` with `LowerRange = nolower`, not Ethernet framing. WDK/runtime validation remains pending.
-  - `IOCTL_BALANCIFY_SET_QUANTA`: array of (u8 path, u64 quanta), validates count <=256 and exact element sizing, but currently only logs the count; no scheduling state is changed
+  - `IOCTL_BALANCIFY_SET_QUANTA`: array of (u8 path, u64 quanta), validates count <=256 and exact element sizing, then returns STATUS_NOT_SUPPORTED because no scheduling state is wired to the driver
 - Length validation on all IOCTLs, no METHOD_NEITHER, no direct user pointer dereference
 
 ### Verifier flags

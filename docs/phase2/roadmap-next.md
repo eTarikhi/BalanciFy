@@ -48,7 +48,7 @@ Status: in progress; PR #18 merged as `a1ec9b0`; validation runs `39799406998` a
 
 - `Cargo.lock` is committed and checked by the dependency audit.
 - Simulated paths are not netem — S2c/Rig B measurements remain pending; raw iperf3 link baselines are not end-to-end BalanciFy measurements.
-- Miniport source compiles/links for x64 in CI, but remains non-operational: unsigned artifact only, no test-signed install, Verifier/HVCI, VM, or packet-path run. The transmit ring is absent; SET_QUANTA remains a logging stub; SET_MTU now refuses changes that would diverge from NDIS-cached interface attributes.
+- Miniport source compiles/links for x64 in CI, but remains non-operational: unsigned artifact only, no test-signed install, Verifier/HVCI, VM, or packet-path run. The transmit ring is absent; SET_QUANTA validates basic sizing and fails with STATUS_NOT_SUPPORTED until scheduler integration; SET_MTU refuses changes that would diverge from NDIS-cached interface attributes.
 - The local service adapter uses loopback TCP only; production named-pipe ACLs and Windows caller authentication remain pending.
 - Single session per service default — multi-session demux exists but service opens one session unless per-flow/per-class toggled.
 - Wire-v2 FlowData uses authenticated selective FlowAck, and bounded RTO repair resends unacknowledged payload on an alternate path. CI tests the tunnel and service integration; real network loss/reordering and driver-path behavior remain unmeasured.

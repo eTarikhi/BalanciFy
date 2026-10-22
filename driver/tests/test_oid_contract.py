@@ -66,6 +66,19 @@ class NdisOidContractTests(unittest.TestCase):
         self.assertNotIn("adapter->mtu = mtu", body)
         self.assertNotIn("adapter->lookaheadSize =", body)
 
+    def test_unimplemented_quanta_scheduler_does_not_report_success(self):
+        quanta_case = re.search(
+            r"case IOCTL_BALANCIFY_SET_QUANTA:\s*\{(.*?)\n\s*\}\n\s*default:",
+            IOCTL_C,
+            re.S,
+        )
+        self.assertIsNotNone(quanta_case)
+        body = quanta_case.group(1)
+        self.assertIn("STATUS_INVALID_PARAMETER", body)
+        self.assertIn("STATUS_NOT_SUPPORTED", body)
+        self.assertNotIn("STATUS_SUCCESS", body)
+        self.assertNotIn("SET_QUANTA count=", body)
+
     def test_unimplemented_transmit_path_fails_instead_of_counting_success(self):
         send_callback = re.search(
             r"VOID MiniportSendNetBufferLists\(.*?\n\}", MINIPORT_C, re.S

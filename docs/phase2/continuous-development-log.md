@@ -1,11 +1,16 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-22
-Status: continuous; active branch `arena/81ef53da-balancify`, PR #18 merged as `a1ec9b0`, PR #19 open; push run `39799406998` and PR run `39799412825` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture and DYNAMIC_BASE/FORCE_INTEGRITY/NX_COMPAT checks, and the INF architecture/version contract tests. Signed installation and hardware acceptance remain pending.
+Status: continuous; active branch `arena/81ef53da-balancify`, PR #18 merged as `a1ec9b0`, PR #19 open at `b91b9ee`; push run `39811703258` and PR run `39811711106` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture and DYNAMIC_BASE/FORCE_INTEGRITY/NX_COMPAT checks, and INF source-contract tests. An InfVerif CI trial failed without retrievable diagnostics and was removed; no InfVerif/package validation is claimed. Signed installation and hardware acceptance remain pending.
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
 This log records what was done while continuing without stopping, after ADR-0015.
+
+## Follow-up hardening (2026-10-22)
+
+- CI runs `39805742120` and `39808776693` failed at the newly trialed InfVerif invocation; the available GitHub log API returned EOF and did not expose the cause. Rather than leave an opaque red check or claim validation, the InfVerif step was removed. Existing INF architecture/version source-contract tests remain; InfVerif, package install, and runtime validation are not claimed. Corrected push run `39811703258` and PR run `39811711106` passed all six jobs.
+- `SET_QUANTA` previously validated request size, logged a count, and returned `STATUS_SUCCESS` despite applying no scheduler weights. It now keeps malformed-length rejection but returns `STATUS_NOT_SUPPORTED` for well-formed requests until a scheduler consumes them. A source-contract regression test verifies the fail-closed behavior; current driver and phase docs were aligned. This corrects API truthfulness only; it does not implement quanta scheduling.
 
 ## WDK compile continuation (2026-10-22)
 

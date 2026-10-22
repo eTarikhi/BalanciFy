@@ -12,7 +12,7 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 
 **Known runtime/product gaps (not closed by the CI build):**
 - `IOCTL_BALANCIFY_SET_MTU` accepts a confirmation of the configured MTU, but rejects a different value with `STATUS_NOT_SUPPORTED`. NDIS handles OID_GEN_MAXIMUM_FRAME_SIZE for NDIS 6+ from initialization/restart attributes; this scaffold has no supported runtime reconfiguration path, so it must not mutate only the driver's local view ([Microsoft documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/oid-gen-maximum-frame-size)).
-- `IOCTL_BALANCIFY_SET_QUANTA` currently validates and logs the count only; no scheduler state is changed.
+- `IOCTL_BALANCIFY_SET_QUANTA` validates basic request sizing and returns `STATUS_NOT_SUPPORTED`; no scheduler consumes the weights yet, so the driver does not report a false success.
 - The transmit ring is not implemented; outbound NBLs deliberately complete with failure. End-to-end packet service behavior remains unavailable.
 
 **Signing & HVCI:**

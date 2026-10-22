@@ -316,13 +316,9 @@ VOID BalancifyEvtIoDeviceControl(
             status = STATUS_INVALID_PARAMETER; // max 256 paths
             break;
         }
-        status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
-        if (!NT_SUCCESS(status)) break;
-        // For skeleton: just log, real impl would update DRR weights via shared memory or service ring
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-            "Balancify: SET_QUANTA count=%lu\n",
-            (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA))));
-        status = STATUS_SUCCESS;
+        // No driver scheduler consumes these weights yet. Returning success
+        // would falsely claim that the requested policy was applied.
+        status = STATUS_NOT_SUPPORTED;
         break;
     }
     default:
