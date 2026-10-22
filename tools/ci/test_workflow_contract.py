@@ -46,6 +46,7 @@ class WorkflowContractTests(unittest.TestCase):
         linker = re.search(r"<Link>.*?</Link>", project, re.S)
         self.assertIsNotNone(linker)
         self.assertNotIn("/Qspectre", linker.group(0))
+        self.assertNotIn("$(DDK_LIB_PATH)\\wdf", project)
 
 
 if __name__ == "__main__":

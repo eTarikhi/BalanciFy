@@ -62,7 +62,7 @@
     </ClCompile>
     <Link>
       <AdditionalOptions>/integritycheck /DYNAMICBASE /NXCOMPAT /RELEASE %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalDependencies>$(DDK_LIB_PATH)\ndis.lib;$(DDK_LIB_PATH)\wdf\kmdf\x64\1.33\WdfLdr.lib;$(DDK_LIB_PATH)\wdf\kmdf\x64\1.33\WdfDriverEntry.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DDK_LIB_PATH)\ndis.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
