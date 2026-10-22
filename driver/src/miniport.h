@@ -1,15 +1,15 @@
 #pragma once
 
-// Pin the miniport role and minimum NDIS API contract before including the WDK
-// headers; ARM64 requires an explicit driver kind and version selection.
+// Pin the miniport role and NDIS 6.8 API contract before including the WDK
+// headers; ARM64 requires an explicit driver kind and a 6.3+ API selection.
 #ifndef NDIS_MINIPORT_DRIVER
 #define NDIS_MINIPORT_DRIVER 1
 #endif
-#ifndef NDIS620_MINIPORT
-#define NDIS620_MINIPORT 1
+#ifndef NDIS680_MINIPORT
+#define NDIS680_MINIPORT 1
 #endif
-#ifndef NDIS_SUPPORT_NDIS620
-#define NDIS_SUPPORT_NDIS620 1
+#ifndef NDIS_SUPPORT_NDIS680
+#define NDIS_SUPPORT_NDIS680 1
 #endif
 
 // The WDK headers intentionally use anonymous unions; keep /WX enabled for

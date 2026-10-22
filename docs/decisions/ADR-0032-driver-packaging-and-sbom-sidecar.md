@@ -33,7 +33,7 @@ Previously:
 ### Driver packaging
 
 **vcxproj** `driver/balancify.vcxproj` (9115e4f):
-- WDK 10.0.22621+, KMDF 1.33, Universal, NDIS620_MINIPORT, NDIS 6.8
+- WDK 10.0.22621+, KMDF 1.33, Universal, NDIS680_MINIPORT, NDIS 6.8
 - HVCI flags: `/integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre`
 - PoolTag `BlaB`, Spectre mitigation true, `fAllocateNetBuffer=TRUE` NBL pool
 - Build: `msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64`

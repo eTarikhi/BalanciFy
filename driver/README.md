@@ -62,7 +62,7 @@ strings x64\Release\balancify.sys | findstr BlaB
 - `driver/miniport.inf` legacy skeleton, use balancify.inf for new builds
 
 **vcxproj:**
-- `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8, WDF
+- `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.26100.0, NDIS680_MINIPORT, NDIS 6.8, WDF
 
 **HVCI readiness trio (S15):**
 - Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. CI run 39710066355 passed the pinned x64 WDK compile/link on `windows-2022` with VS 2022 and uploaded `balancify.sys` as the `balancify-driver-unsigned-x64` seven-day artifact (8,035 bytes). This is unsigned software build evidence only; no signed install or hardware validation is claimed.

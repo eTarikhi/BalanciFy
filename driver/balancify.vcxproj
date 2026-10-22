@@ -57,7 +57,7 @@
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
       <PoolTag>BlaB</PoolTag>
-      <PreprocessorDefinitions>NDIS620_MINIPORT=1;NDIS_SUPPORT_NDIS620=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDIS680_MINIPORT=1;NDIS_SUPPORT_NDIS680=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>

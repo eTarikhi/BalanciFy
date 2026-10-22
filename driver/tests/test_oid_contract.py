@@ -12,7 +12,7 @@ MINIPORT_H = (ROOT / "driver/src/miniport.h").read_text(encoding="utf-8")
 
 class NdisOidContractTests(unittest.TestCase):
     def test_ndis_version_contract_is_defined_before_wdk_headers(self):
-        for macro in ("NDIS_MINIPORT_DRIVER", "NDIS620_MINIPORT", "NDIS_SUPPORT_NDIS620"):
+        for macro in ("NDIS_MINIPORT_DRIVER", "NDIS680_MINIPORT", "NDIS_SUPPORT_NDIS680"):
             define = MINIPORT_H.index(f"#define {macro} 1")
             self.assertLess(define, MINIPORT_H.index("#include <ndis.h>"))
 
