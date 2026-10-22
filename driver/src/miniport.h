@@ -1,5 +1,14 @@
 #pragma once
 
+// Pin the minimum NDIS API contract before including the WDK headers; keep the
+// version selection explicit across x64 and ARM64 build configurations.
+#ifndef NDIS620_MINIPORT
+#define NDIS620_MINIPORT 1
+#endif
+#ifndef NDIS_SUPPORT_NDIS620
+#define NDIS_SUPPORT_NDIS620 1
+#endif
+
 // The WDK headers intentionally use anonymous unions; keep /WX enabled for
 // project code while allowing this documented MSVC extension in system headers.
 #pragma warning(push)

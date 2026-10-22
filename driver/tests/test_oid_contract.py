@@ -7,9 +7,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 MINIPORT_C = (ROOT / "driver/src/miniport.c").read_text(encoding="utf-8")
 IOCTL_C = (ROOT / "driver/src/ioctl.c").read_text(encoding="utf-8")
 INF = (ROOT / "driver/balancify.inf").read_text(encoding="utf-8")
+MINIPORT_H = (ROOT / "driver/src/miniport.h").read_text(encoding="utf-8")
 
 
 class NdisOidContractTests(unittest.TestCase):
+    def test_ndis_version_contract_is_defined_before_wdk_headers(self):
+        for macro in ("NDIS620_MINIPORT", "NDIS_SUPPORT_NDIS620"):
+            define = MINIPORT_H.index(f"#define {macro} 1")
+            self.assertLess(define, MINIPORT_H.index("#include <ndis.h>"))
+
     def test_every_advertised_oid_has_a_query_handler(self):
         match = re.search(
             r"static const NDIS_OID gSupportedOids\[\]\s*=\s*\{(.*?)\};",
