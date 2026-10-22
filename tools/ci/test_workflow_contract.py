@@ -43,6 +43,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("/p:SignMode=Off", workflow)
         self.assertIn("name: balancify-driver-unsigned-x64", workflow)
         self.assertIn("path: driver/x64/Release/balancify.sys", workflow)
+        self.assertIn("py -3 tools/ci/verify_driver_pe.py driver/x64/Release/balancify.sys x64", workflow)
+        self.assertIn("py -3 tools/ci/verify_driver_pe.py driver/ARM64/Release/balancify.sys ARM64", workflow)
         x64_job = workflow.split("driver-build-x64:", 1)[1].split("driver-build-arm64:", 1)[0]
         self.assertIn("Start-Process -FilePath 'msbuild'", x64_job)
         self.assertIn("-RedirectStandardOutput $stdout -RedirectStandardError $stderr", x64_job)

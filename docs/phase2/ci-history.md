@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Historical baseline: `arena/7abc96c8-balancify`, last green 1b7fa25 (50bf7c8 + ADR-0034), 215+ tests.
-Latest continuation: `arena/4c0db240-balancify`, commit `af51705`; PR #18 is open. Push run `39729079329` and PR run `39729084768` passed all five jobs: x64 unsigned WDK compile/link, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. The build artifact and log are seven-day artifacts. This proves software compilation only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
+Latest continuation: `arena/4c0db240-balancify`, commit `baf3902`; PR #18 is open. Push run `39736821998` passed all six jobs, including unsigned x64 and ARM64 WDK compile/link, Rust Windows/Linux tests, lab tests, and dependency/crypto audit. Both driver binaries and build logs are seven-day artifacts. PR run `39736828475` also passed all six jobs on the same head. This is software compile/link evidence only; signed installation, Driver Verifier, HVCI/VM, packet-path behavior, clean-machine install, and hardware performance remain unverified. See `continuous-development-log.md` for the current continuation.
 
 ## Progression
 
@@ -99,6 +99,13 @@ Latest continuation: `arena/4c0db240-balancify`, commit `af51705`; PR #18 is ope
 - 39710825203 success: PR #18 validation with all five jobs green
 - 39729079329 success: fail-closed MTU contract change and updated phase evidence; all five push jobs passed
 - 39729084768 success: PR #18 head `af51705`; all five jobs passed including unsigned x64 WDK compile/link
+- 39729890884 failure: first ARM64 WDK job exposed NDIS-version selection behavior not visible in x64 build
+- 39730268579 failure: ARM64 compile diagnostics preserved for investigation
+- 39730720752 failure: ARM64 target requires an explicit miniport role; x64 remained green
+- 39732654296 failure: explicit miniport role exposed that NDIS 6.20 is unsupported on ARM64 (minimum target API is 6.30)
+- 39734805048 failure: ARM64 still rejected the 6.20 API version; x64 remained green
+- 39736821998 success: select NDIS 6.8 explicitly; all six push jobs passed, including unsigned x64 and ARM64 WDK compile/link
+- 39736828475 success: PR #18 head `baf3902`; all six jobs passed, including unsigned x64 and ARM64 WDK compile/link
 
 ## Historical snapshot (pre-Arena continuation)
 

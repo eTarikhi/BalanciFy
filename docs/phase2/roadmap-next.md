@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
 Date: 2026-10-22
-Status: in progress; PR #18 (`af51705`) CI run `39729084768` passed all five jobs, including unsigned x64 WDK compile/link and the fail-closed MTU contract test. Hardware/product acceptance gates remain pending.
+Status: in progress; PR #18 (`baf3902`) push run `39736821998` passed all six jobs, including unsigned x64 and ARM64 WDK compile/link. PR run `39736828475` is validating the same head. Hardware/product acceptance gates remain pending.
 
 ## Completed since last green (39191895800)
 
@@ -17,7 +17,7 @@ Status: in progress; PR #18 (`af51705`) CI run `39729084768` passed all five job
 - Rust lab CLI IPC client (`balancify-app` crate; home/rules/diagnostics/tray and support modes, 1Hz event subscription, ECN/delay rendering); the production WinUI 3/.NET shell remains unimplemented
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
-- Driver control source is hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. Miniport and INF consistently use NdisMediumIP; INJECT_NBL validates exact IPv4/IPv6 lengths and MTU, while pause waits for active indications, returned NBLs, and send callback chains. PR #18 adds a pinned WDK 10.0.26100.6584 x64 build and fixes the compile/link issues it exposed. CI `39710066355` produced `balancify.sys` with signing disabled and uploaded a seven-day artifact; PR check run `39710825203` passed all five jobs. This is compile/link evidence only: no signed install, Verifier, HVCI, VM, or packet-path behavior has been verified. The transmit ring remains unimplemented and TX deliberately fails.
+- Driver control source is hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. Miniport and INF consistently use NdisMediumIP; INJECT_NBL validates exact IPv4/IPv6 lengths and MTU, while pause waits for active indications, returned NBLs, and send callback chains. PR #18 adds pinned WDK 10.0.26100.6584 x64 and ARM64 builds and fixes the compile/link issues they exposed. Push run `39736821998` compiled and linked both unsigned targets and uploaded seven-day artifacts; it passed all six jobs. PR run `39736828475` also passed all six jobs on the same head. This is compile/link evidence only: no signed install, Verifier, HVCI, VM, or packet-path behavior has been verified. The transmit ring remains unimplemented and TX deliberately fails.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
 - Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
@@ -28,7 +28,7 @@ Status: in progress; PR #18 (`af51705`) CI run `39729084768` passed all five job
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
 
-1. **Finish static driver/runtime design**: x64 source now compiles and links with pinned WDK CI. Review NDIS/WDF lifecycle details, implement the missing service transmit ring, and resolve the MTU/configuration contract; ARM64 is not yet built.
+1. **Finish static driver/runtime design**: x64 and ARM64 source now compile and link with pinned WDK CI. Review NDIS/WDF lifecycle details, implement the missing service transmit ring, and complete Windows runtime validation; the MTU/configuration contract fails closed pending a proper NDIS reconfiguration path.
 2. **S2b socket test through miniport**: obtain a test-signed driver, then run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on an isolated Hyper-V VM with Driver Verifier and Memory Integrity configured. The unsigned CI artifact cannot be installed as acceptance evidence.
 3. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 

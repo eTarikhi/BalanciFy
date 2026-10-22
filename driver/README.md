@@ -8,7 +8,7 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 - `src/miniport.c` + `src/miniport.h` -- NDIS 6.8 callback skeleton, registration/general attributes, supported OID queries for media/size/filter/lookahead/statistics and packet counters, and shared adapter/NBL ownership definitions. The pause state machine defers NDIS pause completion until receive indications/returns and send callback chains are drained. Because the service transmit ring is not implemented, outbound NBLs now complete as `NDIS_STATUS_FAILURE` and increment transmit-error counters rather than being silently counted as sent; sends received while pausing/paused complete as `NDIS_STATUS_PAUSED`. The broader data path and runtime lifecycle remain incomplete and unvalidated.
 - `src/ioctl.c` -- source implementation of a minimal WDF IOCTL surface: set MTU, inject NBL, query stats, and set quanta. `INJECT_NBL` accepts one raw IPv4/IPv6 packet, validates its version-specific declared length and the configured MTU, rejects requests while paused, then copies it to owned nonpaged memory until NDIS returns the NBL. CI compiles and links the source with WDK; Driver Verifier and runtime ownership behavior remain unvalidated.
 - `balancify.inf` -- INF for PnP install, `*IfType = IF_TYPE_PROP_VIRTUAL (53)`, `*MediaType = NdisMediumIP (19)`, and `LowerRange = nolower` for raw IP packets without Ethernet framing.
-- `balancify.vcxproj` -- WDK 10.0.26100-compatible build; CI uses the pinned 10.0.26100.6584 NuGet kit for x64.
+- `balancify.vcxproj` -- WDK 10.0.26100-compatible build; CI uses the pinned 10.0.26100.6584 NuGet kit for x64 and ARM64.
 
 **Known runtime/product gaps (not closed by the CI build):**
 - `IOCTL_BALANCIFY_SET_MTU` accepts a confirmation of the configured MTU, but rejects a different value with `STATUS_NOT_SUPPORTED`. NDIS handles OID_GEN_MAXIMUM_FRAME_SIZE for NDIS 6+ from initialization/restart attributes; this scaffold has no supported runtime reconfiguration path, so it must not mutate only the driver's local view ([Microsoft documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/oid-gen-maximum-frame-size)).
@@ -33,7 +33,7 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 **Build (Windows only, WDK 10.0.26100):**
 ```powershell
 # Prerequisites: Visual Studio 2022 with C++ desktop, WDK and SDK 10.0.26100.
-# CI uses Microsoft's pinned WDK NuGet package 10.0.26100.6584 for x64.
+# CI uses Microsoft's pinned WDK NuGet package 10.0.26100.6584 for x64 and ARM64.
 # From repo root:
 msbuild driver\balancify.vcxproj /p:Configuration=Release /p:Platform=x64
 msbuild driver\balancify.vcxproj /p:Configuration=Release /p:Platform=ARM64
@@ -65,7 +65,7 @@ strings x64\Release\balancify.sys | findstr BlaB
 - `driver/balancify.vcxproj` HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation, KMDF 1.33, Universal, 10.0.26100.0, NDIS680_MINIPORT, NDIS 6.8, WDF
 
 **HVCI readiness trio (S15):**
-- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. CI run 39710066355 passed the pinned x64 WDK compile/link on `windows-2022` with VS 2022 and uploaded `balancify.sys` as the `balancify-driver-unsigned-x64` seven-day artifact (8,035 bytes). This is unsigned software build evidence only; no signed install or hardware validation is claimed.
+- Verifier 0x209BB + code integrity, HLK HVCIMemoryIntegrity, VBS/MI VM Secure Boot/vTPM/test-signing remain pending. Push run 39736821998 passed pinned x64 and ARM64 WDK compile/link on `windows-2022` with VS 2022 and uploaded `balancify-driver-unsigned-x64` (8,045 bytes) and `balancify-driver-unsigned-arm64` (8,377 bytes) as seven-day artifacts. These are unsigned software build artifacts only; no signed install or hardware validation is claimed.
 
 **Exception policy (Sec.11.2):**
 If G3/G7 blocked >4 weeks by signing/HVCI, product owner may ship flow-level only with bundled Wintun signed DLL (single allowed third-party runtime artifact, disclosed), while bonding + driver continue; must be retired next minor release.
