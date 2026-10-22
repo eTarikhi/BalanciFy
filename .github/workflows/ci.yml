@@ -170,13 +170,19 @@ jobs:
           target: amd64
       - name: Build x64 release driver
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'wdk-build.log'
           & msbuild driver\balancify.vcxproj /m /nologo /v:minimal /p:Configuration=Release /p:Platform=x64 2>&1 | Tee-Object -FilePath $log
           $buildExitCode = $LASTEXITCODE
+          $tail = if (Test-Path $log) { (Get-Content $log -Tail 160) -join "`n" } else { 'No MSBuild log was created.' }
           "### WDK x64 build (exit $buildExitCode)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          if (Test-Path $log) {
-            Get-Content $log -Tail 160 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $tail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $checkId = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq '[.check_runs[] | select(.name == "WDK driver build (x64)" and .status == "in_progress") | .id][0] // empty'
+          if ($checkId) {
+            $title = if ($buildExitCode -eq 0) { 'WDK x64 build results' } else { 'WDK x64 build diagnostics' }
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
           }
           if ($buildExitCode -ne 0) { exit $buildExitCode }
       - name: Upload WDK build log
