@@ -1,7 +1,10 @@
 #pragma once
 
-// Pin the minimum NDIS API contract before including the WDK headers; keep the
-// version selection explicit across x64 and ARM64 build configurations.
+// Pin the miniport role and minimum NDIS API contract before including the WDK
+// headers; ARM64 requires an explicit driver kind and version selection.
+#ifndef NDIS_MINIPORT_DRIVER
+#define NDIS_MINIPORT_DRIVER 1
+#endif
 #ifndef NDIS620_MINIPORT
 #define NDIS620_MINIPORT 1
 #endif
