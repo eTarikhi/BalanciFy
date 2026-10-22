@@ -1,7 +1,12 @@
 #pragma once
 
+// The WDK headers intentionally use anonymous unions; keep /WX enabled for
+// project code while allowing this documented MSVC extension in system headers.
+#pragma warning(push)
+#pragma warning(disable : 4201)
 #include <ndis.h>
 #include <wdf.h>
+#pragma warning(pop)
 
 #include "config_validation.h"
 #include "rx_pause_state.h"

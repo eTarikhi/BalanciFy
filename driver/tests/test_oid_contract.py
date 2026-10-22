@@ -54,7 +54,7 @@ class NdisOidContractTests(unittest.TestCase):
         self.assertIsNotNone(send_callback)
         body = send_callback.group(0)
         self.assertIn(
-            "NET_BUFFER_LIST_STATUS(curr, paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE)",
+            "NET_BUFFER_LIST_STATUS(curr) = paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE;",
             body,
         )
         self.assertIn("adapter->txErrors++", body)

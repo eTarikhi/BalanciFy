@@ -21,7 +21,7 @@ Microsoft began expanding automatic Memory Integrity enablement to eligible devi
 - Adapter context: miniportAdapterHandle, netBufferListPool, controlDevice, spinlock, paused, mtu, tx/rx counters
 - NBL pool: `NdisAllocateNetBufferListPool` with `fAllocateNetBuffer=TRUE`, `ProtocolId=NDIS_PROTOCOL_ID_DEFAULT`, `PoolTag=BALANCIFY_POOL_TAG`, created in InitializeEx, freed in HaltEx
 - No executable pools: uses `NormalPoolPriority` (NonPagedPoolNx equivalent via NDIS), no `NonPagedPoolExecute`, no inline assembly, no RWX sections
-- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Initial MSBuild failed loading the kit's `Microsoft.DriverKit.Build.Tasks.18.0.dll`; a first attempt to select VS 2022 on `windows-2025` found no MSBuild. The job now uses `windows-2022` with VS 2022/MSBuild 17.x and redundant MASM imports removed.
+- WDK build flags: `/integritycheck` (HVCI compatible), `/Qspectre`, `/DYNAMICBASE`, `/NXCOMPAT`, PoolTag `BlaB`, Spectre mitigation, KMDF 1.33, Universal, target 10.0.26100.0, NDIS620_MINIPORT, NDIS 6.8. CI uses pinned WDK NuGet 10.0.26100.6584. Initial MSBuild setup failures were resolved by using `windows-2022` with VS 2022/MSBuild 17.x and removing redundant MASM imports. The first compile then exposed header warnings promoted to errors and source API/signature issues; fixes are in progress and no WDK build pass is claimed.
 - Send path: counts txPackets/txBytes, completes NBL immediately (skeleton, real impl copies to service ring)
 - Return path: for RX NBLs injected via IOCTL, frees MDL chain via `NdisFreeMdl` then `NdisFreeNetBufferList`
 
@@ -76,7 +76,7 @@ After reboot, check `!verifier` in WinDbg, run traffic through driver, ensure no
 - Build: `driver/balancify.vcxproj` targets 10.0.26100.0 with HVCI flags, PoolTag BlaB, KMDF 1.33, Universal. CI installed WDK successfully but MSBuild tried to load a missing v18 task assembly; the workflow now uses a `windows-2022` runner with VS 2022/MSBuild 17 and removes duplicate MASM imports. No WDK build pass is claimed until the next run succeeds.
 - Docs: this file + `clean-machine-test.md` + `throughput-rows.md` + `lab-progress.md`
 - Real VM run: pending (requires a WDK-built driver, Hyper-V VM Gen2 Secure Boot/vTPM/VBS, test-signing, and pnputil install)
-- CI: the x64 job pins Microsoft WDK NuGet 10.0.26100.6584 and uses `windows-2022` with VS 2022/MSBuild 17.x, captures diagnostics in the check summary, and uploads a short-lived build log. Initial attempts failed loading the v18 task assembly or selecting VS 2022 on `windows-2025`; rerun is pending. Even a successful compile does not establish install, Driver Verifier, HVCI, or packet-path behavior.
+- CI: the x64 job pins Microsoft WDK NuGet 10.0.26100.6584 and uses `windows-2022` with VS 2022/MSBuild 17.x, captures diagnostics in the check summary, and uploads a short-lived build log. Run 39707892154 reached C compilation but failed on `/WX` for WDK header C4201 plus driver API/signature issues; fixes are committed locally and the next compile will verify them. Even a successful compile does not establish install, Driver Verifier, HVCI, or packet-path behavior.
 
 ## Next actions
 

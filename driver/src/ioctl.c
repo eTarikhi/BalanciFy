@@ -262,8 +262,6 @@ VOID BalancifyEvtIoDeviceControl(
         nblContext->packetBuffer = packetCopy;
         nblContext->packetLength = (ULONG)inputBufferLength;
 
-        NBL_SET_PORT_NUMBER(nbl, 0);
-
         NdisAcquireSpinLock(&adapter->lock);
         paused = (BOOLEAN)adapter->pauseState.paused;
         canIndicate = BalancifyTrackReceiveIndication(&adapter->pauseState) ? TRUE : FALSE;
@@ -317,8 +315,9 @@ VOID BalancifyEvtIoDeviceControl(
         status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
         if (!NT_SUCCESS(status)) break;
         // For skeleton: just log, real impl would update DRR weights via shared memory or service ring
-        ULONG count = (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA));
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Balancify: SET_QUANTA count=%lu\n", count));
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "Balancify: SET_QUANTA count=%lu\n",
+            (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA))));
         status = STATUS_SUCCESS;
         break;
     }
