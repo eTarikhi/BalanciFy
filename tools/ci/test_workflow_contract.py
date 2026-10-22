@@ -48,6 +48,8 @@ class WorkflowContractTests(unittest.TestCase):
         x64_job = workflow.split("driver-build-x64:", 1)[1].split("driver-build-arm64:", 1)[0]
         self.assertIn("Start-Process -FilePath 'msbuild'", x64_job)
         self.assertIn("-RedirectStandardOutput $stdout -RedirectStandardError $stderr", x64_job)
+        self.assertIn("Validate Universal INF with InfVerif", x64_job)
+        self.assertIn("& $infVerifier.FullName /u driver\\balancify.inf", x64_job)
         project = (ROOT / "driver/balancify.vcxproj").read_text(encoding="utf-8")
         self.assertIn("<WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>", project)
         self.assertIn("<AdditionalOptions>/W4 /WX /Qspectre %(AdditionalOptions)</AdditionalOptions>", project)
