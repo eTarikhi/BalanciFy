@@ -42,7 +42,7 @@ Status: continuous; push run 39739119850 and PR run 39739125907 passed all six j
 - SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-Total: 259 Rust tests passed on Linux and 258 on Windows in CI (the Unix-only state-path test is cfg-gated), plus 7 Python SBOM tests and standards-parser validation. Current local contract checks add 20 Python CI tests (including PE parser cases) and 8 driver packet/OID tests; project XML parsing and `git diff --check` also pass. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
+Total: 259 Rust tests passed on Linux and 258 on Windows in CI (the Unix-only state-path test is cfg-gated), plus 7 Python SBOM tests and standards-parser validation. Current local contract checks add 20 Python CI tests (including PE parser cases) and 9 driver packet/OID/INF tests; project XML parsing and `git diff --check` also pass. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 

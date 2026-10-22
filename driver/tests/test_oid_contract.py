@@ -98,6 +98,16 @@ class NdisOidContractTests(unittest.TestCase):
         self.assertLess(track, indicate)
         self.assertLess(indicate, returned)
 
+    def test_universal_inf_targets_both_wdk_architectures_and_ndis_68(self):
+        self.assertRegex(INF, r"(?m)^DriverPackageType\s*=\s*Universal\s*$")
+        self.assertRegex(INF, r"(?m)^%Provider%\s*=\s*Balancify,\s*NTamd64,\s*NTarm64\s*$")
+        for architecture in ("NTamd64", "NTarm64"):
+            self.assertIn(f"[Balancify.{architecture}]", INF)
+            self.assertRegex(INF, rf"(?s)\[Balancify\.{architecture}\].*?Balancify\.ndi, ROOT\\Balancify")
+        self.assertRegex(INF, r"(?m)^HKR, Parameters, MajorNdisVersion, .*?, 6\s*$")
+        self.assertRegex(INF, r"(?m)^HKR, Parameters, MinorNdisVersion, .*?, 80(?:\s|;)")
+        self.assertIn("ServiceBinary = %12%\\balancify.sys", INF)
+
     def test_raw_ip_inf_and_ndis_attributes_agree(self):
         self.assertRegex(INF, r"(?m)^\*MediaType\s*=\s*19\s*;\s*NdisMediumIP")
         self.assertRegex(INF, r'(?m)^HKR, Ndi\\Interfaces, LowerRange, 0, "nolower"$')
