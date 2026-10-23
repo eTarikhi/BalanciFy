@@ -70,6 +70,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## Active branch update (2026-10-23)
 
+- `8d98b60` requires an unfragmented UDP length to exactly equal the IP payload in both the service parser and kernel-facing C validator, preventing accepted trailing bytes and keeping the two validation layers aligned. Added Rust and C regression cases; push CI `39908812610` and PR CI `39908817177` passed all six jobs.
 - `ba45cba` hardens the portable miniport IP validator to reject malformed IPv4/IPv6 lengths, reserved fragment flags, truncated TCP/UDP headers, overlong UDP lengths, malformed IPv6 extension chains and excessive extension counts before packets enter NBL/queue storage. Added positive/negative C fixtures and ADR-0041. Push CI `39905228349` and PR CI `39905231812` both passed all six jobs, including x64/ARM64 WDK builds and 304/303 Rust tests.
 
 

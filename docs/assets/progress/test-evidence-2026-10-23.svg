@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1260 790" role="img" aria-labelledby="title desc">
 <title id="title">Rust test evidence by crate, latest verified PR CI</title>
-<desc id="desc">PR CI run 39905231812 reports 304 passing tests on Ubuntu and 303 on Windows. Bars show Linux tests by package; the one-count difference comes from the client tests. The chart is software verification evidence, not project completion or hardware acceptance.</desc>
+<desc id="desc">PR CI run 39908817177 reports 304 passing tests on Ubuntu and 303 on Windows. Bars show Linux tests by package; the one-count difference comes from the client tests. The chart is software verification evidence, not project completion or hardware acceptance.</desc>
 <defs><style>text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#17243b}.title{font-size:28px;font-weight:700}.subtitle{font-size:15px;fill:#64738a}.label{font-size:14px}.count{font-size:14px;font-weight:700}.axis{font-size:12px;fill:#738096}.bar{fill:#2f6db2}.bar2{fill:#5f9bd0}.grid{stroke:#e1e7f0;stroke-width:1}.card{fill:white;stroke:#d9e1ed}</style></defs>
 <rect width="1260" height="790" rx="20" fill="#f4f7fb"/>
 <text x="60" y="58" class="title">Software verification evidence</text>
-<text x="60" y="86" class="subtitle">GitHub Actions PR run 39905231812 · code ba45cba · all 6 jobs passed</text>
+<text x="60" y="86" class="subtitle">GitHub Actions PR run 39908817177 · code 8d98b60 · all 6 jobs passed</text>
 <g transform="translate(60,112)"><rect width="540" height="82" rx="14" class="card"/><text x="22" y="34" class="subtitle">Ubuntu workspace tests</text><text x="22" y="66" font-size="27" font-weight="700" fill="#16734f">304 passed · 0 failed</text></g>
 <g transform="translate(620,112)"><rect width="540" height="82" rx="14" class="card"/><text x="22" y="34" class="subtitle">Windows workspace tests</text><text x="22" y="66" font-size="27" font-weight="700" fill="#16734f">303 passed · 0 failed</text></g>
 <text x="60" y="242" class="label" font-weight="700">Per-suite test counts (Ubuntu)</text>
