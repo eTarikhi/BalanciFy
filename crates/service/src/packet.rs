@@ -320,6 +320,27 @@ mod tests {
     }
 
     #[test]
+    fn ipv6_unfragmented_udp_length_must_cover_exact_payload() {
+        let valid = ipv6(17, &udp_header(53000, 53));
+        assert!(flow_key_from_packet(&valid).is_ok());
+
+        let mut short_length = valid.clone();
+        short_length[44..46].copy_from_slice(&7u16.to_be_bytes());
+        assert_eq!(
+            flow_key_from_packet(&short_length),
+            Err(PacketFlowError::InvalidTransportHeader),
+        );
+
+        let mut trailing_bytes = udp_header(53000, 53).to_vec();
+        trailing_bytes.extend_from_slice(&[0; 4]);
+        let mismatched_ip_payload = ipv6(17, &trailing_bytes);
+        assert_eq!(
+            flow_key_from_packet(&mismatched_ip_payload),
+            Err(PacketFlowError::InvalidTransportHeader),
+        );
+    }
+
+    #[test]
     fn ipv6_fragmented_packets_use_a_consistent_portless_key() {
         let mut first_fragment = vec![6, 0, 0, 1, 0, 0, 0, 1]; // M bit set
         first_fragment.extend_from_slice(&tcp_header(1234, 443));

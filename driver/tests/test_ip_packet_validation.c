@@ -70,6 +70,15 @@ static void test_ipv6_exact_payload_length(void) {
 
 static void test_ipv6_extension_and_transport_bounds(void) {
     unsigned char packet[56] = { 0x60, 0, 0, 0, 0, 16 };
+    {
+        unsigned char udp[48] = { 0x60, 0, 0, 0, 0, 8 };
+        udp[6] = 17;
+        udp[44] = 0;
+        udp[45] = 8;
+        assert(BalancifyIsValidIpPacket(udp, sizeof(udp), 1500));
+        udp[45] = 7;
+        assert(!BalancifyIsValidIpPacket(udp, sizeof(udp), 1500));
+    }
     packet[6] = 0; /* Hop-by-Hop followed by UDP */
     packet[40] = 17;
     packet[41] = 0; /* 8-byte extension header */
