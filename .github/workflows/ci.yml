@@ -4,6 +4,9 @@ on:
   push:
     branches: [main, "arena/*"]
   pull_request:
+  # Explicit operator-triggered CI for a pushed branch; local CI remains
+  # available through tools/ci/local-ci.sh before making any remote changes.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -193,7 +196,7 @@ jobs:
             gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
           }
           if ($buildExitCode -ne 0) { exit $buildExitCode }
-      - name: Verify x64 driver architecture and unsigned status
+      - name: Verify x64 PE architecture, mitigations, and unsigned status
         shell: pwsh
         run: py -3 tools/ci/verify_driver_pe.py driver/x64/Release/balancify.sys x64
       - name: Upload unsigned x64 driver
@@ -250,7 +253,7 @@ jobs:
             gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkId" -f "output[title]=$title" -f "output[summary]=$tail" | Out-Null
           }
           if ($buildExitCode -ne 0) { exit $buildExitCode }
-      - name: Verify ARM64 driver architecture and unsigned status
+      - name: Verify ARM64 PE architecture, mitigations, and unsigned status
         shell: pwsh
         run: py -3 tools/ci/verify_driver_pe.py driver/ARM64/Release/balancify.sys ARM64
       - name: Upload unsigned ARM64 driver

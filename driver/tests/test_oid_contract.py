@@ -8,6 +8,8 @@ MINIPORT_C = (ROOT / "driver/src/miniport.c").read_text(encoding="utf-8")
 IOCTL_C = (ROOT / "driver/src/ioctl.c").read_text(encoding="utf-8")
 INF = (ROOT / "driver/balancify.inf").read_text(encoding="utf-8")
 MINIPORT_H = (ROOT / "driver/src/miniport.h").read_text(encoding="utf-8")
+TX_QUEUE_H = (ROOT / "driver/src/tx_packet_queue.h").read_text(encoding="utf-8")
+DRIVER_DEVICE_RS = (ROOT / "crates/service/src/driver_device.rs").read_text(encoding="utf-8")
 
 
 class NdisOidContractTests(unittest.TestCase):
@@ -66,25 +68,74 @@ class NdisOidContractTests(unittest.TestCase):
         self.assertNotIn("adapter->mtu = mtu", body)
         self.assertNotIn("adapter->lookaheadSize =", body)
 
-    def test_unimplemented_transmit_path_fails_instead_of_counting_success(self):
+    def test_unimplemented_quanta_scheduler_does_not_report_success(self):
+        quanta_case = re.search(
+            r"case IOCTL_BALANCIFY_SET_QUANTA:\s*\{(.*?)\n\s*\}\n\s*default:",
+            IOCTL_C,
+            re.S,
+        )
+        self.assertIsNotNone(quanta_case)
+        body = quanta_case.group(1)
+        self.assertIn("STATUS_INVALID_PARAMETER", body)
+        self.assertIn("STATUS_NOT_SUPPORTED", body)
+        self.assertNotIn("STATUS_SUCCESS", body)
+        self.assertNotIn("SET_QUANTA count=", body)
+
+    def test_transmit_path_atomically_queues_valid_ip_batches(self):
         send_callback = re.search(
             r"VOID MiniportSendNetBufferLists\(.*?\n\}", MINIPORT_C, re.S
         )
         self.assertIsNotNone(send_callback)
         body = send_callback.group(0)
-        self.assertIn(
-            "NET_BUFFER_LIST_STATUS(curr) = paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE;",
-            body,
+        self.assertIn("MiniportQueueNetBufferList(adapter, curr)", body)
+        self.assertIn("BalancifyTrackSendCallback(&adapter->pauseState)", body)
+        self.assertIn("BalancifySendCallbackReturned(&adapter->pauseState)", body)
+        self.assertLess(
+            body.index("BalancifyTrackSendCallback(&adapter->pauseState)"),
+            body.index("while (curr)"),
         )
-        self.assertIn("adapter->txErrors++", body)
-        send_track = body.index("BalancifyTrackSendCallback(&adapter->pauseState)")
-        send_loop = body.index("while (curr)")
-        send_return = body.index("BalancifySendCallbackReturned(&adapter->pauseState)")
-        self.assertLess(send_track, send_loop)
-        self.assertLess(send_loop, send_return)
-        self.assertNotIn("adapter->txPackets++", body)
-        self.assertNotIn("adapter->txBytes +=", body)
+        queue_send = re.search(
+            r"static NDIS_STATUS MiniportQueueNetBufferList\(.*?\n\}", MINIPORT_C, re.S
+        )
+        self.assertIsNotNone(queue_send)
+        body = queue_send.group(0)
+        self.assertIn("NDIS_STATUS_PAUSED", body)
+        self.assertIn("NDIS_STATUS_RESOURCES", body)
+        self.assertIn("BalancifyIsValidIpPacket", body)
+        self.assertIn("BalancifyTxQueueReserveSlot", body)
+        self.assertIn("BalancifyTxQueueCommit", body)
+        self.assertIn("adapter->txPackets +=", body)
+        self.assertIn("adapter->txBytes +=", body)
+        self.assertIn("adapter->txErrors +=", body)
         self.assertIn("case OID_GEN_XMIT_ERROR:", MINIPORT_C)
+
+    def test_driver_tx_queue_is_bounded_fifo_and_commits_batches_atomically(self):
+        self.assertIn("#define BALANCIFY_TX_QUEUE_CAPACITY 64u", TX_QUEUE_H)
+        self.assertIn("#define BALANCIFY_TX_PACKET_MAX_BYTES 9000u", TX_QUEUE_H)
+        self.assertIn("queue->count += packetCount;", TX_QUEUE_H)
+        self.assertIn("BalancifyTxQueueCommit(&adapter->txQueue, packetCount)", MINIPORT_C)
+        self.assertIn("BalancifyIsValidIpPacket", MINIPORT_C)
+
+    def test_dequeue_tx_ioctl_and_service_wire_contract_match(self):
+        self.assertIn(
+            "#define IOCTL_BALANCIFY_DEQUEUE_TX CTL_CODE(FILE_DEVICE_NETWORK, 0x804, METHOD_BUFFERED, FILE_READ_ACCESS)",
+            IOCTL_C,
+        )
+        dequeue_case = re.search(
+            r"case IOCTL_BALANCIFY_DEQUEUE_TX:\s*\{(.*?)\n\s*\}\n\s*case IOCTL_BALANCIFY_SET_QUANTA:",
+            IOCTL_C,
+            re.S,
+        )
+        self.assertIsNotNone(dequeue_case)
+        body = dequeue_case.group(1)
+        self.assertIn("BalancifyTxQueuePeek", body)
+        self.assertIn("BalancifyTxQueuePop", body)
+        self.assertIn("size_t bytesReturned = 0;", IOCTL_C)
+        self.assertLess(body.index("NdisMoveMemory(destination, &header"), body.index("BalancifyTxQueuePop"))
+        self.assertIn("IOCTL_FUNCTION_DEQUEUE_TX: u32 = 0x804", DRIVER_DEVICE_RS)
+        self.assertIn("IOCTL_BALANCIFY_DEQUEUE_TX", DRIVER_DEVICE_RS)
+        self.assertIn("decode_dequeued_packet(&output[..bytes_returned])", DRIVER_DEVICE_RS)
+        self.assertIn("validate_injection_packet(&packet)", DRIVER_DEVICE_RS)
 
     def test_pause_waits_for_receive_indication_and_send_completion(self):
         self.assertIn("BalancifyBeginPause(&adapter->pauseState)", MINIPORT_C)

@@ -1,5 +1,5 @@
 // Balancify WDF control device + IOCTLs -- Phase 2 S2b
-// Minimal control device for service to talk to miniport: set MTU, inject NBL, query stats
+// Minimal control device: set MTU, inject NBL, dequeue TX packets, query stats
 // Length-validated, fuzzed same gate as tunnel (no third-party kernel component in data path)
 // CI build kit: WDK 10.0.26100.6584. Test signing and Driver Verifier are separate validation steps.
 // References: blueprint Sec.6.1 TAP-like adapter, Sec.4.5 pause/resume, Sec.8.2 diagnostics, C2
@@ -15,6 +15,7 @@
 #define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
 #define IOCTL_BALANCIFY_INJECT_NBL CTL_CODE(FILE_DEVICE_NETWORK, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #define IOCTL_BALANCIFY_SET_QUANTA CTL_CODE(FILE_DEVICE_NETWORK, 0x803, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_BALANCIFY_DEQUEUE_TX CTL_CODE(FILE_DEVICE_NETWORK, 0x804, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 // Input for SET_MTU: ULONG mtu
 // Input for GET_STATS: none, output: BALANCIFY_STATS
@@ -305,6 +306,46 @@ VOID BalancifyEvtIoDeviceControl(
         status = STATUS_SUCCESS;
         break;
     }
+    case IOCTL_BALANCIFY_DEQUEUE_TX: {
+        const size_t minimumOutputLength = sizeof(BALANCIFY_TX_PACKET_HEADER) + BALANCIFY_TX_PACKET_MAX_BYTES;
+        const BALANCIFY_TX_PACKET_SLOT *slot;
+        BALANCIFY_TX_PACKET_HEADER header;
+        unsigned char *destination;
+
+        if (inputBufferLength != 0) {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        // Require the fixed maximum buffer so a queued packet is never popped
+        // and then lost because a caller supplied a short output buffer.
+        if (outputBufferLength < minimumOutputLength) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        status = WdfRequestRetrieveOutputBuffer(
+            request, minimumOutputLength, &outputBuffer, NULL);
+        if (!NT_SUCCESS(status)) break;
+
+        NdisAcquireSpinLock(&adapter->lock);
+        slot = BalancifyTxQueuePeek(&adapter->txQueue);
+        if (!slot) {
+            NdisReleaseSpinLock(&adapter->lock);
+            // Empty queue is a successful poll with no output bytes.
+            status = STATUS_SUCCESS;
+            break;
+        }
+        header.version = BALANCIFY_TX_PACKET_VERSION;
+        header.packetLength = (unsigned int)slot->length;
+        header.sequence = slot->sequence;
+        destination = (unsigned char *)outputBuffer;
+        NdisMoveMemory(destination, &header, sizeof(header));
+        NdisMoveMemory(destination + sizeof(header), slot->bytes, slot->length);
+        bytesReturned = sizeof(header) + slot->length;
+        (void)BalancifyTxQueuePop(&adapter->txQueue);
+        NdisReleaseSpinLock(&adapter->lock);
+        status = STATUS_SUCCESS;
+        break;
+    }
     case IOCTL_BALANCIFY_SET_QUANTA: {
         // Set DRR quanta from service (Sec.6.4 rule 2)
         // Input: array of BALANCIFY_QUANTA, count = inputBufferLength / sizeof(BALANCIFY_QUANTA)
@@ -316,13 +357,9 @@ VOID BalancifyEvtIoDeviceControl(
             status = STATUS_INVALID_PARAMETER; // max 256 paths
             break;
         }
-        status = WdfRequestRetrieveInputBuffer(request, inputBufferLength, &inputBuffer, NULL);
-        if (!NT_SUCCESS(status)) break;
-        // For skeleton: just log, real impl would update DRR weights via shared memory or service ring
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-            "Balancify: SET_QUANTA count=%lu\n",
-            (ULONG)(inputBufferLength / sizeof(BALANCIFY_QUANTA))));
-        status = STATUS_SUCCESS;
+        // No driver scheduler consumes these weights yet. Returning success
+        // would falsely claim that the requested policy was applied.
+        status = STATUS_NOT_SUPPORTED;
         break;
     }
     default:

@@ -1,15 +1,20 @@
 # Continuous development log — without stopping to report
 
 Date: 2026-10-22
-Status: continuous; active branch `arena/4c0db240-balancify`, PR #18 open; push run `39787330013` and PR run `39787341195` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type and unsigned-status verification, and the INF architecture/version contract tests. Signed installation and hardware acceptance remain pending.
+Status: continuous; active branch `arena/81ef53da-balancify`, PR #18 merged as `a1ec9b0`, PR #19 open at `b91b9ee`; push run `39811703258` and PR run `39811711106` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture and DYNAMIC_BASE/FORCE_INTEGRITY/NX_COMPAT checks, and INF source-contract tests. An InfVerif CI trial failed without retrievable diagnostics and was removed; no InfVerif/package validation is claimed. Signed installation and hardware acceptance remain pending.
 
 User instruction: "continue the development process without stopping to report" — meaning keep building features, fixing bugs, pushing CI, not stopping after each small change to report.
 
 This log records what was done while continuing without stopping, after ADR-0015.
 
+## Follow-up hardening (2026-10-22)
+
+- CI runs `39805742120` and `39808776693` failed at the newly trialed InfVerif invocation; the available GitHub log API returned EOF and did not expose the cause. Rather than leave an opaque red check or claim validation, the InfVerif step was removed. Existing INF architecture/version source-contract tests remain; InfVerif, package install, and runtime validation are not claimed. Corrected push run `39811703258` and PR run `39811711106` passed all six jobs.
+- `SET_QUANTA` previously validated request size, logged a count, and returned `STATUS_SUCCESS` despite applying no scheduler weights. It now keeps malformed-length rejection but returns `STATUS_NOT_SUPPORTED` for well-formed requests until a scheduler consumes them. A source-contract regression test verifies the fail-closed behavior; current driver and phase docs were aligned. This corrects API truthfulness only; it does not implement quanta scheduling.
+
 ## WDK compile continuation (2026-10-22)
 
-- PR #18 adds pinned Windows 2022 / VS 2022 / WDK 10.0.26100.6584 x64 and ARM64 builds, compile diagnostics, and seven-day unsigned driver/build-log artifacts. Initial WDK compilation exposed warning, signature, API, linker-flag, library-path, and ARM64 NDIS-version issues; these were corrected iteratively. Push run `39787330013` and PR run `39787341195` passed all six jobs, including x64/ARM64 unsigned WDK compile/link, PE machine-type and unsigned-status verification, and the INF contract. The unsigned `balancify.sys` artifacts are compile evidence only.
+- Merged PR #18 added pinned Windows 2022 / VS 2022 / WDK 10.0.26100.6584 x64 and ARM64 builds, compile diagnostics, and seven-day unsigned driver/build-log artifacts. Initial WDK compilation exposed warning, signature, API, linker-flag, library-path, and ARM64 NDIS-version issues; these were corrected iteratively. Push run `39790140291` and PR run `39790148235` passed all six jobs, including x64/ARM64 unsigned WDK compile/link, PE machine-type and unsigned-status verification, and the INF contract. The unsigned `balancify.sys` artifacts are compile evidence only.
 - The compiler-discovered code fixes align `DriverEntry` and WDF unload callback signatures, use the NDIS NBL status lvalue, remove the undefined port macro, scope C4201 suppression to WDK headers, and fix WDF header/API inclusion.
 - Static review found custom `SET_MTU` could mutate only driver-local MTU while NDIS caches maximum frame size from initialization/restart. Microsoft documents that NDIS handles OID_GEN_MAXIMUM_FRAME_SIZE for NDIS 6+ and that its value is supplied during initialization/restart. The IOCTL is now fail-closed: it confirms the configured MTU and returns `STATUS_NOT_SUPPORTED` for changes until a proper restart/reconfiguration design exists. A portable source-contract test guards that behavior.
 - Remaining S2b gaps are real: no signed install, Driver Verifier, HVCI VM/HLK, packet-path behavior, working TX ring, or operational quanta scheduler. Do not treat CI success as G2 acceptance.
@@ -63,6 +68,18 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `2143990` adds bounded selective repair for unacknowledged FlowData: retain eligible plaintext until authenticated FlowAck, retry after RTO on an alternate path, and use the receiver's replay window plus duplicate re-ACK to prevent duplicate delivery and recover a lost ACK. Service tick routes the retry and congestion loss signal; tests cover tunnel behavior and service integration. CI `39530970838` passed with 261 Linux / 260 Windows Rust tests, SPDX 2.3 validation, lab checks, and dependency/crypto audit. PR #7 merged as `8cdfb1a`; follow-up commit `ae1239d` adds an explicit uplink-removal-before-retry service case and refreshes progress/decision docs. CI `39531428626` passed with 261 Linux / 260 Windows Rust tests. WDK/hardware validation remains pending.
 - `7b73d6e` ported the completed client hardening to the active continuation branch `arena/096b15fe-balancify` so review and further work stay on the current session branch. PR #6 passes CI run `39520659434` (259 Linux / 258 Windows Rust tests, SPDX validation, lab tests, and dependency/crypto audit); earlier PR #5 was closed as superseded. Local cargo was unavailable in this sandbox, so validation came from GitHub Actions.
 
+## Active branch update (2026-10-23)
+- `9be616f` adds service and portable-C regression cases for IPv6 UDP minimum/mismatched lengths; current CI therefore reports 305 Ubuntu / 304 Windows Rust tests. Push run `39913188520` and PR run `39913195342` passed all six jobs, including both pinned WDK builds.
+
+
+- `8d98b60` requires an unfragmented UDP length to exactly equal the IP payload in both the service parser and kernel-facing C validator, preventing accepted trailing bytes and keeping the two validation layers aligned. Added Rust and C regression cases; push CI `39908812610` and PR CI `39908817177` passed all six jobs.
+- `ba45cba` hardens the portable miniport IP validator to reject malformed IPv4/IPv6 lengths, reserved fragment flags, truncated TCP/UDP headers, overlong UDP lengths, malformed IPv6 extension chains and excessive extension counts before packets enter NBL/queue storage. Added positive/negative C fixtures and ADR-0041. Push CI `39905228349` and PR CI `39905231812` both passed all six jobs, including x64/ARM64 WDK builds and 304/303 Rust tests.
+
+
+- `6092ed9` adds a 64-entry, 9000-byte-per-record miniport TX queue, atomic NBL batch enqueue, read-only `DEQUEUE_TX` IOCTL, Rust record validation, and optional service polling after a receiver session exists (ADR-0040). CI first exposed WDK `<stdint.h>` CRT conflicts and an invalid UDP fixture; `601d7d5` fixed both. Push run `39901467494` and PR run `39901472201` passed all six jobs, including x64/ARM64 WDK builds; Rust test summaries are 304 Ubuntu / 303 Windows.
+- `f08f758` refreshes the progress report and portal to distinguish source/CI status from runtime/product acceptance and records current test evidence. The local shallow/grafted history was safely reconciled by resetting the local branch to its fetched remote head while preserving the working tree; this docs commit is now based on `601d7d5` and pushed. `dfa4bd5` then reconciles the next-steps and roadmap documents with the bounded TX queue, current 304/303 test counts, and outstanding runtime gates.
+- PR #19 remains open. Reverse TX implementation is not proof of working NDIS traffic: signing, installation, Driver Verifier/HVCI, packet path, hardware throughput, and product acceptance remain pending.
+
 ## Commits since last green 39209903149 (ADR-0020)
 
 - `44942dc feat(service,relay): ETW wiring for ECN/delay/rekey/failover/auth, relay ECN echo stats` — added `etw: EtwProvider` field to Service, init, wired `ingest_path` ECN CE (401) + delay (402) + auth_failed (600), `tick` rekey (400) + failover (500), relay `RelaySession::ecn_echoed` + `SecureRelay::total_ecn_echoed` + sweep accumulation + stats 6-tuple + print ecn. **CI failure 39232571739** due to non-ASCII Sec. markers + format! escaping + arg order.
@@ -97,3 +114,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0023
 - CI runs: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success, 39234403709 success, 39234666177 success, 39234937199 success
+
+- `5e2922a` makes the portable packet, MTU, RX pause, and TX queue C fixtures run under strict warnings and AddressSanitizer/UndefinedBehaviorSanitizer in Ubuntu CI; push run `39917633486` and PR run `39917639870` passed all six jobs.
+
+- `02409cf` adds a reproducible 12,000-iteration malformed/near-valid IPv4/IPv6 length mutation stress loop to the WDK-independent packet validator fixtures, executed in the strict and ASan/UBSan passes. Push CI `39922008067` and PR CI `39922014929` passed all six jobs. This bounded test is not kernel fuzzing.

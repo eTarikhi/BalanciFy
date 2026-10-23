@@ -7,8 +7,9 @@
 //! subscribed event frames on a loopback-only TCP adapter for the lab; production uses an ACL-protected
 //! Windows named pipe. In production, packets come from the NDIS miniport.
 
-use balancify_core::{UplinkId, FlowKey};
+use balancify_core::UplinkId;
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
+use balancify_service::driver_device::DriverDevice;
 use balancify_service::ipc::server::IpcServer;
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
@@ -112,6 +113,64 @@ fn next_simulated_packet_tick(started_at: Instant, now: Instant, last_tick: u64)
     (elapsed_seconds > last_tick).then_some(elapsed_seconds)
 }
 
+fn validate_simulated_traffic(mode: ConnectionMode, requested: bool) -> std::io::Result<()> {
+    if requested && mode != ConnectionMode::InsecureLab {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "synthetic app traffic is restricted to explicit --insecure-lab mode",
+        ));
+    }
+    Ok(())
+}
+
+fn build_simulated_ipv4_udp_packet(
+    identification: u16,
+    source_port: u16,
+    payload: &[u8],
+) -> std::io::Result<Vec<u8>> {
+    let udp_len = 8usize.checked_add(payload.len()).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "synthetic UDP payload is too large")
+    })?;
+    let total_len = 20usize.checked_add(udp_len).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "synthetic IP packet is too large")
+    })?;
+    if total_len > balancify_service::packet::MAX_INNER_PACKET_LEN || total_len > u16::MAX as usize {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "synthetic IP packet exceeds the inner-packet limit",
+        ));
+    }
+
+    let mut packet = vec![0u8; total_len];
+    packet[0] = 0x45;
+    packet[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+    packet[4..6].copy_from_slice(&identification.to_be_bytes());
+    packet[8] = 64;
+    packet[9] = 17;
+    packet[12..16].copy_from_slice(&[10, 0, 0, 1]);
+    packet[16..20].copy_from_slice(&[8, 8, 8, 8]);
+    packet[20..22].copy_from_slice(&source_port.to_be_bytes());
+    packet[22..24].copy_from_slice(&443u16.to_be_bytes());
+    packet[24..26].copy_from_slice(&(udp_len as u16).to_be_bytes());
+    packet[28..].copy_from_slice(payload);
+    let header_checksum = ipv4_header_checksum(&packet[..20]);
+    packet[10..12].copy_from_slice(&header_checksum.to_be_bytes());
+    // A zero UDP checksum is permitted for IPv4 and keeps this synthetic packet
+    // builder independent of a transport pseudo-header checksum implementation.
+    Ok(packet)
+}
+
+fn ipv4_header_checksum(header: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    for pair in header.chunks_exact(2) {
+        sum += u32::from(u16::from_be_bytes([pair[0], pair[1]]));
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
 fn send_datagram(sock: &UdpSocket, bytes: &[u8], destination: SocketAddr) -> std::io::Result<()> {
     let sent = sock.send_to(bytes, destination)?;
     if sent != bytes.len() {
@@ -179,12 +238,18 @@ fn default_state_dir() -> std::io::Result<std::path::PathBuf> {
 fn main() -> std::io::Result<()> {
     let mut positional = Vec::new();
     let mut insecure_lab_requested = false;
+    let mut simulate_app_traffic_requested = false;
+    let mut driver_device_requested = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--insecure-lab" => insecure_lab_requested = true,
+            "--simulate-app-traffic" => simulate_app_traffic_requested = true,
+            "--driver-device" => driver_device_requested = true,
             "--help" | "-h" => {
-                println!("Usage: balancify-service [--insecure-lab] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
+                println!("Usage: balancify-service [--insecure-lab] [--simulate-app-traffic] [--driver-device] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
                 println!("Without a relay identity, the service fails closed. Insecure lab mode is debug-only and loopback-only.");
+                println!("Synthetic app traffic is opt-in and restricted to --insecure-lab mode.");
+                println!("--driver-device opens the Windows control device, injects received tunnel packets, and polls outbound raw-IP packets; it requires the driver and appropriate access.");
                 return Ok(());
             }
             _ if arg.starts_with('-') => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unknown option: {arg}"))),
@@ -213,8 +278,17 @@ fn main() -> std::io::Result<()> {
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
     validate_lab_target(mode, relay_primary, relay_secondary)?;
+    validate_simulated_traffic(mode, simulate_app_traffic_requested)?;
+    let driver_device = if driver_device_requested {
+        Some(DriverDevice::open()?)
+    } else {
+        None
+    };
 
     println!("Balancify service -- state_dir={}, primary={}, secondary={:?}", state_dir.display(), relay_primary, relay_secondary);
+    if driver_device.is_some() {
+        println!("  NDIS device path: tunnel injection and outbound packet polling enabled");
+    }
     println!("  public key: {:02x?}...", &keypair.public_bytes()[..8]);
 
     let cfg = ServiceConfig {
@@ -287,6 +361,7 @@ fn main() -> std::io::Result<()> {
     let started_at = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
+    let mut last_driver_poll = Instant::now();
 
     loop {
         let now = Instant::now();
@@ -344,7 +419,12 @@ fn main() -> std::io::Result<()> {
                             for act in actions {
                                 match act {
                                     Action::Deliver { data } => {
-                                        println!("Deliver {} bytes from {}: {:?}", data.len(), from, String::from_utf8_lossy(&data[..data.len().min(64)]));
+                                        if let Some(device) = &driver_device {
+                                            device.inject_nbl(&data)?;
+                                            println!("Injected {} received tunnel bytes into the NDIS miniport", data.len());
+                                        } else {
+                                            println!("Received {} tunnel bytes from {} (not injected; pass --driver-device to use the miniport)", data.len(), from);
+                                        }
                                     }
                                     Action::Send { uplink, bytes } => {
                                         let s = if uplink.0 == 0 { &sock0 } else { &sock1 };
@@ -372,19 +452,57 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        // Simulate app packet once per elapsed second from service startup.
-        if let Some(elapsed_seconds) = next_simulated_packet_tick(started_at, now, flow_counter) {
-            flow_counter = elapsed_seconds;
-            let src: SocketAddr = format!("10.0.0.1:{}", 5000 + (flow_counter % 1000) as u16).parse().unwrap();
-            let dst: SocketAddr = "8.8.8.8:443".parse().unwrap();
-            let flow = FlowKey::new(6, src, dst);
-            let payload = format!("app packet {} at {:?}", flow_counter, now);
-            let actions = svc.send_app_packet(&flow, None, payload.as_bytes(), now);
-            for act in actions {
-                if let Action::Send { uplink, bytes } = act {
-                    let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
-                    let relay = svc.relay_current().unwrap_or(relay_primary);
-                    send_datagram(sock, &bytes, relay)?;
+        // Poll a bounded batch from the miniport's driver-owned TX queue only
+        // after a receiver session exists (authenticated handshake or explicit
+        // insecure lab session). This keeps packets queued before handshake and
+        // prevents use of the placeholder cipher. Each record is validated by
+        // DriverDevice and revalidated by Service before tunnel scheduling.
+        if let Some(device) = &driver_device {
+            if svc.sessions() > 0
+                && now.duration_since(last_driver_poll) >= Duration::from_millis(10)
+            {
+                last_driver_poll = now;
+                for _ in 0..64 {
+                    let Some(packet) = device.dequeue_tx()? else { break };
+                    let actions = svc.send_ip_packet(&packet, now).map_err(|error| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                    })?;
+                    for act in actions {
+                        match act {
+                            Action::Send { uplink, bytes } => {
+                                let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
+                                let relay = svc.relay_current().unwrap_or(relay_primary);
+                                send_datagram(sock, &bytes, relay)?;
+                            }
+                            Action::Refused { .. } => {}
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Optional synthetic raw-IP traffic is restricted to the explicit
+        // loopback-only insecure lab mode; normal secure operation never sends
+        // fabricated application packets to a configured relay.
+        if simulate_app_traffic_requested {
+            if let Some(elapsed_seconds) = next_simulated_packet_tick(started_at, now, flow_counter) {
+                flow_counter = elapsed_seconds;
+                let payload = format!("BalanciFy lab datagram {flow_counter}");
+                let packet = build_simulated_ipv4_udp_packet(
+                    flow_counter as u16,
+                    5000 + (flow_counter % 1000) as u16,
+                    payload.as_bytes(),
+                )?;
+                let actions = svc.send_ip_packet(&packet, now).map_err(|error| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                })?;
+                for act in actions {
+                    if let Action::Send { uplink, bytes } = act {
+                        let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
+                        let relay = svc.relay_current().unwrap_or(relay_primary);
+                        send_datagram(sock, &bytes, relay)?;
+                    }
                 }
             }
         }
@@ -603,6 +721,30 @@ mod ipc_capacity_tests {
             root.join("Balancify")
         );
         assert!(choose_state_dir(None, None, None, None, true).is_err());
+    }
+
+    #[test]
+    fn synthetic_app_traffic_is_confined_to_explicit_insecure_lab_mode() {
+        assert!(validate_simulated_traffic(ConnectionMode::Secure, false).is_ok());
+        assert_eq!(
+            validate_simulated_traffic(ConnectionMode::Secure, true).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(validate_simulated_traffic(ConnectionMode::InsecureLab, true).is_ok());
+    }
+
+    #[test]
+    fn synthetic_udp_packet_is_valid_raw_ipv4_for_service_ingress() {
+        let packet = build_simulated_ipv4_udp_packet(7, 5050, b"lab payload").unwrap();
+        assert_eq!(packet.len(), 39);
+        assert_eq!(ipv4_header_checksum(&packet[..20]), 0);
+        assert_eq!(&packet[24..26], &19u16.to_be_bytes());
+        assert_eq!(&packet[28..], b"lab payload");
+        let flow = balancify_service::packet::flow_key_from_packet(&packet).unwrap();
+        assert_eq!(flow.proto, 17);
+        assert_eq!(flow.src.to_string(), "10.0.0.1:5050");
+        assert_eq!(flow.dst.to_string(), "8.8.8.8:443");
+        assert!(build_simulated_ipv4_udp_packet(0, 5000, &vec![0; 9000]).is_err());
     }
 
     #[test]

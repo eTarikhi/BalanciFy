@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+<title id="title">Balancify project status dashboard, 23 October 2026</title>
+<desc id="desc">Latest PR CI passes all six jobs. The Rust workspace has 305 Linux and 304 Windows tests. None of eleven product acceptance items has recorded hardware or clean-machine evidence. Gate G2 remains open, G3 is blocked, and later gates are pending.</desc>
+<defs><style>
+ text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#17243b}.muted{fill:#62718a}.title{font-size:34px;font-weight:700}.sub{font-size:16px}.kpi{font-size:34px;font-weight:750}.label{font-size:15px;font-weight:650}.small{font-size:13px}.gate{font-size:17px;font-weight:750}.state{font-size:13px;font-weight:700}.card{fill:#fff;stroke:#d9e1ed;stroke-width:1.4}.pass{fill:#e5f5ee;stroke:#20a16b}.open{fill:#fff3d8;stroke:#d59312}.blocked{fill:#fff0e8;stroke:#d9703c}.pending{fill:#f0f3f8;stroke:#a5b2c3}.partial{fill:#eaf2ff;stroke:#5885cc}
+</style></defs>
+<rect width="1440" height="900" fill="#f4f7fb"/>
+<text x="64" y="66" class="title">Balancify · Development status</text>
+<text x="64" y="96" class="sub muted">Evidence snapshot · 23 October 2026 · main a1ec9b0 · PR #19 head 02409cf</text>
+<text x="1370" y="70" text-anchor="end" class="small muted">REPORT SNAPSHOT</text>
+<text x="1370" y="94" text-anchor="end" class="label">Not a release-readiness claim</text>
+<!-- KPI cards -->
+<g transform="translate(64,128)">
+ <rect class="card" width="310" height="124" rx="16"/><text x="24" y="40" class="small muted">LATEST PR CI · 39922014929</text><text x="24" y="84" class="kpi" fill="#147a51">6 / 6 passed</text><text x="24" y="108" class="small muted">Linux + Windows tests, lab, policy audit</text>
+</g>
+<g transform="translate(394,128)">
+ <rect class="card" width="310" height="124" rx="16"/><text x="24" y="40" class="small muted">RUST TESTS IN PR CI</text><text x="24" y="84" class="kpi">305 / 304</text><text x="24" y="108" class="small muted">Ubuntu / Windows · all passed</text>
+</g>
+<g transform="translate(724,128)">
+ <rect class="card" width="310" height="124" rx="16"/><text x="24" y="40" class="small muted">PRODUCT ACCEPTANCE EVIDENCE</text><text x="24" y="84" class="kpi" fill="#b56225">0 / 11</text><text x="24" y="108" class="small muted">§10.3 rows recorded as passed</text>
+</g>
+<g transform="translate(1054,128)">
+ <rect class="card" width="322" height="124" rx="16"/><text x="24" y="40" class="small muted">DOCUMENTATION DEPLOY</text><text x="24" y="82" class="kpi" fill="#b34a4a">Not live</text><text x="24" y="108" class="small muted">Deployment unverified; latest attempt failed</text>
+</g>
+<!-- gates -->
+<text x="64" y="302" class="title" style="font-size:23px">Gate position · exit evidence, not feature percentages</text>
+<text x="1376" y="302" text-anchor="end" class="small muted">A gate advances only when its stated criterion is evidenced</text>
+<!-- 4 columns x 2 rows -->
+<g transform="translate(64,326)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="partial"/><text x="49" y="57" text-anchor="middle" class="gate">G1</text><text x="104" y="40" class="label">Policy, decisions &amp; signing strategy</text><text x="104" y="69" class="state" fill="#3e6db1">DOCUMENTED · formal sign-off evidence not located</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 1</text>
+</g>
+<g transform="translate(740,326)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="open"/><text x="49" y="57" text-anchor="middle" class="gate">G2</text><text x="104" y="40" class="label">Steering + tunnel through first-party miniport</text><text x="104" y="69" class="state" fill="#a96e00">OPEN · WDK CI builds pass; no signed runtime/packet evidence</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 2 exit</text>
+</g>
+<g transform="translate(64,446)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="blocked"/><text x="49" y="57" text-anchor="middle" class="gate">G3</text><text x="104" y="40" class="label">Driver performance, HVCI trio &amp; signing dry-run</text><text x="104" y="69" class="state" fill="#b85b27">BLOCKED BY G2 · WDK / VM / Partner Center evidence</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 3</text>
+</g>
+<g transform="translate(740,446)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="pending"/><text x="49" y="57" text-anchor="middle" class="gate">G4</text><text x="104" y="40" class="label">Rig B acceptance + offline clean-machine install</text><text x="104" y="69" class="state muted">PENDING · 11 acceptance rows have no accepted results</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 4</text>
+</g>
+<g transform="translate(64,566)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="pending"/><text x="49" y="57" text-anchor="middle" class="gate">G5</text><text x="104" y="40" class="label">72-hour soak, flaps, resume &amp; Driver Verifier</text><text x="104" y="69" class="state muted">PENDING · requires G4 product build / test rig</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 5</text>
+</g>
+<g transform="translate(740,566)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="pending"/><text x="49" y="57" text-anchor="middle" class="gate">G6</text><text x="104" y="40" class="label">Compatibility matrix + external security review</text><text x="104" y="69" class="state muted">PENDING · requires G5, reviewer and test matrix</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 6</text>
+</g>
+<g transform="translate(64,686)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="partial"/><text x="49" y="57" text-anchor="middle" class="gate">G7</text><text x="104" y="40" class="label">RC checklist, signing, SBOM/VEX &amp; rollback</text><text x="104" y="69" class="state" fill="#3e6db1">PARTIAL FOUNDATION · SPDX passes; VEX/RC/rollback open</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 7</text>
+</g>
+<g transform="translate(740,686)">
+ <rect class="card" width="636" height="104" rx="14"/><rect x="16" y="17" width="66" height="66" rx="12" class="pending"/><text x="49" y="57" text-anchor="middle" class="gate">G8</text><text x="104" y="40" class="label">Field stability, GA, distribution &amp; support</text><text x="104" y="69" class="state muted">PENDING · follows G7 and field evidence</text><text x="610" y="40" text-anchor="end" class="small muted">Phase 8</text>
+</g>
+<text x="64" y="840" class="small muted">Interpretation: green CI demonstrates source-level build/tests only; it does not close driver, network, HVCI, installer, signing, or field gates.</text>
+</svg>

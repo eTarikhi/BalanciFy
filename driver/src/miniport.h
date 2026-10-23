@@ -22,6 +22,7 @@
 
 #include "config_validation.h"
 #include "rx_pause_state.h"
+#include "tx_packet_queue.h"
 
 #define BALANCIFY_TAG 'laBB' // 'BBal' reversed
 #define BALANCIFY_POOL_TAG BALANCIFY_TAG
@@ -41,6 +42,7 @@ typedef struct _BALANCIFY_ADAPTER {
     ULONG64 txErrors;
     ULONG64 txBytes;
     ULONG64 rxBytes;
+    BALANCIFY_TX_PACKET_QUEUE txQueue;
 } BALANCIFY_ADAPTER, *PBALANCIFY_ADAPTER;
 
 // Stored in each injected receive NBL until NDIS returns it. The packet bytes

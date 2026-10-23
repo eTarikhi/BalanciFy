@@ -493,7 +493,7 @@ fn render_rigb(resp: Response) {
             println!("Traffic: iperf3 TCP 16 parallel flows aggregate, 1 TCP flow single-flow, UDP 1 flow, curated workloads");
             println!("Acceptance rows: aggregate >=90% sum after overhead, single-flow >=70% sum both links, mismatched >=100% best (no regression else auto-revert §6.4.6), added delay <=3ms wired lab, loss/reordering <=0.1%, failover <=2s, CPU & memory report first limits after S2, power delta, stability 72h soak + random flaps + 100 resume, compatibility matrix, clean-machine provisioning offline VM");
             render_counters(&s.counters);
-            println!("Simulated: bonded 42.8% gain mean 1.3ms vs single 2.0ms, lossy 16.7% penalty, ECN 80% reduction, delay 10% reduction, Rig B 1Gbps/300M mean ~X Mbps");
+            println!("Synthetic harness/placeholder output only: not measured on Rig B and not acceptance evidence; use `docs/phase2/throughput-rows.md` for real lab measurements.");
             println!("Real Rig B pending — harness throughput.rs has 5 profiles + Rig B + per-flow on/off + aggregate 16 flows + added delay + CPU/Gbit estimation via crypto-bench + ETW");
         }
         _ => println!("Unexpected: {:?}", resp),
@@ -506,10 +506,10 @@ fn render_hvci(resp: Response) {
             println!("=== HVCI Readiness Trio (S15, Sec.9.4, Sec.9.5) ===");
             println!("Requirement: Driver Verifier with code-integrity 0x209BB, HLK HVCIMemoryIntegrity test, VBS/Memory-Integrity VM with Secure Boot/vTPM/test-signing");
             println!("Code: miniport.c NBL pool via NdisAllocateNetBufferListPool(fAllocateNetBuffer=TRUE), ioctl.c length validation SDDL METHOD_BUFFERED, NonPagedPoolNx NormalPoolPriority, no RWX, MDL freeing via NdisFreeMdl, /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre, PoolTag BlaB, Spectre mitigation");
-            println!("Build: msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64 — requires WDK 10.0.22621+");
+            println!("Build: msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64 — targets SDK 10.0.26100.0; CI pins WDK 10.0.26100.6584 for x64 and ARM64.");
             println!("Test: verifier /standard /driver balancify.sys, HLK Studio HVCIMemoryIntegrity, Hyper-V VM Gen2 Secure Boot on vTPM VBS, bcdedit testsigning on, pnputil add-driver, msinfo32 VBS Running MI enabled");
             render_counters(&s.counters);
-            println!("Status: code ready, real VM run pending, CI currently only Rust workspace (no WDK), future add WDK build job Phase 4 (a) in ci.yml");
+            println!("Status: pinned x64/ARM64 WDK compile/link and unsigned PE checks pass in CI; signed installation, Driver Verifier, HVCI/VM, and packet-path validation remain pending.");
         }
         _ => println!("Unexpected: {:?}", resp),
     }
@@ -521,8 +521,8 @@ fn render_sbom(resp: Response) {
             println!("=== SBOM status (S13) ===");
             println!("Generate the current SPDX 2.3 inventory with: sh tools/ci/sbom.sh [version] [output]");
             println!("The inventory comes from cargo metadata --locked and includes declared license metadata, source checksums, and dependency relationships.");
-            println!("No VEX statements or vulnerability-status claims are generated; SPDX 3.0 and reviewed VEX remain pending.");
-            println!("The installer copies the generated sidecar and fails if it is missing; packaging/clean-machine validation remains pending.");
+            println!("CI generates SPDX 2.3 and SPDX 3.0.1 inventories from the locked production graph and validates both; no VEX or vulnerability-status claims are generated.");
+            println!("The installer includes both generated sidecars and fails if either is missing; clean-machine install and reviewed VEX remain pending.");
             render_counters(&s.counters);
         }
         _ => println!("Unexpected: {:?}", resp),
@@ -553,7 +553,7 @@ fn render_soak(resp: Response) {
             println!("Soak harness: crates/service/src/bin/soak.rs 1000 iterations, 10 packets per iteration, random flap every 100 (remove_uplink_at + add_uplink + publish), sleep/resume every 10 (resume_from_sleep + tick keepalives), ECN every 200, delay jump every 300, loss every 100, tick for keepalives/rekey/failover/probes, checks pending_probes <=8, sessions <=64, held <=1000, support bundle per-path ECN/delay cwnd/in_flight");
             println!("ETW: 100-600 events, WPA CPU sampling, working set bounded, power delta via telemetry, 72h soak + random flaps + 100 resume with Verifier");
             render_counters(&s.counters);
-            println!("Real: requires Rig B hardware + Hyper-V VM Gen2 Secure Boot vTPM VBS + WDK 10.0.22621+ + Driver Verifier 0x209BB + HLK HVCIMemoryIntegrity + VBS/MI");
+            println!("Real: requires Rig B hardware + Hyper-V VM Gen2 Secure Boot/vTPM/VBS + pinned WDK 10.0.26100.6584 + Driver Verifier 0x209BB + HLK HVCIMemoryIntegrity + Memory Integrity");
         }
         _ => println!("Unexpected: {:?}", resp),
     }

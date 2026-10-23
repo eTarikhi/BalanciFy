@@ -21,7 +21,9 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 pub mod support;
+pub mod driver_device;
 pub mod etw;
+pub mod packet;
 pub mod wintun;
 pub use balancify_ipc as ipc;
 
@@ -522,6 +524,22 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     // ------------------------------------------------------------ data plane
+
+    /// Parse one complete raw IP packet and send it into the tunnel.
+    ///
+    /// This is the platform-independent boundary used by the optional Windows
+    /// NDIS adapter bridge and lab traffic path. It validates packet bounds,
+    /// derives the directional flow key, and feeds the original bytes to the
+    /// sans-I/O scheduler. Invalid/unsupported packets are rejected before
+    /// service state changes; this does not imply driver runtime validation.
+    pub fn send_ip_packet(
+        &mut self,
+        packet: &[u8],
+        now: Instant,
+    ) -> Result<Vec<Action>, packet::PacketFlowError> {
+        let flow = packet::flow_key_from_packet(packet)?;
+        Ok(self.send_app_packet(&flow, None, packet, now))
+    }
 
     /// One packet from the application (inner stack) into the tunnel.
     pub fn send_app_packet(
@@ -1494,6 +1512,41 @@ mod tests {
         }
         assert!(s.publish(now), "first publish must advance the revision");
         s
+    }
+
+    #[test]
+    fn raw_ip_packet_entry_derives_flow_and_tunnels_original_bytes() {
+        let now = Instant::now();
+        let mut service = ready_service(now);
+        let mut packet = vec![0u8; 40];
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&40u16.to_be_bytes());
+        packet[8] = 64;
+        packet[9] = 6;
+        packet[12..16].copy_from_slice(&[10, 1, 2, 3]);
+        packet[16..20].copy_from_slice(&[198, 51, 100, 9]);
+        packet[20..22].copy_from_slice(&12345u16.to_be_bytes());
+        packet[22..24].copy_from_slice(&443u16.to_be_bytes());
+        packet[32] = 0x50;
+
+        let actions = service.send_ip_packet(&packet, now).expect("valid raw IPv4 packet");
+        let frame = actions.iter().find_map(|action| match action {
+            Action::Send { bytes, .. } => Some(bytes),
+            _ => None,
+        }).expect("healthy paths produce a tunnel frame");
+        let (_, tunneled_packet) = Header::decode(frame).expect("valid tunnel frame");
+        assert_eq!(tunneled_packet, packet.as_slice());
+        assert_eq!(service.counters().packets_stripped, 1);
+    }
+
+    #[test]
+    fn malformed_raw_ip_packet_is_rejected_before_service_state_changes() {
+        let now = Instant::now();
+        let mut service = ready_service(now);
+        let counters_before = service.counters();
+        let error = service.send_ip_packet(&[0x45, 0, 0, 20], now).unwrap_err();
+        assert_eq!(error, packet::PacketFlowError::EmptyOrTruncated);
+        assert_eq!(service.counters(), counters_before);
     }
 
     fn capacity_of(s: &Service<PassThrough>, id: UplinkId) -> Option<u64> {

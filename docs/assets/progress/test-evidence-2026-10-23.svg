@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1260 790" role="img" aria-labelledby="title desc">
+<title id="title">Rust test evidence by crate, latest verified PR CI</title>
+<desc id="desc">PR CI run 39922014929 reports 305 passing tests on Ubuntu and 304 on Windows. Bars show Linux tests by package; the one-count difference comes from the client tests. The chart is software verification evidence, not project completion or hardware acceptance.</desc>
+<defs><style>text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#17243b}.title{font-size:28px;font-weight:700}.subtitle{font-size:15px;fill:#64738a}.label{font-size:14px}.count{font-size:14px;font-weight:700}.axis{font-size:12px;fill:#738096}.bar{fill:#2f6db2}.bar2{fill:#5f9bd0}.grid{stroke:#e1e7f0;stroke-width:1}.card{fill:white;stroke:#d9e1ed}</style></defs>
+<rect width="1260" height="790" rx="20" fill="#f4f7fb"/>
+<text x="60" y="58" class="title">Software verification evidence</text>
+<text x="60" y="86" class="subtitle">GitHub Actions PR run 39922014929 · PR head 02409cf · ASan/UBSan + 12,000 parser mutations · all 6 jobs passed</text>
+<g transform="translate(60,112)"><rect width="540" height="82" rx="14" class="card"/><text x="22" y="34" class="subtitle">Ubuntu workspace tests</text><text x="22" y="66" font-size="27" font-weight="700" fill="#16734f">305 passed · 0 failed</text></g>
+<g transform="translate(620,112)"><rect width="540" height="82" rx="14" class="card"/><text x="22" y="34" class="subtitle">Windows workspace tests</text><text x="22" y="66" font-size="27" font-weight="700" fill="#16734f">304 passed · 0 failed</text></g>
+<text x="60" y="242" class="label" font-weight="700">Per-suite test counts (Ubuntu)</text>
+<text x="1160" y="242" text-anchor="end" class="subtitle">Bars show test count, not effort or feature completeness</text>
+<!-- plot scale: max 90; width 700 -->
+<g transform="translate(280,270)">
+ <line x1="0" y1="0" x2="0" y2="414" class="grid"/><line x1="175" y1="0" x2="175" y2="414" class="grid"/><line x1="350" y1="0" x2="350" y2="414" class="grid"/><line x1="525" y1="0" x2="525" y2="414" class="grid"/><line x1="700" y1="0" x2="700" y2="414" class="grid"/>
+ <text x="0" y="-12" text-anchor="middle" class="axis">0</text><text x="175" y="-12" text-anchor="middle" class="axis">22</text><text x="350" y="-12" text-anchor="middle" class="axis">44</text><text x="525" y="-12" text-anchor="middle" class="axis">66</text><text x="700" y="-12" text-anchor="middle" class="axis">88</text>
+ <!-- row height 32; bar max scale 8px/test -->
+ <text x="-18" y="25" text-anchor="end" class="label">Core</text><rect x="0" y="8" width="664" height="20" rx="6" class="bar"/><text x="674" y="24" class="count">83</text>
+ <text x="-18" y="59" text-anchor="end" class="label">Service library</text><rect x="0" y="42" width="472" height="20" rx="6" class="bar"/><text x="474" y="58" class="count">59</text>
+ <text x="-18" y="93" text-anchor="end" class="label">Service binary</text><rect x="0" y="76" width="80" height="20" rx="6" class="bar2"/><text x="90" y="92" class="count">10</text>
+ <text x="-18" y="127" text-anchor="end" class="label">Crypto</text><rect x="0" y="110" width="312" height="20" rx="6" class="bar"/><text x="322" y="126" class="count">39</text>
+ <text x="-18" y="161" text-anchor="end" class="label">Tunnel</text><rect x="0" y="144" width="280" height="20" rx="6" class="bar"/><text x="290" y="160" class="count">35</text>
+ <text x="-18" y="195" text-anchor="end" class="label">IPC</text><rect x="0" y="178" width="144" height="20" rx="6" class="bar"/><text x="154" y="194" class="count">18</text>
+ <text x="-18" y="229" text-anchor="end" class="label">Client</text><rect x="0" y="212" width="104" height="20" rx="6" class="bar2"/><text x="114" y="228" class="count">13</text>
+ <text x="-18" y="263" text-anchor="end" class="label">Relay</text><rect x="0" y="246" width="104" height="20" rx="6" class="bar"/><text x="114" y="262" class="count">13</text>
+ <text x="-18" y="297" text-anchor="end" class="label">Installer</text><rect x="0" y="280" width="96" height="20" rx="6" class="bar2"/><text x="106" y="296" class="count">12</text>
+ <text x="-18" y="331" text-anchor="end" class="label">App</text><rect x="0" y="314" width="64" height="20" rx="6" class="bar2"/><text x="74" y="330" class="count">8</text>
+ <text x="-18" y="365" text-anchor="end" class="label">E2E</text><rect x="0" y="348" width="72" height="20" rx="6" class="bar2"/><text x="82" y="364" class="count">9</text>
+ <text x="-18" y="399" text-anchor="end" class="label">Fuzz properties</text><rect x="0" y="382" width="48" height="20" rx="6" class="bar2"/><text x="58" y="398" class="count">6</text>
+</g>
+<g transform="translate(60,716)"><rect width="1100" height="48" rx="12" fill="#fff7e4" stroke="#e5b54a"/><text x="20" y="30" class="label" fill="#7a5700">Evidence boundary: these are CI test counts. Driver/WDK runtime, Rig B measurements, clean-machine install, HVCI, and production UX are not validated by this chart.</text></g>
+</svg>
