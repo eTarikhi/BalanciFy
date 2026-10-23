@@ -395,7 +395,7 @@ static NDIS_STATUS MiniportQueueNetBufferList(
             goto InvalidSend;
         }
         slot->length = (size_t)length;
-        slot->sequence = adapter->txQueue.nextSequence + (uint64_t)offset;
+        slot->sequence = adapter->txQueue.nextSequence + (unsigned long long)offset;
     }
 
     if (!BalancifyTxQueueCommit(&adapter->txQueue, packetCount)) goto InvalidSend;

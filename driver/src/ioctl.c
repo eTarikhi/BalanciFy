@@ -335,7 +335,7 @@ VOID BalancifyEvtIoDeviceControl(
             break;
         }
         header.version = BALANCIFY_TX_PACKET_VERSION;
-        header.packetLength = (uint32_t)slot->length;
+        header.packetLength = (unsigned int)slot->length;
         header.sequence = slot->sequence;
         destination = (unsigned char *)outputBuffer;
         NdisMoveMemory(destination, &header, sizeof(header));

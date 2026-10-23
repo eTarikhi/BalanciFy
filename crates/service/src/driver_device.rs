@@ -277,7 +277,7 @@ mod tests {
         packet[0] = 0x45;
         packet[2..4].copy_from_slice(&20u16.to_be_bytes());
         packet[8] = 64;
-        packet[9] = 17;
+        packet[9] = 1;
         packet
     }
 

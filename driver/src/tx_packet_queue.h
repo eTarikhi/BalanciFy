@@ -1,29 +1,26 @@
 #ifndef BALANCIFY_TX_PACKET_QUEUE_H
 #define BALANCIFY_TX_PACKET_QUEUE_H
 
-#include <stddef.h>
-#include <stdint.h>
-
 #define BALANCIFY_TX_QUEUE_CAPACITY 64u
 #define BALANCIFY_TX_PACKET_MAX_BYTES 9000u
 #define BALANCIFY_TX_PACKET_VERSION 1u
 
 typedef struct _BALANCIFY_TX_PACKET_HEADER {
-    uint32_t version;
-    uint32_t packetLength;
-    uint64_t sequence;
+    unsigned int version;
+    unsigned int packetLength;
+    unsigned long long sequence;
 } BALANCIFY_TX_PACKET_HEADER;
 
 typedef struct _BALANCIFY_TX_PACKET_SLOT {
     size_t length;
-    uint64_t sequence;
+    unsigned long long sequence;
     unsigned char bytes[BALANCIFY_TX_PACKET_MAX_BYTES];
 } BALANCIFY_TX_PACKET_SLOT;
 
 typedef struct _BALANCIFY_TX_PACKET_QUEUE {
     size_t head;
     size_t count;
-    uint64_t nextSequence;
+    unsigned long long nextSequence;
     BALANCIFY_TX_PACKET_SLOT slots[BALANCIFY_TX_QUEUE_CAPACITY];
 } BALANCIFY_TX_PACKET_QUEUE;
 
@@ -59,7 +56,7 @@ static inline int BalancifyTxQueueCommit(
     size_t packetCount) {
     if (!BalancifyTxQueueCanEnqueue(queue, packetCount)) return 0;
     queue->count += packetCount;
-    queue->nextSequence += (uint64_t)packetCount;
+    queue->nextSequence += (unsigned long long)packetCount;
     return 1;
 }
 
