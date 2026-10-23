@@ -527,10 +527,11 @@ impl<C: Crypto + Clone> Service<C> {
 
     /// Parse one complete raw IP packet and send it into the tunnel.
     ///
-    /// This is the platform-independent boundary intended for a future NDIS
-    /// adapter. It validates the packet bounds, derives the directional 5-tuple,
-    /// then feeds the original packet bytes to the existing sans-I/O scheduler.
-    /// Invalid/unsupported packets are rejected before service state changes.
+    /// This is the platform-independent boundary used by the optional Windows
+    /// NDIS adapter bridge and lab traffic path. It validates packet bounds,
+    /// derives the directional flow key, and feeds the original bytes to the
+    /// sans-I/O scheduler. Invalid/unsupported packets are rejected before
+    /// service state changes; this does not imply driver runtime validation.
     pub fn send_ip_packet(
         &mut self,
         packet: &[u8],

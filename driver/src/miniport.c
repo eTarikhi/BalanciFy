@@ -1,7 +1,7 @@
 // Balancify NDIS virtual miniport -- Phase 2 S2b skeleton
-// This file documents the intended driver layout and compiles on WDK.
-// It is not yet wired to the service data path; S2b requires test-signed
-// load with Driver Verifier and packet loopback through it.
+// The source exposes bounded NDIS-to-service and service-to-NDIS paths, but
+// neither has been exercised against an installed driver. S2b still requires
+// test-signed load, Driver Verifier, and bidirectional packet-path validation.
 //
 // Build: msbuild driver/balancify.vcxproj /p:Configuration=Release /p:Platform=x64
 // CI build kit: Microsoft WDK NuGet 10.0.26100.6584 + Windows SDK 10.0.26100.
@@ -12,6 +12,7 @@
 // - No third-party kernel component in data path (C2): only NDIS + WDF
 
 #include "miniport.h"
+#include "ip_packet_validation.h"
 
 // Forward decls
 DRIVER_INITIALIZE DriverEntry;
@@ -177,6 +178,7 @@ NDIS_STATUS MiniportInitializeEx(
     if (!adapter) return NDIS_STATUS_RESOURCES;
 
     NdisZeroMemory(adapter, sizeof(BALANCIFY_ADAPTER));
+    BalancifyTxQueueInitialize(&adapter->txQueue);
     adapter->miniportAdapterHandle = miniportAdapterHandle;
     adapter->mtu = BALANCIFY_DEFAULT_MTU;
     adapter->lookaheadSize = adapter->mtu;
@@ -342,6 +344,73 @@ NDIS_STATUS MiniportRestart(
     return NDIS_STATUS_SUCCESS;
 }
 
+static NDIS_STATUS MiniportQueueNetBufferList(
+    PBALANCIFY_ADAPTER adapter,
+    PNET_BUFFER_LIST netBufferList) {
+    PNET_BUFFER netBuffer;
+    size_t packetCount = 0;
+    size_t totalBytes = 0;
+    size_t offset = 0;
+    NDIS_STATUS result = NDIS_STATUS_FAILURE;
+
+    for (netBuffer = NET_BUFFER_LIST_FIRST_NB(netBufferList);
+         netBuffer;
+         netBuffer = NET_BUFFER_NEXT_NB(netBuffer)) {
+        ULONG length = NET_BUFFER_DATA_LENGTH(netBuffer);
+        if (length == 0 || length > BALANCIFY_MAX_MTU || packetCount == BALANCIFY_TX_QUEUE_CAPACITY) {
+            return NDIS_STATUS_FAILURE;
+        }
+        packetCount++;
+        totalBytes += (size_t)length;
+    }
+    if (packetCount == 0) return NDIS_STATUS_FAILURE;
+
+    NdisAcquireSpinLock(&adapter->lock);
+    if (adapter->pauseState.paused) {
+        result = NDIS_STATUS_PAUSED;
+        goto SendComplete;
+    }
+    if (!BalancifyTxQueueCanEnqueue(&adapter->txQueue, packetCount)) {
+        adapter->txErrors += (ULONG64)packetCount;
+        result = NDIS_STATUS_RESOURCES;
+        goto SendComplete;
+    }
+
+    // Reserve a full NBL batch and publish it only after every NB has been
+    // copied and validated. The adapter lock serializes producers with the
+    // control-device consumer, so partial batches are never visible.
+    for (netBuffer = NET_BUFFER_LIST_FIRST_NB(netBufferList);
+         netBuffer;
+         netBuffer = NET_BUFFER_NEXT_NB(netBuffer), offset++) {
+        ULONG length = NET_BUFFER_DATA_LENGTH(netBuffer);
+        BALANCIFY_TX_PACKET_SLOT *slot = BalancifyTxQueueReserveSlot(
+            &adapter->txQueue, offset, packetCount);
+        PVOID packetData;
+
+        if (!slot) goto InvalidSend;
+        packetData = NdisGetDataBuffer(netBuffer, length, slot->bytes, 1, 0);
+        if (!packetData) goto InvalidSend;
+        if (packetData != slot->bytes) NdisMoveMemory(slot->bytes, packetData, length);
+        if (!BalancifyIsValidIpPacket(slot->bytes, (size_t)length, (size_t)adapter->mtu)) {
+            goto InvalidSend;
+        }
+        slot->length = (size_t)length;
+        slot->sequence = adapter->txQueue.nextSequence + (uint64_t)offset;
+    }
+
+    if (!BalancifyTxQueueCommit(&adapter->txQueue, packetCount)) goto InvalidSend;
+    adapter->txPackets += (ULONG64)packetCount;
+    adapter->txBytes += (ULONG64)totalBytes;
+    result = NDIS_STATUS_SUCCESS;
+    goto SendComplete;
+
+InvalidSend:
+    adapter->txErrors += (ULONG64)packetCount;
+SendComplete:
+    NdisReleaseSpinLock(&adapter->lock);
+    return result;
+}
+
 _Use_decl_annotations_
 VOID MiniportSendNetBufferLists(
     NDIS_HANDLE miniportAdapterContext,
@@ -352,14 +421,12 @@ VOID MiniportSendNetBufferLists(
     PNET_BUFFER_LIST curr = netBufferLists;
     UNREFERENCED_PARAMETER(portNumber);
 
-    BOOLEAN paused;
     BOOLEAN tracked;
     BOOLEAN completePause = FALSE;
 
     // Track the whole callback chain so a pending pause cannot complete after
     // only the first NBL has been completed.
     NdisAcquireSpinLock(&adapter->lock);
-    paused = (BOOLEAN)adapter->pauseState.paused;
     tracked = BalancifyTrackSendCallback(&adapter->pauseState) ? TRUE : FALSE;
     NdisReleaseSpinLock(&adapter->lock);
 
@@ -367,19 +434,10 @@ VOID MiniportSendNetBufferLists(
         PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(curr);
         NET_BUFFER_LIST_NEXT_NBL(curr) = NULL;
 
-        // The service transmit ring is not implemented yet. Fail explicitly
-        // instead of completing a dropped packet as a successful transmission.
-        // Sends admitted before pause are counted as errors; while pausing or
-        // paused, reject them with NDIS_STATUS_PAUSED as required by NDIS.
-        if (!paused) {
-            NdisAcquireSpinLock(&adapter->lock);
-            // NDIS packet counters count each NET_BUFFER, not each NBL.
-            for (PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(curr); nb; nb = NET_BUFFER_NEXT_NB(nb)) {
-                adapter->txErrors++;
-            }
-            NdisReleaseSpinLock(&adapter->lock);
-        }
-        NET_BUFFER_LIST_STATUS(curr) = paused ? NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE;
+        // A successful completion means the raw-IP packets were atomically
+        // accepted into the bounded service queue. Full or malformed batches
+        // fail without exposing a partial NBL chain to user mode.
+        NET_BUFFER_LIST_STATUS(curr) = MiniportQueueNetBufferList(adapter, curr);
 
         if (sendFlags & NDIS_SEND_FLAGS_DISPATCH_LEVEL) {
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);

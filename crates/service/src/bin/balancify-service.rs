@@ -249,7 +249,7 @@ fn main() -> std::io::Result<()> {
                 println!("Usage: balancify-service [--insecure-lab] [--simulate-app-traffic] [--driver-device] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
                 println!("Without a relay identity, the service fails closed. Insecure lab mode is debug-only and loopback-only.");
                 println!("Synthetic app traffic is opt-in and restricted to --insecure-lab mode.");
-                println!("--driver-device opens the Windows control device and injects received tunnel packets; it requires the driver and appropriate access.");
+                println!("--driver-device opens the Windows control device, injects received tunnel packets, and polls outbound raw-IP packets; it requires the driver and appropriate access.");
                 return Ok(());
             }
             _ if arg.starts_with('-') => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unknown option: {arg}"))),
@@ -287,7 +287,7 @@ fn main() -> std::io::Result<()> {
 
     println!("Balancify service -- state_dir={}, primary={}, secondary={:?}", state_dir.display(), relay_primary, relay_secondary);
     if driver_device.is_some() {
-        println!("  NDIS packet injection: enabled through the Balancify control device");
+        println!("  NDIS device path: tunnel injection and outbound packet polling enabled");
     }
     println!("  public key: {:02x?}...", &keypair.public_bytes()[..8]);
 
@@ -361,6 +361,7 @@ fn main() -> std::io::Result<()> {
     let started_at = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
+    let mut last_driver_poll = Instant::now();
 
     loop {
         let now = Instant::now();
@@ -448,6 +449,36 @@ fn main() -> std::io::Result<()> {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => return Err(e),
+            }
+        }
+
+        // Poll a bounded batch from the miniport's driver-owned TX queue only
+        // after a receiver session exists (authenticated handshake or explicit
+        // insecure lab session). This keeps packets queued before handshake and
+        // prevents use of the placeholder cipher. Each record is validated by
+        // DriverDevice and revalidated by Service before tunnel scheduling.
+        if let Some(device) = &driver_device {
+            if svc.sessions() > 0
+                && now.duration_since(last_driver_poll) >= Duration::from_millis(10)
+            {
+                last_driver_poll = now;
+                for _ in 0..64 {
+                    let Some(packet) = device.dequeue_tx()? else { break };
+                    let actions = svc.send_ip_packet(&packet, now).map_err(|error| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                    })?;
+                    for act in actions {
+                        match act {
+                            Action::Send { uplink, bytes } => {
+                                let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
+                                let relay = svc.relay_current().unwrap_or(relay_primary);
+                                send_datagram(sock, &bytes, relay)?;
+                            }
+                            Action::Refused { .. } => {}
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
 
