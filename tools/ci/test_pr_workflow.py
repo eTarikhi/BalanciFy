@@ -35,7 +35,7 @@ class PrWorkflowTests(unittest.TestCase):
         self.assertIn('bash tools/ci/local-ci.sh --push', script)
         self.assertIn('gh pr create --base main --head "$BRANCH" --fill', script)
         self.assertIn('gh run watch "$run_id" --exit-status --interval 20', script)
-        self.assertIn('gh pr checks "$pr_number" --required --watch --interval 20', script)
+        self.assertIn('gh pr checks "$pr_number" --watch --interval 20', script)
         self.assertIn('gh pr merge "$pr_number" --merge --match-head-commit "$TESTED_HEAD"', script)
         self.assertNotIn('gh pr merge "$pr_number" --auto', script)
         self.assertNotIn('git push --force', script)
@@ -44,7 +44,7 @@ class PrWorkflowTests(unittest.TestCase):
             script.index('gh pr create --base main'),
         )
         self.assertLess(
-            script.index('gh pr checks "$pr_number" --required'),
+            script.index('gh pr checks "$pr_number" --watch'),
             script.index('gh pr merge "$pr_number" --merge'),
         )
         self.assertLess(

@@ -1,256 +1,245 @@
-# BalanciFy CLI Cheat Sheet
+# BalanciFy CLI Cheat Sheet — Windows 11 x64
 
-A task-oriented command reference for the current repository. The project is a Rust 2021 workspace with a Windows NDIS miniport, Python lab/CI utilities, and Bash/PowerShell automation. It is a development prototype: the driver artifacts are unsigned, and production GUI, installation, hardware, HVCI, and packet-path acceptance are not established.
+Windows PowerShell is the primary local workflow for this Windows NDIS/WDF project; **WSL/Linux is not required**. The codebase combines a Rust 2021 workspace, a Windows C/WDK driver, Python test/SBOM helpers, Git Bash scripts, and GitHub Actions. There is no `package.json`, Docker/Compose workflow, production WinUI GUI, or ML training pipeline.
 
-## Architecture and toolchain at a glance
-
-- **Rust workspace:** `crates/core` (uplinks, policy and scheduling), `crates/tunnel` (wire framing and tunnel lane), `crates/crypto` (keys/handshake), `crates/ipc` (IPC v1), `crates/service` (service core and lab binaries), `crates/relay`, `crates/client`, `app` (lab CLI), and `installer` (transactional installer prototype). Workspace edition is Rust 2021; versions are pinned in `Cargo.lock`.
-- **Driver:** `driver/` contains WDF/NDIS C source and a Visual Studio WDK project. Compile locally on Windows with WDK; Linux CI exercises portable C contracts, not the WDK binary.
-- **Automation:** `.github/workflows/ci.yml` runs policy, Python/lab, Rust Linux/Windows, SPDX, and x64/ARM64 WDK checks. `.github/workflows/static.yml` builds and deploys the static portal to Pages from `main` or manual dispatch.
-- **No frontend package manager:** there is no `package.json` or Node build. There are also no Docker/Compose manifests or machine-learning training scripts; Docker, npm, and training commands are therefore not part of this project workflow.
+The native Windows runner uses MSVC for portable driver C fixtures and covers Rust, Python, SBOM, and WDK builds. GitHub's Ubuntu CI separately runs Linux Rust and ASan/UBSan C tests. Build success does not equal driver install/runtime/hardware acceptance.
 
 ## 1. Development & setup
 
-### Initialize the environment
+### Install and verify Windows tools
 
-Run from the repository root. The standard cross-platform toolchain is Rust stable; use Ubuntu 24.04/WSL2 for the full portable CI-equivalent suite. For Windows 11 x64 setup (including the `rustup-init.exe` bootstrap step after installing via WinGet), see [`local-development-and-ci.md`](local-development-and-ci.md#2-requirements).
+Use Developer PowerShell for Visual Studio 2022 for `cl.exe`/`msbuild.exe`. Required tools: Rust stable `x86_64-pc-windows-msvc`, Python `py -3` (3.10+), Git for Windows (Git Bash), GitHub CLI, Visual Studio 2022 C++ tools, and WDK 10.0.26100.6584/SDK 10.0.26100.0 for driver builds.
 
-```sh
-rustup toolchain install stable --profile minimal  # install the CI Rust toolchain
-rustup component add rustfmt clippy                 # install optional formatting/lint tools
-cargo fetch --locked                               # fetch exactly the committed dependency graph
-cargo metadata --locked --format-version 1         # inspect workspace/package metadata
-cargo tree --locked                                # inspect dependency graph
-sh tools/ci/audit-deps.sh                           # enforce dependency/crypto allowlist policy
+If WinGet installed the Rust bootstrapper but `rustup` isn't on `PATH`, run `rustup-init.exe` once:
+
+```powershell
+winget install --id Rustlang.Rustup --exact
+$rustupInit = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet" -Filter rustup-init.exe -File -Recurse -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if (-not $rustupInit) { throw 'rustup-init.exe not found under WinGet.' }
+& $rustupInit -y --default-toolchain stable --profile minimal
 ```
 
-Regenerate lockfile/allowlist data only when intentionally changing dependencies:
+Reopen Developer PowerShell, then:
 
-```sh
-sh tools/ci/gen-lock.sh
+```powershell
+rustup toolchain install stable --profile minimal
+rustup component add rustfmt clippy --toolchain stable
+rustc -vV       # verify host: x86_64-pc-windows-msvc
+cargo --version
+py -3 --version
+git --version
+gh --version
 ```
 
-Review the resulting `Cargo.lock` and `tools/ci/crypto-allowlist.txt` changes before committing; the script does not make the policy decision for you.
+Configure GitHub CLI and Git once:
 
-### Environment variables used by the lab binaries
-
-Use an absolute, private state directory for local runs. Do not share development keys or use the insecure lab mode outside an isolated test environment.
-
-```sh
-export BALANCIFY_STATE_DIR="$HOME/.local/state/balancify-dev"  # client/service/relay key state
-export BALANCIFY_IPC_PORT=5000                                 # loopback IPC listener port
-export BALANCIFY_RELAY_PUBLIC_KEY='<64 hex characters>'         # pinned relay public identity
-export BALANCIFY_FORWARD_ADDR='127.0.0.1:8080'                 # optional relay UDP forward target
+```powershell
+gh auth login
+gh auth setup-git
+gh auth status
+git remote -v
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
 ```
 
-Other code-supported toggles include `BALANCIFY_PER_FLOW=1` for client per-flow session behavior and `BALANCIFY_SIMULATE_ECN=1` for relay ECN simulation. Check the corresponding source before using environment overrides; they are lab controls, not production configuration management.
+Full setup, WDK requirements, logs, and PR flow: [`local-development-and-ci.md`](local-development-and-ci.md).
 
-### Inspect CLI usage
+### Fetch dependencies and inspect workspace
 
-```sh
-cargo run -p balancify-service -- --help       # service flags and relay arguments
-cargo run -p balancify-client -- --help        # client flags/positional arguments
-cargo run -p balancify-installer -- --help     # installer dry-run/journal arguments
+Run in the repository root:
+
+```powershell
+cargo fetch --locked                               # fetch the committed Rust dependency graph
+cargo metadata --locked --format-version 1         # inspect package/workspace metadata
+cargo tree --locked                                # inspect dependencies
 ```
 
-The app CLI takes the loopback IPC socket and a view name; available modes include `home`, `rules`, `diagnostics`, `tray`, `relay`, `bundle`, `perflow`, `rigb`, `hvci`, `sbom`, `failover`, and `soak`:
+Dependency policy audit uses a POSIX shell script supplied by Git for Windows; the native runner resolves Git Bash and runs it for you:
 
-```sh
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1 -Quick
+```
+
+### Local runtime configuration
+
+Use a private absolute state directory and do not share development keys:
+
+```powershell
+$env:BALANCIFY_STATE_DIR = "$env:LOCALAPPDATA\BalanciFy\dev"
+$env:BALANCIFY_IPC_PORT = '5000'                       # loopback-only local IPC
+$env:BALANCIFY_RELAY_PUBLIC_KEY = '<64 hex characters>' # pinned relay public identity
+$env:BALANCIFY_FORWARD_ADDR = '127.0.0.1:8080'         # optional relay UDP forwarding
+$env:BALANCIFY_PER_FLOW = '1'                           # optional client lab toggle
+$env:BALANCIFY_SIMULATE_ECN = '1'                       # optional relay ECN simulation
+```
+
+### Inspect CLI help and launch local lab components
+
+```powershell
+cargo run -p balancify-service -- --help
+cargo run -p balancify-client -- --help
+cargo run -p balancify-installer -- --help
 cargo run -p balancify-app -- 127.0.0.1:5000 home
 cargo run -p balancify-app -- 127.0.0.1:5000 diagnostics
 ```
 
-### Start a local lab stack (three terminals)
+For a disposable local lab, use separate PowerShell windows. **The `lab-crypto` relay has no confidentiality and binds UDP on `0.0.0.0`; isolate/firewall it and never use it for sensitive/production traffic.** `--insecure-lab` is debug-only and loopback-only.
 
-The following is for a disposable, trusted lab only. `lab-crypto` is explicitly **no confidentiality**, and the relay binds UDP sockets on `0.0.0.0`; isolate/firewall the host and stop the processes after testing. Never use this configuration for sensitive traffic or production.
-
-```sh
-# Terminal 1 — lab-only relay on UDP 4430 and 4431
+```powershell
+# Window 1: lab-only relay
 cargo run -p balancify-relay --features lab-crypto -- 4430,4431
 
-# Terminal 2 — debug-only loopback service and synthetic app traffic
-mkdir -p "$HOME/.local/state/balancify-lab"
-BALANCIFY_STATE_DIR="$HOME/.local/state/balancify-lab" \
-  cargo run -p balancify-service -- \
-  --insecure-lab --simulate-app-traffic 127.0.0.1:4430
+# Window 2: loopback service, with a private state directory
+$env:BALANCIFY_STATE_DIR = "$env:LOCALAPPDATA\BalanciFy\lab"
+New-Item -ItemType Directory -Force $env:BALANCIFY_STATE_DIR | Out-Null
+cargo run -p balancify-service -- --insecure-lab --simulate-app-traffic 127.0.0.1:4430
 
-# Terminal 3 — query the service's loopback IPC adapter
+# Window 3: lab shell CLI over loopback IPC
 cargo run -p balancify-app -- 127.0.0.1:5000 home
 ```
 
-The service refuses to start without a configured/pinned relay identity unless `--insecure-lab` is explicitly used in a debug build, and that mode only permits loopback relay addresses. The service's default IPC adapter binds loopback; it is a lab TCP adapter, not the planned production ACL-protected named pipe. For secure relay identity provisioning and persistent state, consult the service/client/relay source and `docs/phase2/security-hardening.md` rather than reusing the lab command above.
-
-### Local CI runner
-
-```sh
-bash tools/ci/local-ci.sh --quick  # policy + Python + netem safety + portable driver tests
-bash tools/ci/local-ci.sh          # full local software suite, Rust build/tests and SPDX validators
-bash tools/ci/local-ci.sh --push   # full checks, then push a clean committed topic branch and watch remote CI
-```
-
-The full profile requires Rust/Cargo and installs the exact SPDX validator versions into ignored `target/local-ci/venv/`. `--push` never stages or commits; it requires a clean worktree and checks that the remote branch tip is an ancestor of the tested commit. If the later GitHub run fails, the commit remains pushed. See [`local-development-and-ci.md`](local-development-and-ci.md) for OS prerequisites, logs, timeout, and security details.
+The app is a lab IPC client, not the planned production GUI. The service uses loopback TCP IPC for local testing, not the production ACL-protected named pipe.
 
 ## 2. Build processes
 
-### Compile and build the Rust workspace
-
-```sh
-cargo check --workspace                              # fast type-check without producing release artifacts
-cargo build --workspace                              # debug build of all workspace members
-cargo build --release --workspace                    # optimized workspace build (Linux CI build step)
-cargo build -p balancify-service --bin balancify-service
-cargo build -p balancify-relay --features lab-crypto # lab-only relay binary; no confidentiality
-```
-
-Run a selected binary without manually locating its output:
-
-```sh
-cargo run -p balancify-service -- --help
-cargo run -p balancify-client -- --help
-cargo run -p balancify-installer -- --dry-run --journal /tmp/balancify-install-journal.json
-```
-
-The installer command exercises prototype journal/dry-run logic; it is **not** a production installer and does not install the kernel driver or GUI.
-
-### Run software harnesses (not hardware measurements)
-
-```sh
-cargo run -p balancify-service --bin throughput --release  # synthetic service-path workload, not network throughput
-cargo run -p balancify-service --bin soak --release        # fast simulated stability/flap harness, not a real 72-hour soak
-cargo run -p balancify-service --bin compat --release      # software scenario harness, not an installed Windows compatibility matrix
-```
-
-Interpret their output as local software processing evidence only. It does not establish adapter-added latency, bonded throughput, driver behavior, Windows compatibility, or hardware acceptance.
-
-### Build and preview the documentation portal
-
-```sh
-sh tools/ci/build-docs-site.sh /tmp/balancify-site
-python3 -m http.server 8000 --directory /tmp/balancify-site
-```
-
-Open `http://127.0.0.1:8000` in a local browser. The site builder assembles the reviewed static HTML/SVG artifact; it does not deploy it.
-
-### Build the Windows driver
-
-Prerequisites: Windows, Visual Studio 2022/MSBuild 17.x, Windows SDK/WDK 10.0.26100.0 and the CI-pinned WDK 10.0.26100.6584. From Developer PowerShell:
+### Rust workspace
 
 ```powershell
-pwsh -File tools/ci/local-wdk-build.ps1                       # x64 + ARM64; writes under target/local-wdk/
-pwsh -File tools/ci/local-wdk-build.ps1 -Architecture x64
-pwsh -File tools/ci/local-wdk-build.ps1 -Architecture ARM64
+cargo check --workspace
+cargo build --workspace
+cargo build --release --workspace
+cargo build -p balancify-service --bin balancify-service
+cargo build -p balancify-relay --features lab-crypto # isolated lab only; no confidentiality
 ```
 
-The script builds with signing disabled and verifies PE architecture, required mitigation flags, and an empty certificate table. It does **not** sign, install, or load the driver. The supported CI-equivalent x64/ARM64 builds also run on hosted Windows Actions runners.
+Run a selected binary:
+
+```powershell
+cargo run -p balancify-service -- --help
+cargo run -p balancify-client -- --help
+cargo run -p balancify-installer -- --dry-run --journal "$env:TEMP\balancify-install-journal.json"
+```
+
+The installer command exercises prototype journal/dry-run logic; it is not a production installer and does not install the kernel driver or GUI.
+
+### Windows driver build
+
+From Developer PowerShell with the VS 2022 C++ workload and WDK installed:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-wdk-build.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-wdk-build.ps1 -Architecture x64
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-wdk-build.ps1 -Architecture ARM64
+```
+
+The helper builds unsigned x64/ARM64 binaries and checks PE architecture, mitigation flags, and empty certificate tables. Outputs/logs are under `target\local-wdk\`. It does not sign, install, or load the driver.
+
+### Software harnesses
+
+```powershell
+cargo run -p balancify-service --bin throughput --release # synthetic service-path work, not network throughput
+cargo run -p balancify-service --bin soak --release       # simulated harness, not a real 72-hour soak
+cargo run -p balancify-service --bin compat --release     # software scenarios, not a Windows compatibility matrix
+
+```
+
+The static Pages site is built/deployed by `.github/workflows/static.yml`, not by the Windows application build.
+
+Harness output is synthetic/software evidence only; it does not demonstrate real network performance or driver behavior.
 
 ## 3. Testing & debugging
 
-### Rust tests, formatting, and linting
+### Native Windows validation
 
-```sh
-cargo test --workspace --all-targets --no-fail-fast              # match Linux CI test command
-cargo test -p balancify-service                                  # focus on one crate
-cargo test -p balancify-installer installer_cli_dry_run          # filter by test name
-cargo test -p balancify-service -- --nocapture                   # show test stdout/stderr
-cargo fmt --all -- --check                                       # optional format check
-cargo clippy --workspace --all-targets -- -D warnings            # optional lint; not a separate required CI job
+```powershell
+# Quick: policy, Python, shell-safety, and MSVC portable C/OID tests
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1 -Quick
+
+# Full: quick checks + Windows Rust test/release build + SPDX + x64/ARM64 WDK
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1
+
+# Native Windows portable C/OID contracts only
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\test-driver-packets.ps1
 ```
 
-`cargo fmt`/`clippy` are useful local quality gates but the required workflow is the checked-in CI workflow; do not treat an optional lint command as a substitute for CI.
+The MSVC C fixtures use strict warnings. They are not sanitizer-instrumented on Windows; the remote Ubuntu CI job runs the same portable tests under ASan/UBSan.
 
-### Python, shell, and portable C contract tests
+### Rust and Python tests
 
-```sh
-python3 -m unittest discover -s tools/lab -p 'test_*.py' -v
-python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
-python3 -m unittest discover -s driver/tests -p 'test_*.py' -v
-sh -n tools/lab/netem-rig.sh
-sh tools/lab/test_netem_rig.sh
-sh tools/ci/test-driver-packets.sh  # strict C warnings + ASan/UBSan + OID/INF contracts
+```powershell
+cargo test --workspace --all-targets --no-fail-fast
+cargo test -p balancify-service
+cargo test -p balancify-installer installer_cli_dry_run
+cargo test -p balancify-service -- --nocapture
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+py -3 -m unittest discover -s tools\lab -p 'test_*.py' -v
+py -3 -m unittest discover -s tools\ci -p 'test_*.py' -v
+py -3 -m unittest discover -s driver\tests -p 'test_*.py' -v
 ```
 
-The portable packet suite covers raw IPv4/IPv6 lengths and TCP/UDP boundaries, queue behavior, MTU and pause state. It does not run kernel fuzzing, WDK runtime checks, or Driver Verifier.
+`cargo fmt` and `clippy` are optional local checks; they do not replace the checked-in CI workflow.
 
-### Debugging failures and driver artifacts
-
-```sh
-RUST_BACKTRACE=1 cargo test --workspace --all-targets --no-fail-fast
-RUST_BACKTRACE=1 cargo run -p balancify-service -- --help
-```
-
-PowerShell equivalent:
+### Errors, logs, and driver artifact inspection
 
 ```powershell
 $env:RUST_BACKTRACE = '1'
 cargo test --workspace --all-targets --no-fail-fast
+py -3 tools\ci\verify_driver_pe.py target\local-wdk\x64\balancify.sys x64
+py -3 tools\ci\verify_driver_pe.py target\local-wdk\ARM64\balancify.sys ARM64
 ```
 
-The local CI runner streams each step and saves logs/summary in `target/local-ci/logs/<UTC timestamp>/`. For a prebuilt CI artifact, download it from the relevant GitHub Actions run; verify an unsigned driver without installing it:
-
-```powershell
-py -3 tools/ci/verify_driver_pe.py driver/x64/Release/balancify.sys x64
-py -3 tools/ci/verify_driver_pe.py driver/ARM64/Release/balancify.sys ARM64
-```
-
-For WDK build diagnostics, inspect `target/local-wdk/wdk-x64.log` or `target/local-wdk/wdk-ARM64.log`; for Actions, inspect the job summary and uploaded WDK logs. No repository-wide `RUST_LOG` logger configuration is defined, so do not assume `RUST_LOG=debug` enables additional output.
+PowerShell runner transcripts are stored under `target\local-ci-windows\logs\<UTC timestamp>\`. WDK build diagnostics are under `target\local-wdk\`. No repository-wide `RUST_LOG` logger configuration is defined.
 
 ## 4. Deployment & maintenance
 
-### Dependency and SBOM maintenance
+### Dependency and SBOM checks
 
-```sh
-sh tools/ci/audit-deps.sh                         # policy / exact-pin audit
-sh tools/ci/sbom.sh 0.1.0                        # generate SPDX 2.3 inventory
-python3 tools/ci/sbom_v3.py 0.1.0                 # generate SPDX 3.0.1 JSON-LD inventory
+```powershell
+py -3 tools\ci\sbom.py 0.1.0
+py -3 tools\ci\sbom_v3.py 0.1.0
 ```
 
-The full local CI runner installs pinned validators and checks both files. Generated SBOM files are ignored build artifacts. The repository does not fabricate VEX claims; reviewed vulnerability-status evidence remains separate.
+The full Windows runner creates an isolated validator venv under ignored `target\local-ci-windows\` and validates SPDX 2.3 and 3.0.1. Generated SBOMs are ignored build artifacts; the repository does not fabricate VEX claims.
 
-### Trigger and monitor GitHub Actions
+### Push only after local success
 
-Pushes to all branches and pull requests trigger `.github/workflows/ci.yml`, so new feature branches get push CI as well. The CI workflow also supports manual dispatch. Static Pages deployment is separately configured for pushes to `main` or manual dispatch.
+Commit intended changes first on a clean non-default topic branch. The native PowerShell runner pushes only after full local validation and waits for push CI:
 
-```sh
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1 -Push
+```
+
+### Create a PR and optionally merge after all gates pass
+
+```powershell
+# Run full Windows validation, push, create/reuse PR, wait for push + PR CI; leave open:
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\pr-workflow.ps1
+
+# Same gates, then merge with a merge commit (explicit opt-in):
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\pr-workflow.ps1 -Merge
+```
+
+The workflow requires a clean committed topic branch and an authenticated `gh`. It never stages/commits or force-pushes. `-Merge` is opt-in; the PR only merges after local validation, push-triggered CI, PR-triggered CI, PR check statuses, and an unchanged tested head commit. Branch protection/approvals still apply.
+
+Manual GitHub Actions commands:
+
+```powershell
 gh workflow list
-gh workflow run ci.yml --ref "$(git branch --show-current)"      # CI for an already-pushed branch
-gh run list --workflow ci.yml --branch "$(git branch --show-current)"
+gh run list --workflow ci.yml --branch (git branch --show-current)
 gh run watch RUN_ID --exit-status --interval 20
 gh run view RUN_ID
 gh pr checks PR_NUMBER --watch
-
-# Full local gate -> push -> create/reuse PR -> wait for push + PR CI; leave open:
-bash tools/ci/pr-workflow.sh
-
-# Same sequence, then merge after every local and remote gate passes:
-bash tools/ci/pr-workflow.sh --merge
-
-# Publish the static documentation site, from main or an allowed ref:
-gh workflow run static.yml --ref main
-gh run list --workflow static.yml --branch main
+gh pr view PR_NUMBER
 ```
 
-`pr-workflow.sh` requires a clean, already committed non-default topic branch and never creates commits or force-pushes. The default leaves the validated PR open; `--merge` is explicit opt-in and uses a merge commit only after local validation, push-triggered CI, PR-triggered CI, and current PR-head checks all succeed. It refuses to merge if the PR head changes. On Windows 11, run it in the WSL2 Ubuntu 24.04 clone; see [`local-development-and-ci.md`](local-development-and-ci.md#validate-push-create-a-pr-and-optionally-merge).
+Static Pages deploy is separate and runs from `main` or manual dispatch. There is no container build/deploy command in this repository.
 
-Authenticate once with `gh auth login`; keep credentials in the GitHub CLI credential store, not the repository. A green CI run proves the configured source/build/test checks only—not driver signing, installation, runtime packet flow, HVCI, or product readiness.
+### Lab network testing (not part of Windows local CI)
 
-### Lab network measurement (explicitly opt-in)
+`tools/lab/netem-rig.sh` is a Linux `tc`/iperf3 lab runner. Windows local CI runs only its safe syntax/dry-run tests through Git Bash. Live `--apply` requires a dedicated Linux lab host, root, a running iperf3 server, and explicit confirmation; shaped profiles replace root qdiscs and do not restore prior custom qdiscs. Never run against a production/shared network.
 
-Dry-run is safe and produces no result files:
+## Project acceptance limits
 
-```sh
-sh tools/lab/netem-rig.sh --dry-run rigb 1
-```
-
-Real `--apply` traffic requires a dedicated lab host, a running iperf3 server, root, `tc`/`ip`, and explicit environment values. Shaped profiles **replace root qdiscs** on the selected interfaces; cleanup removes the test qdisc but does not restore an existing custom qdisc. Never run this against a production/shared network. Example only for dedicated disposable interfaces:
-
-```sh
-sudo env IPERF3_HOST=192.0.2.10 IFACE=eth0 IFACE_SLOW=eth1 \
-  CONFIRM_TC_ROOT_REPLACE=YES sh tools/lab/netem-rig.sh --apply rigb 10
-python3 tools/lab/analyze.py /tmp/balancify-netem-results
-```
-
-`192.0.2.10` is a documentation-only address; replace it with the isolated lab iperf3 endpoint. Raw iperf3 link-path output is not proof of BalanciFy bonded throughput or driver acceptance.
-
-### What is not configured here
-
-There is no container build/deployment flow, no production GUI build, no training pipeline, and no safe driver install/deploy command in this cheat sheet. Driver products from CI are unsigned. Signing/attestation, test-signed installation, Driver Verifier, HVCI/VBS, real NDIS packet-path execution, clean-machine installer validation, and hardware performance testing must follow their dedicated Windows lab procedures and be reported as pending until performed.
+All local and GitHub checks are software/build checks. Driver products are unsigned. Driver signing/attestation, test-signed installation, Driver Verifier, HVCI/VBS runtime, real NDIS packet-path behavior, clean-machine install/rollback, netem/Rig B measurements, and hardware acceptance remain pending until executed and evidenced on the designated Windows VM/hardware.

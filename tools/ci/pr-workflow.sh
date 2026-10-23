@@ -94,7 +94,7 @@ fi
 timeout "${LOCAL_CI_REMOTE_TIMEOUT_SECONDS:-5400}" \
     gh run watch "$run_id" --exit-status --interval 20
 # Confirm GitHub's PR check view is also green before considering a merge.
-gh pr checks "$pr_number" --required --watch --interval 20
+gh pr checks "$pr_number" --watch --interval 20
 
 # Re-check the head immediately before any merge; do not merge unvalidated commits.
 pr_head="$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')"
