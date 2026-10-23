@@ -28,7 +28,7 @@ This directory contains first-party NDIS miniport and WDF control-device source 
 - Working set bounded
 
 **Security:**
-- Minimal IOCTLs, validated lengths, portable C boundary tests for raw IPv4/IPv6 parsing; kernel fuzzing and Driver Verifier remain pending.
+- Minimal IOCTLs, validated lengths, portable C boundary tests for raw IPv4/IPv6 parsing, TCP/UDP headers, IPv6 extensions, queue state, and pause accounting run under strict warnings plus AddressSanitizer/UndefinedBehaviorSanitizer in Ubuntu CI; kernel fuzzing and Driver Verifier remain pending.
 - Memory Integrity compatibility is intended but unverified until WDK/HVCI testing.
 
 **Build (Windows only, WDK 10.0.26100):**
