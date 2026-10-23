@@ -114,3 +114,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0023
 - CI runs: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success, 39234403709 success, 39234666177 success, 39234937199 success
+
+- `5e2922a` makes the portable packet, MTU, RX pause, and TX queue C fixtures run under strict warnings and AddressSanitizer/UndefinedBehaviorSanitizer in Ubuntu CI; push run `39917633486` and PR run `39917639870` passed all six jobs.
