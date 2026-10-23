@@ -17,6 +17,54 @@ GitHub-hosted Windows jobs are not faithfully emulated by `act` or by Linux. The
 
 ## 2. Requirements
 
+### Windows 11 x64 setup (recommended host workflow)
+
+Use Ubuntu 24.04 under WSL2 for Git, the complete CI-equivalent software run, and the end-to-end PR workflow. Use native Windows PowerShell/MSBuild for the optional WDK compile. The repository’s full local runner intentionally targets Linux; native PowerShell does not replace the ASan/UBSan C checks or pinned SPDX validators.
+
+From an elevated Windows Terminal, install WSL2 if needed, then reboot if Windows requests it:
+
+```powershell
+wsl --install --distribution Ubuntu-24.04
+```
+
+In the new Ubuntu terminal, install the portable-suite prerequisites and clone into the Linux filesystem (not `/mnt/c`, for faster Cargo builds and reliable permissions):
+
+```sh
+sudo apt update
+sudo apt install --yes build-essential python3 python3-venv python3-pip git curl gh
+mkdir -p ~/src && cd ~/src
+git clone https://github.com/eTarikhi/BalanciFy.git
+cd BalanciFy
+```
+
+Install Rust stable inside WSL as documented below, then authenticate `gh` and configure Git there. GitHub CLI credentials are not automatically shared between Windows and WSL:
+
+```sh
+gh auth login
+gh auth setup-git
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+For native Rust tools in Windows PowerShell, `winget install --id Rustlang.Rustup --exact` may install the `rustup-init.exe` bootstrapper without placing the `rustup` toolchain command on PATH. Run the bootstrapper, then reopen PowerShell:
+
+```powershell
+$rustupInit = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet" -Filter rustup-init.exe -File -Recurse -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if (-not $rustupInit) { throw 'rustup-init.exe was not found under the WinGet package directory.' }
+& $rustupInit -y --default-toolchain stable --profile minimal
+```
+
+After reopening PowerShell:
+
+```powershell
+rustup toolchain install stable --profile minimal
+rustup component add rustfmt clippy --toolchain stable
+cargo --version
+```
+
+If `rustup` is still not found in the current PowerShell session, prepend `$env:USERPROFILE\.cargo\bin` to `$env:Path` or reopen the terminal. The WDK build additionally needs Visual Studio 2022 C++ Build Tools/MSBuild 17.x and the pinned WDK; see the native Windows requirements below.
+
 ### Canonical Linux / WSL2 environment
 
 Use Ubuntu 24.04 natively or in WSL2 for the local CI-equivalent software suite. CI currently uses Ubuntu 24.04 and Python 3.12.
@@ -31,11 +79,13 @@ Typical Ubuntu bootstrap (install `gh` using the current GitHub CLI installation
 
 ```sh
 sudo apt update
-sudo apt install --yes build-essential python3 python3-venv python3-pip git curl
+sudo apt install --yes build-essential python3 python3-venv python3-pip git curl gh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 rustup toolchain install stable --profile minimal
-# Install GitHub CLI separately if you want --push/remote monitoring.
+# Authenticate GitHub CLI if you want push/PR automation:
+gh auth login
+gh auth setup-git
 ```
 
 In WSL2, clone the repository inside the Linux filesystem (for example `~/src/BalanciFy`) rather than `/mnt/c/...` for faster Cargo builds and more reliable file permissions. Configure Git identity and SSH or HTTPS remote access using your normal secure credential manager. Never put a GitHub token in a script, `.env` file, or command history.
@@ -108,7 +158,7 @@ bash tools/ci/local-ci.sh --push
 
 `--push` is deliberately strict and safe:
 
-1. Requires a clean worktree and a named `arena/*` branch (no detached HEAD, direct `main` push, or uncommitted changes).
+1. Requires a clean worktree and a named non-default topic branch (no detached HEAD, direct default-branch push, or uncommitted changes).
 2. Confirms `origin`, GitHub CLI authentication, and that local history contains the remote branch tip.
 3. Runs every full-profile local check; on any failure, stops without pushing.
 4. Confirms the checked-out commit/worktree did not change during validation, then performs a normal non-force `git push` of that exact HEAD.
@@ -125,7 +175,24 @@ gh run list --workflow ci.yml --branch "$(git branch --show-current)"
 gh run watch RUN_ID --exit-status --interval 20
 ```
 
-The workflow includes `workflow_dispatch` for this operator-triggered run. GitHub requires a manually dispatched workflow to exist on the repository's default branch, so this command becomes available after the configuration change is merged; until then, use `--push` to trigger CI on the review branch. Pushes to `main`/`arena/*` and pull requests continue to trigger automatically.
+The workflow includes `workflow_dispatch` on the default branch. Pushes to all branches and pull requests trigger CI automatically.
+
+### Validate, push, create a PR, and optionally merge
+
+The end-to-end orchestrator requires a clean, committed non-default topic branch. It runs the full local software suite, pushes only after success, waits for push-triggered GitHub CI, creates or reuses an open PR targeting `main`, and waits for the PR-triggered CI run and required PR checks:
+
+```sh
+bash tools/ci/pr-workflow.sh             # validate, push, create/reuse PR, wait for checks; leave PR open
+bash tools/ci/pr-workflow.sh --merge     # same gates, then merge with a merge commit
+```
+
+The default intentionally does **not** merge. `--merge` is explicit opt-in; the script will issue `gh pr merge <number> --merge` only after local checks, push CI, and PR CI pass and the PR head still matches the validated commit. It does not use GitHub auto-merge, force-push, or create commits. It can be launched from Windows PowerShell in the WSL repository:
+
+```powershell
+wsl.exe -d Ubuntu-24.04 -- bash -lc 'cd ~/src/BalanciFy && bash tools/ci/pr-workflow.sh'
+```
+
+To allow it to merge automatically after all those gates, append `--merge`. Review the PR and ensure repository branch protections are configured before opting in. Since the script first waits for push CI and then PR CI, a PR submission runs two remote CI workflows for the same commit. If local validation or either remote workflow fails, no merge is attempted. If a new commit appears while checks run, the script refuses to merge it.
 
 ## 5. Logs, monitoring, and result interpretation
 

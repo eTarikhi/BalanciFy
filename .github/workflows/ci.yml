@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "arena/*"]
+    branches: ["**"]
   pull_request:
   # Explicit operator-triggered CI for a pushed branch; local CI remains
   # available through tools/ci/local-ci.sh before making any remote changes.

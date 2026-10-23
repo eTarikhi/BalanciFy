@@ -13,7 +13,7 @@ A task-oriented command reference for the current repository. The project is a R
 
 ### Initialize the environment
 
-Run from the repository root. The standard cross-platform toolchain is Rust stable; use Ubuntu 24.04/WSL2 for the full portable CI-equivalent suite.
+Run from the repository root. The standard cross-platform toolchain is Rust stable; use Ubuntu 24.04/WSL2 for the full portable CI-equivalent suite. For Windows 11 x64 setup (including the `rustup-init.exe` bootstrap step after installing via WinGet), see [`local-development-and-ci.md`](local-development-and-ci.md#2-requirements).
 
 ```sh
 rustup toolchain install stable --profile minimal  # install the CI Rust toolchain
@@ -85,7 +85,7 @@ The service refuses to start without a configured/pinned relay identity unless `
 ```sh
 bash tools/ci/local-ci.sh --quick  # policy + Python + netem safety + portable driver tests
 bash tools/ci/local-ci.sh          # full local software suite, Rust build/tests and SPDX validators
-bash tools/ci/local-ci.sh --push   # full checks, then push clean committed arena/* HEAD and watch remote CI
+bash tools/ci/local-ci.sh --push   # full checks, then push a clean committed topic branch and watch remote CI
 ```
 
 The full profile requires Rust/Cargo and installs the exact SPDX validator versions into ignored `target/local-ci/venv/`. `--push` never stages or commits; it requires a clean worktree and checks that the remote branch tip is an ancestor of the tested commit. If the later GitHub run fails, the commit remains pushed. See [`local-development-and-ci.md`](local-development-and-ci.md) for OS prerequisites, logs, timeout, and security details.
@@ -208,7 +208,7 @@ The full local CI runner installs pinned validators and checks both files. Gener
 
 ### Trigger and monitor GitHub Actions
 
-Pushes to `main` and `arena/*` and pull requests trigger `.github/workflows/ci.yml`. The CI workflow also supports manual dispatch (after the workflow version is present on the repository's default branch). Static Pages deployment is separately configured for pushes to `main` or manual dispatch.
+Pushes to all branches and pull requests trigger `.github/workflows/ci.yml`, so new feature branches get push CI as well. The CI workflow also supports manual dispatch. Static Pages deployment is separately configured for pushes to `main` or manual dispatch.
 
 ```sh
 gh workflow list
@@ -218,10 +218,18 @@ gh run watch RUN_ID --exit-status --interval 20
 gh run view RUN_ID
 gh pr checks PR_NUMBER --watch
 
+# Full local gate -> push -> create/reuse PR -> wait for push + PR CI; leave open:
+bash tools/ci/pr-workflow.sh
+
+# Same sequence, then merge after every local and remote gate passes:
+bash tools/ci/pr-workflow.sh --merge
+
 # Publish the static documentation site, from main or an allowed ref:
 gh workflow run static.yml --ref main
 gh run list --workflow static.yml --branch main
 ```
+
+`pr-workflow.sh` requires a clean, already committed non-default topic branch and never creates commits or force-pushes. The default leaves the validated PR open; `--merge` is explicit opt-in and uses a merge commit only after local validation, push-triggered CI, PR-triggered CI, and current PR-head checks all succeed. It refuses to merge if the PR head changes. On Windows 11, run it in the WSL2 Ubuntu 24.04 clone; see [`local-development-and-ci.md`](local-development-and-ci.md#validate-push-create-a-pr-and-optionally-merge).
 
 Authenticate once with `gh auth login`; keep credentials in the GitHub CLI credential store, not the repository. A green CI run proves the configured source/build/test checks only—not driver signing, installation, runtime packet flow, HVCI, or product readiness.
 
