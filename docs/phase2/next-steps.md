@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-23
-Status: continuous on `arena/81ef53da-balancify`; PR #19 remains open at `5e2922a` (packet-boundary code commit `9be616f`). Latest push CI `39917633486` and PR CI `39917639870` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, unsigned-status verification, Windows and Ubuntu Rust tests, lab tests, and dependency/crypto audit. Hardware/product gates remain pending.
+Status: continuous on `arena/81ef53da-balancify`; PR #19 remains open at `02409cf` (IPv6 boundary regressions `9be616f`; deterministic parser stress `02409cf`). Latest push CI `39922008067` and PR CI `39922014929` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, unsigned-status verification, Windows and Ubuntu Rust tests, lab tests, and dependency/crypto audit. Hardware/product gates remain pending.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -22,7 +22,7 @@ User instruction: "continue the development process without stopping to report" 
 - PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. PR #19 adds the bounded reverse TX queue and service polling (ADR-0040); `SET_QUANTA` remains unsupported until a driver scheduler consumes it. Current x64/ARM64 WDK builds and unsigned PE/INF checks pass in CI. This does not establish installation or runtime behavior.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
-Current validation: PR CI `39917639870` passed all six jobs; Rust summaries report 305 Ubuntu / 304 Windows tests. Local CI suite: 24 Python tests and 12 driver packet/OID/INF tests under strict warnings, AddressSanitizer, and UndefinedBehaviorSanitizer. These are source/build checks, not runtime acceptance.
+Current validation: PR CI `39922014929` passed all six jobs; Rust summaries report 305 Ubuntu / 304 Windows tests. Local CI suite: 24 Python tests and 12 driver packet/OID/INF tests under strict warnings, AddressSanitizer, and UndefinedBehaviorSanitizer, including 12,000 deterministic malformed/near-valid parser mutations. These are source/build checks, not runtime acceptance.
 
 ## What remains (ordered, still without stopping)
 
@@ -46,5 +46,5 @@ Current validation: PR CI `39917639870` passed all six jobs; Rust summaries repo
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0041
-- Latest active-branch CI: push `39917633486` and PR `39917639870` success; latest head `5e2922a`
+- Latest active-branch CI: push `39922008067` and PR `39922014929` success; latest head `02409cf`
 - ADR-0038 through ADR-0041 cover bounded raw-IP ingress, the miniport TX queue, and kernel packet-boundary validation

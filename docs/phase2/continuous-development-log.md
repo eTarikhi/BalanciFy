@@ -116,3 +116,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - CI runs: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success, 39234403709 success, 39234666177 success, 39234937199 success
 
 - `5e2922a` makes the portable packet, MTU, RX pause, and TX queue C fixtures run under strict warnings and AddressSanitizer/UndefinedBehaviorSanitizer in Ubuntu CI; push run `39917633486` and PR run `39917639870` passed all six jobs.
+
+- `02409cf` adds a reproducible 12,000-iteration malformed/near-valid IPv4/IPv6 length mutation stress loop to the WDK-independent packet validator fixtures, executed in the strict and ASan/UBSan passes. Push CI `39922008067` and PR CI `39922014929` passed all six jobs. This bounded test is not kernel fuzzing.
