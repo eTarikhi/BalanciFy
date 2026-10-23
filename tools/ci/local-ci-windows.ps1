@@ -98,7 +98,9 @@ function Wait-GitHubRun {
 Require-Command 'py'
 Require-Command 'git'
 if ($Push) { Require-Command 'gh' }
-Require-Command 'cl.exe'
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+    throw 'MSVC cl.exe was not found. Open Developer PowerShell for Visual Studio 2022. If it is not installed, add the Desktop development with C++ workload (MSVC v143 x64/x86 tools).'
+}
 if (-not $Quick) {
     Require-Command 'cargo'
     Require-Command 'rustc'

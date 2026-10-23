@@ -8,6 +8,10 @@ WINDOWS_C_TESTS = (ROOT / "tools/ci/test-driver-packets.ps1").read_text(encoding
 
 
 class WindowsWorkflowTests(unittest.TestCase):
+    def test_native_runner_explains_missing_msvc_compiler(self):
+        self.assertIn('MSVC cl.exe was not found. Open Developer PowerShell', WINDOWS_RUNNER)
+        self.assertIn('Desktop development with C++ workload', WINDOWS_RUNNER)
+
     def test_native_runner_targets_msvc_and_windows_rust_and_wdk(self):
         self.assertIn('x86_64-pc-windows-msvc', WINDOWS_RUNNER)
         self.assertIn("Invoke-NativeChecked 'cargo' @('test', '--workspace', '--all-targets', '--no-fail-fast')", WINDOWS_RUNNER)

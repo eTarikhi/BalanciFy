@@ -15,7 +15,7 @@ The local Windows runner covers the Windows-native work, but it does not replica
 
 ## 2. Windows 11 x64 prerequisites
 
-Use **Developer PowerShell for Visual Studio 2022** so `cl.exe` and `msbuild.exe` are available.
+Use **Developer PowerShell for Visual Studio 2022** so `cl.exe` and `msbuild.exe` are available. A regular Administrator PowerShell window does not automatically configure the MSVC toolchain; launching `powershell.exe` from it will not add `cl.exe` to PATH.
 
 - Rust stable for `x86_64-pc-windows-msvc`, including Cargo. Install `rustfmt` and `clippy` if desired.
 - Visual Studio 2022 / Build Tools 17.x with the C++ build tools.
@@ -72,7 +72,14 @@ Keep credentials in Git/`gh` secure credential storage, not in scripts or reposi
 
 ## 3. Native local validation
 
-Run all commands from the repository root in Developer PowerShell. If script execution policy blocks local scripts, use `-ExecutionPolicy Bypass` for that invocation.
+Run all commands from the repository root in Developer PowerShell. Before starting, confirm the compiler is available there:
+
+```powershell
+Get-Command cl.exe
+cl.exe /Bv
+```
+
+If `cl.exe` is missing, install/modify Visual Studio 2022 or Build Tools and select **Desktop development with C++** plus the MSVC v143 x64/x86 tools. Then close the regular PowerShell window and launch **Developer PowerShell for VS 2022** from the Start menu. If script execution policy blocks local scripts, use `-ExecutionPolicy Bypass` for that invocation.
 
 ### Fast checks
 
