@@ -22,7 +22,7 @@ Use **Developer PowerShell for Visual Studio 2022** so `cl.exe` and `msbuild.exe
 - Windows SDK/WDK target 10.0.26100.0 and WDK 10.0.26100.6584 (the CI pin), including x64 and ARM64 libraries.
 - Python 3.10+ via the Windows `py -3` launcher (CI uses Python 3.12).
 - Git for Windows (provides `bash.exe`, `sh`, `sed`, `awk`, `grep`, and `find` for the POSIX policy and dry-run lab scripts).
-- GitHub CLI (`gh`) and a configured `origin`; authenticate for push/PR automation.
+- GitHub CLI (`gh`) and a configured `origin` are needed only for push/PR automation; local-only validation does not require `gh` or GitHub authentication.
 - Network access on the first Cargo/Python dependency fetch and SPDX validator install.
 
 ### Install/activate Rust on Windows

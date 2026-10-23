@@ -97,7 +97,7 @@ function Wait-GitHubRun {
 
 Require-Command 'py'
 Require-Command 'git'
-Require-Command 'gh'
+if ($Push) { Require-Command 'gh' }
 Require-Command 'cl.exe'
 if (-not $Quick) {
     Require-Command 'cargo'

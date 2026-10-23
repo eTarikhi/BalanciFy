@@ -8,7 +8,7 @@ The native Windows runner uses MSVC for portable driver C fixtures and covers Ru
 
 ### Install and verify Windows tools
 
-Use Developer PowerShell for Visual Studio 2022 for `cl.exe`/`msbuild.exe`. Required tools: Rust stable `x86_64-pc-windows-msvc`, Python `py -3` (3.10+), Git for Windows (Git Bash), GitHub CLI, Visual Studio 2022 C++ tools, and WDK 10.0.26100.6584/SDK 10.0.26100.0 for driver builds.
+Use Developer PowerShell for Visual Studio 2022 for `cl.exe`/`msbuild.exe`. Required for local validation: Rust stable `x86_64-pc-windows-msvc`, Python `py -3` (3.10+), Git for Windows (Git Bash), Visual Studio 2022 C++ tools, and WDK 10.0.26100.6584/SDK 10.0.26100.0 for driver builds. GitHub CLI is optional unless you want push/PR automation.
 
 If WinGet installed the Rust bootstrapper but `rustup` isn't on `PATH`, run `rustup-init.exe` once:
 

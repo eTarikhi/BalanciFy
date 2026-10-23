@@ -17,6 +17,12 @@ class WindowsWorkflowTests(unittest.TestCase):
         self.assertIn("spdx-tools==0.8.5", WINDOWS_RUNNER)
         self.assertIn("spdx3-validate==0.0.7", WINDOWS_RUNNER)
 
+    def test_gh_is_only_required_for_push_and_pr_uses_delimited_interpolation(self):
+        self.assertIn("if ($Push) { Require-Command 'gh' }", WINDOWS_RUNNER)
+        pr_script = WINDOWS_PR
+        self.assertIn('PR #${prNumber}:', pr_script)
+        self.assertIn('GitHub CLI (gh) is required for PR automation.', pr_script)
+
     def test_native_c_tests_use_msvc_and_existing_portable_fixtures(self):
         for source in (
             "test_ip_packet_validation.c",

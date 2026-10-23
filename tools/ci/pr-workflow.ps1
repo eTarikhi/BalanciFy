@@ -8,6 +8,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $repoRoot
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    throw 'GitHub CLI (gh) is required for PR automation. Install it with: winget install --id GitHub.cli --exact'
+}
 
 function Invoke-NativeChecked {
     param(
@@ -148,7 +151,7 @@ if ($prHead -ne $testedHead -or $prState -ne 'OPEN') {
 }
 
 $ownerRepo = Get-NativeText 'gh' @('repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner')
-Write-Host "Windows local checks and remote CI passed. PR #$prNumber: https://github.com/$ownerRepo/pull/$prNumber"
+Write-Host "Windows local checks and remote CI passed. PR #${prNumber}: https://github.com/$ownerRepo/pull/$prNumber"
 if ($Merge) {
     Write-Host "Merging PR #$prNumber with a merge commit."
     Invoke-NativeChecked 'gh' @('pr', 'merge', $prNumber, '--merge', '--match-head-commit', $testedHead)
