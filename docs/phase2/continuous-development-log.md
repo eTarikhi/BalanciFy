@@ -70,8 +70,11 @@ This log records what was done while continuing without stopping, after ADR-0015
 
 ## Active branch update (2026-10-23)
 
+- `ba45cba` hardens the portable miniport IP validator to reject malformed IPv4/IPv6 lengths, reserved fragment flags, truncated TCP/UDP headers, overlong UDP lengths, malformed IPv6 extension chains and excessive extension counts before packets enter NBL/queue storage. Added positive/negative C fixtures and ADR-0041. Push CI `39905228349` and PR CI `39905231812` both passed all six jobs, including x64/ARM64 WDK builds and 304/303 Rust tests.
+
+
 - `6092ed9` adds a 64-entry, 9000-byte-per-record miniport TX queue, atomic NBL batch enqueue, read-only `DEQUEUE_TX` IOCTL, Rust record validation, and optional service polling after a receiver session exists (ADR-0040). CI first exposed WDK `<stdint.h>` CRT conflicts and an invalid UDP fixture; `601d7d5` fixed both. Push run `39901467494` and PR run `39901472201` passed all six jobs, including x64/ARM64 WDK builds; Rust test summaries are 304 Ubuntu / 303 Windows.
-- `f08f758` refreshes the progress report and portal to distinguish source/CI status from runtime/product acceptance and records current test evidence. The local shallow/grafted history was safely reconciled by resetting the local branch to its fetched remote head while preserving the working tree; this docs commit is now based on `601d7d5` and pushed.
+- `f08f758` refreshes the progress report and portal to distinguish source/CI status from runtime/product acceptance and records current test evidence. The local shallow/grafted history was safely reconciled by resetting the local branch to its fetched remote head while preserving the working tree; this docs commit is now based on `601d7d5` and pushed. `dfa4bd5` then reconciles the next-steps and roadmap documents with the bounded TX queue, current 304/303 test counts, and outstanding runtime gates.
 - PR #19 remains open. Reverse TX implementation is not proof of working NDIS traffic: signing, installation, Driver Verifier/HVCI, packet path, hardware throughput, and product acceptance remain pending.
 
 ## Commits since last green 39209903149 (ADR-0020)

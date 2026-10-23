@@ -76,7 +76,7 @@
     <section id="status" aria-labelledby="status-title">
       <div class="callout">
         <div><strong id="status-title">Current decision: validate the first-party driver runtime next.</strong><p>Pinned x64/ARM64 WDK compile/link and static PE checks pass in PR CI. G2 remains open: no test-signed install, Driver Verifier/HVCI run, or packet-path runtime evidence exists.</p></div>
-        <div class="meta"><b>Snapshot:</b> 23 Oct 2026 · main at <code>a1ec9b0</code>; PR #19 validated code <code>601d7d5</code><br><b>CI:</b> <a href="https://github.com/eTarikhi/BalanciFy/actions/runs/39896314464">6 of 6 PR jobs passed</a><br><b>Pages:</b> deployment is unverified; this portal is not claimed live</div>
+        <div class="meta"><b>Snapshot:</b> 23 Oct 2026 · main at <code>a1ec9b0</code>; PR #19 validated code <code>ba45cba</code><br><b>CI:</b> <a href="https://github.com/eTarikhi/BalanciFy/actions/runs/39905231812">6 of 6 PR jobs passed</a><br><b>Pages:</b> deployment is unverified; this portal is not claimed live</div>
       </div>
       <div class="metrics" aria-label="Current project metrics">
         <div class="metric"><div class="label">Rust tests · Ubuntu</div><strong>304 passed</strong><small>0 failed in PR #19 CI</small></div>
@@ -89,7 +89,7 @@
       <h2 id="evidence-title">Software foundations; product proof still ahead</h2>
       <p class="intro">The project has implemented substantial first-party Rust control, tunnel, crypto, service and lab tooling. CI validates software behavior and supply-chain checks; it does not establish driver runtime, live network performance, HVCI, installer readiness or field stability.</p>
       <div class="cards">
-        <article class="panel"><h3>Implemented foundations</h3><p>Flow scheduling and affinity, link health, capacity/congestion models, pacing/DRR, authenticated tunnel framing, replay protection, per-flow repair, key management, lab relay, IPC v1, installer journal logic, bounded raw-IP ingress, opt-in <code>INJECT_NBL</code>, and a bounded NDIS TX queue/polling source path.</p><span class="pill good">Cross-platform Rust tests</span><span class="pill good">x64/ARM64 WDK CI builds</span><span class="pill good">SPDX 2.3 / 3.0.1 CI</span></article>
+        <article class="panel"><h3>Implemented foundations</h3><p>Flow scheduling and affinity, link health, capacity/congestion models, pacing/DRR, authenticated tunnel framing, replay protection, per-flow repair, key management, lab relay, IPC v1, installer journal logic, bounded raw-IP ingress, opt-in <code>INJECT_NBL</code>, a bounded NDIS TX queue/polling source path, and kernel TCP/UDP/IP structural-boundary checks.</p><span class="pill good">Cross-platform Rust tests</span><span class="pill good">x64/ARM64 WDK CI builds</span><span class="pill good">SPDX 2.3 / 3.0.1 CI</span></article>
         <article class="panel"><h3>Critical gaps</h3><p>WDK build/link and static artifact checks pass, but driver artifacts are unsigned and have not been installed or run. Both packet directions now have bounded source paths, but neither has runtime validation. Service IPC still uses loopback TCP and uplinks are simulated; production named-pipe authentication and WinUI 3/.NET GUI are missing. No real netem, Rig B, HVCI/HLK, clean-machine install or reviewed VEX evidence exists.</p><span class="pill open">G2 open</span><span class="pill open">G3 blocked</span><span class="pill open">G4–G8 pending</span></article>
       </div>
       <div class="figures" style="margin-top:16px">

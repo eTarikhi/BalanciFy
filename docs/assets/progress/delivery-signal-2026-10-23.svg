@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 460" role="img" aria-labelledby="title desc">
 <title id="title">Delivery signal and velocity confidence</title>
-<desc id="desc">PR CI run 39896314464 passed all six jobs and the Rust test suite recorded 304 Linux and 303 Windows tests. These results show strong software integration momentum. No sprint estimates, burn-down series, or scope-normalized throughput data exists, so velocity is not quantified. Product acceptance evidence remains zero of eleven rows.</desc>
+<desc id="desc">PR CI run 39905231812 passed all six jobs and the Rust test suite recorded 304 Linux and 303 Windows tests. These results show strong software integration momentum. No sprint estimates, burn-down series, or scope-normalized throughput data exists, so velocity is not quantified. Product acceptance evidence remains zero of eleven rows.</desc>
 <defs><style>text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#17243b}.title{font-size:27px;font-weight:700}.sub{font-size:14px;fill:#64738a}.label{font-size:14px;font-weight:650}.small{font-size:12px;fill:#64738a}.big{font-size:24px;font-weight:750}.grid{stroke:#e2e8f0;stroke-width:1}</style></defs>
 <rect width="1280" height="460" rx="20" fill="#f4f7fb"/>
 <text x="56" y="58" class="title">Momentum is positive; velocity is not yet measurable</text>
