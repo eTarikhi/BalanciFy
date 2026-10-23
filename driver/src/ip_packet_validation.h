@@ -40,7 +40,7 @@ static int BalancifyIsValidTransport(
     if (payloadLength < 8u) return 0;
     {
         size_t udpLength = (size_t)BalancifyReadNetworkU16(payload + 4u);
-        return udpLength >= 8u && udpLength <= payloadLength;
+        return udpLength >= 8u && udpLength == payloadLength;
     }
 }
 

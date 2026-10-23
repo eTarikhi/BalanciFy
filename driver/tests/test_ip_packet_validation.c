@@ -38,14 +38,14 @@ static void test_ipv4_tcp_udp_and_fragment_bounds(void) {
     assert(!BalancifyIsValidIpPacket(tcp, sizeof(tcp), 1500));
 
     {
-        unsigned char udp[28] = { 0x45, 0, 0, 28 };
+        unsigned char udp[32] = { 0x45, 0, 0, 32 };
         udp[9] = 17;
         udp[24] = 0;
-        udp[25] = 8;
+        udp[25] = 12;
         assert(BalancifyIsValidIpPacket(udp, sizeof(udp), 1500));
-        udp[25] = 7;
+        udp[25] = 8; /* UDP length must cover the exact unfragmented IP payload */
         assert(!BalancifyIsValidIpPacket(udp, sizeof(udp), 1500));
-        udp[25] = 9; /* UDP length cannot exceed the IP payload */
+        udp[25] = 13; /* UDP length cannot exceed the IP payload */
         assert(!BalancifyIsValidIpPacket(udp, sizeof(udp), 1500));
     }
 

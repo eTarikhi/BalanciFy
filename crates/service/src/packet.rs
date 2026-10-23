@@ -222,7 +222,7 @@ fn transport_ports(
             let udp_len = usize::from(
                 read_u16(payload, 4).map_err(|_| PacketFlowError::InvalidTransportHeader)?,
             );
-            if udp_len < 8 || udp_len > payload.len() {
+            if udp_len < 8 || udp_len != payload.len() {
                 return Err(PacketFlowError::InvalidTransportHeader);
             }
         }
@@ -339,6 +339,16 @@ mod tests {
 
         let short_tcp = ipv4(6, &[0; 10], 0, false);
         assert_eq!(flow_key_from_packet(&short_tcp), Err(PacketFlowError::InvalidTransportHeader));
+
+        let mut udp_with_trailing_ip_payload = ipv4(17, &[0; 12], 0, false);
+        udp_with_trailing_ip_payload[20..22].copy_from_slice(&1u16.to_be_bytes());
+        udp_with_trailing_ip_payload[22..24].copy_from_slice(&2u16.to_be_bytes());
+        udp_with_trailing_ip_payload[24..26].copy_from_slice(&8u16.to_be_bytes());
+        assert_eq!(
+            flow_key_from_packet(&udp_with_trailing_ip_payload),
+            Err(PacketFlowError::InvalidTransportHeader),
+            "an unfragmented UDP datagram must exactly cover its IP payload",
+        );
 
         let mut extension_chain = Vec::new();
         for _ in 0..=MAX_IPV6_EXTENSION_HEADERS {
