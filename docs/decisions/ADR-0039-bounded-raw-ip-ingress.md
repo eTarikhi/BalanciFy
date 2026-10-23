@@ -18,6 +18,7 @@ Add `packet::flow_key_from_packet` and `Service::send_ip_packet` as a bounded, p
 - Do not reassemble fragments. All fragments use a zero-port key. IPv6 fragments use the fragment header's immediate next-header value so first and later fragments share a key.
 - Do not validate IP or transport checksums and do not inspect TCP/UDP payloads. Non-TCP/UDP protocols use zero ports.
 - Parse fully before mutating service scheduling state; on success, pass the original packet bytes unchanged into the existing `send_app_packet` path.
+- The binary's synthetic application traffic is now opt-in with `--simulate-app-traffic`, accepted only with explicit debug-only `--insecure-lab`, and constructed as a checksummed raw IPv4/UDP packet before using `Service::send_ip_packet`. Normal secure mode does not emit fabricated application traffic.
 
 ## Consequences
 
