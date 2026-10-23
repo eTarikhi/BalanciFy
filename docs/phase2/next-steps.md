@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
-Date: 2026-10-22
-Status: continuous on `arena/81ef53da-balancify`; PR #18 merged as `a1ec9b0`. Push run `39799406998` and PR run `39799412825` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, and unsigned-status verification, and INF contract tests. Hardware/product gates remain pending.
+Date: 2026-10-23
+Status: continuous on `arena/81ef53da-balancify`; PR #19 remains open at `f08f758`. Latest push CI `39901467494` and PR CI `39901472201` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, unsigned-status verification, Windows and Ubuntu Rust tests, lab tests, and dependency/crypto audit. Hardware/product gates remain pending.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -19,14 +19,14 @@ User instruction: "continue the development process without stopping to report" 
 - Control-frame authentication/replay hardening and relay/session idle protections; wire v2 selective FlowAck for peer-receipt capacity sampling, with bounded per-session accounting and duplicate re-ACK (CI 39476560004).
 - Client transport hardening (per-user absolute state roots, relay-source filtering, fatal UDP send errors, and single-use handshake responses) merged in PR #6; prior PR #5 was closed as superseded.
 - FlowData selective repair merged in PR #7 / ADR-0036: retain bounded plaintext until authenticated FlowAck, reinject once after RTO on an alternate path, and rely on replay rejection plus duplicate re-ACK to preserve at-most-once delivery. Tunnel and service timer regressions, including uplink removal before retry, pass.
-- PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. Merged PR #18 added pinned x64/ARM64 WDK builds and fixes the compiler/linker findings. CI run `39799406998` compiled/linked both architectures, verified their PE machine types, required mitigation flags, and empty certificate tables, and exercised the INF architecture/version contract with signing disabled; this does not establish installation or runtime behavior. The TX ring and functional quanta control remain incomplete.
+- PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. PR #19 adds the bounded reverse TX queue and service polling (ADR-0040); `SET_QUANTA` remains unsupported until a driver scheduler consumes it. Current x64/ARM64 WDK builds and unsigned PE/INF checks pass in CI. This does not establish installation or runtime behavior.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
-CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233548995 failure arg order, 39233826038 success, 39234128363 success per-path diag, 39234403709 success, 39234666177 success, 39234937199 success, 39235214291 success, 39235545738 success driver, 39235817239 success, 39236091314 success app, 39236360963 success, 39236639218 success ECN bench, 39236895693 success, 39237159469 success, 39237431952 success test coverage
+Current validation: PR CI `39901472201` passed all six jobs; Rust summaries report 304 Ubuntu / 303 Windows tests. Local CI suite: 24 Python tests and 12 driver packet/OID/INF tests. These are source/build checks, not runtime acceptance.
 
 ## What remains (ordered, still without stopping)
 
-1. **Driver S2b socket test through miniport**: x64 and ARM64 WDK compile/link are now verified in CI; implement/review the remaining adapter lifecycle and transmit data path, then test-sign and validate the real-UDP tunnel path through NDIS on an isolated Hyper-V VM with Driver Verifier and HVCI.
+1. **Driver S2b runtime test through miniport**: the source now includes receive injection and reverse TX queue/dequeue; x64 and ARM64 WDK compile/link are verified in CI. Test-sign, install, and validate the bidirectional real-UDP tunnel path through NDIS on an isolated Hyper-V VM with Driver Verifier and HVCI. The queue is volatile and its source/CI status is not evidence of packet-path operation.
 2. **Real S2c/throughput validation**: use the explicitly confirmed netem runner only on disposable interfaces; raw link results alone are not BalanciFy bonding evidence. Add adapter-level capture and record 10-repetition statistics. No lab result is claimed; Rig B remains pending.
 3. **Throughput rows on Rig B**: run `throughput.rs` + iperf3 on wired 1 Gbps and Wi-Fi 6 300 Mbit/s, secure mode, pacing at 80% capacity, per-flow off/on; measure aggregate/single-flow/failover/added delay (target <=3ms) and CPU/Gbit/s. Local service-path benchmarks are not network evidence.
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
@@ -36,7 +36,7 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 ## Process
 
-- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (261 Linux / 260 Windows Rust tests; twelve SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (304 Linux / 303 Windows Rust tests; current SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
 - Use `gh run list --limit 1 --branch arena/81ef53da-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
@@ -46,4 +46,5 @@ CI progression: 39232571739 failure non-ASCII, 39233028939 failure prefix, 39233
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0037
-- Latest active-branch CI: 39535018573 success
+- Latest active-branch CI: push `39901467494` and PR `39901472201` success; latest head `f08f758`
+- ADR-0038 through ADR-0040 cover recent raw-IP ingress and bounded miniport TX queue work

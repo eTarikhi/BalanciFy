@@ -1,7 +1,7 @@
 # Roadmap next — what remains for G2/G3
 
-Date: 2026-10-22
-Status: in progress; PR #18 merged as `a1ec9b0`; validation runs `39799406998` and PR run `39799412825` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, and unsigned-status verification, and INF contract tests. Hardware/product acceptance gates remain pending.
+Date: 2026-10-23
+Status: in progress; PR #19 remains open at `f08f758`. Push CI `39901467494` and PR CI `39901472201` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, and unsigned-status verification, Ubuntu/Windows Rust tests, lab tests, and dependency/crypto audit. Hardware/product acceptance gates remain pending.
 
 ## Completed since last green (39191895800)
 
@@ -17,7 +17,7 @@ Status: in progress; PR #18 merged as `a1ec9b0`; validation runs `39799406998` a
 - Rust lab CLI IPC client (`balancify-app` crate; home/rules/diagnostics/tray and support modes, 1Hz event subscription, ECN/delay rendering); the production WinUI 3/.NET shell remains unimplemented
 - Service IPC v1 loopback adapter handles requests and rate-limited event push; service snapshots combine warning and counter events. The shell's bundle mode requests opcode 11 and receives the complete redacted support JSON. Concurrency is capped at 16, idle unsubscribed clients close after 60 seconds, and nonblocking lab UDP polling avoids stalling the dispatcher. Production named-pipe authentication remains pending.
 - Netem runner defaults to no-side-effect dry-run; explicit `--apply` supports seven raw link profiles with JSON capture and safety tests. It is not BalanciFy/driver acceptance evidence.
-- Driver control source is hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. Miniport and INF consistently use NdisMediumIP; INJECT_NBL validates exact IPv4/IPv6 lengths and MTU, while pause waits for active indications, returned NBLs, and send callback chains. Merged PR #18 added pinned WDK 10.0.26100.6584 x64 and ARM64 builds and fixes the compile/link issues they exposed. Push run `39799406998` compiled and linked both unsigned targets, verified their PE machine types, required mitigation flags, and empty certificate tables, passed INF architecture/version contract tests, and uploaded seven-day artifacts; it passed all six jobs. PR run `39799412825` also passed all six jobs on the same head. This is compile/link evidence only: no signed install, Verifier, HVCI, VM, or packet-path behavior has been verified. The transmit ring remains unimplemented and TX deliberately fails.
+- Driver control source is hardened to SYSTEM/Admin access and owned NBL packet buffers; `MiniportInitializeEx` registers the adapter, submits revision-2 general attributes, and advertises a minimal OID surface. Miniport and INF consistently use NdisMediumIP; INJECT_NBL validates IP lengths and MTU, while pause waits for active indications, returned NBLs, and send callback chains. PR #19 adds a bounded 64-record reverse TX queue, atomic NBL batch publication, read-access `DEQUEUE_TX`, and optional service polling into `Service::send_ip_packet` (ADR-0040). Latest push run `39901467494` and PR run `39901472201` compiled and linked unsigned x64/ARM64 targets, verified PE machine types, mitigation flags, empty certificate tables, and passed INF contract tests. This is source/build evidence only: no signed install, Verifier, HVCI, VM, or packet-path behavior has been verified.
 - File-backed key storage uses unique private atomic temporaries, Unix 0600-at-create, zeroized plaintext copies, and Windows DPAPI by default (with legacy raw-key migration tests).
 - Tunnel wire v2 retains frame-kind AEAD nonce separation and adds authenticated selective FlowAck; FlowData has its own bounded replay-protected sequence lane, keepalives no longer repeat sequence zero, control frames authenticate and pass replay checks before changing service state, and retransmission/ACK state is keyed by `(session, seq)` with per-session Data sequence spaces.
 - Flow-level capacity now uses peer FlowAck receipts, with bounded per-session pending bytes/entries, replay verification, duplicate re-ACK, rate-limit cleanup, and a regression test for service sampling.
@@ -28,7 +28,7 @@ Status: in progress; PR #18 merged as `a1ec9b0`; validation runs `39799406998` a
 
 ## Next for G2 (gate: tunnel end-to-end through miniport on test-signed rig)
 
-1. **Finish static driver/runtime design**: x64 and ARM64 source now compile and link with pinned WDK CI. Review NDIS/WDF lifecycle details, implement the missing service transmit ring, and complete Windows runtime validation; the MTU/configuration contract fails closed pending a proper NDIS reconfiguration path.
+1. **Complete driver runtime validation**: review NDIS/WDF lifecycle and test the source-level bidirectional queue/injection path on Windows. The MTU/configuration contract remains fail-closed pending a supported NDIS reconfiguration path; `SET_QUANTA` returns not-supported until scheduler integration.
 2. **S2b socket test through miniport**: obtain a test-signed driver, then run `ordered_stream_survives_a_real_udp_socket` through the NDIS path on an isolated Hyper-V VM with Driver Verifier and Memory Integrity configured. The unsigned CI artifact cannot be installed as acceptance evidence.
 3. **Real S2c/throughput validation:** use the explicit `--apply` netem runner only on disposable interfaces with a separate iperf3 server; the script currently measures raw link paths for seven profiles. Then add/run adapter-level BalanciFy traffic capture and record 10-repetition statistics. No such lab run has been completed in this environment.
 
@@ -48,7 +48,7 @@ Status: in progress; PR #18 merged as `a1ec9b0`; validation runs `39799406998` a
 
 - `Cargo.lock` is committed and checked by the dependency audit.
 - Simulated paths are not netem — S2c/Rig B measurements remain pending; raw iperf3 link baselines are not end-to-end BalanciFy measurements.
-- Miniport source compiles/links for x64 in CI, but remains non-operational: unsigned artifact only, no test-signed install, Verifier/HVCI, VM, or packet-path run. The transmit ring is absent; SET_QUANTA validates basic sizing and fails with STATUS_NOT_SUPPORTED until scheduler integration; SET_MTU refuses changes that would diverge from NDIS-cached interface attributes.
+- Miniport source compiles/links for x64 and ARM64 in CI, but remains non-operational: unsigned artifacts only, no test-signed install, Verifier/HVCI, VM, or packet-path run. The bounded TX queue and service polling are source-level only; `SET_QUANTA` remains `STATUS_NOT_SUPPORTED` until scheduler integration, and `SET_MTU` refuses changes that would diverge from NDIS-cached interface attributes.
 - The local service adapter uses loopback TCP only; production named-pipe ACLs and Windows caller authentication remain pending.
 - Single session per service default — multi-session demux exists but service opens one session unless per-flow/per-class toggled.
 - Wire-v2 FlowData uses authenticated selective FlowAck, and bounded RTO repair resends unacknowledged payload on an alternate path. CI tests the tunnel and service integration; real network loss/reordering and driver-path behavior remain unmeasured.
@@ -56,4 +56,10 @@ Status: in progress; PR #18 merged as `a1ec9b0`; validation runs `39799406998` a
 ## References
 
 - Blueprint §4.5 failover, §4.7.4 per-flow sessions, §4.8 dependency policy, §6.1 TAP-like adapter, §6.2 WRH + flow classes, §6.3 capacity, §6.4 DRR + pacing + CC, §6.5 health hysteresis, §6.6 NAT keepalive, §8.2 Diagnostics, §8.3 installer, §9.2 IPC + handshake, §9.3 signing, §9.5 HVCI, §10.1 Rig A/B, §10.3 acceptance rows, §11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio.
-- ADRs 0003-0037.
+- ADRs 0003-0040.
+
+## Current validation snapshot
+
+- Head `f08f758`; PR #19 is open. Latest push run `39901467494` and PR run `39901472201` passed all six CI jobs. Rust CI summaries: 304 Ubuntu / 303 Windows tests.
+- Local checks after the documentation refresh: 24 Python CI tests, 12 driver packet/OID/INF tests, generated portal checks, SVG XML parsing, and `git diff --check`.
+- Runtime acceptance remains outstanding: signed installation, Driver Verifier, HVCI, real NDIS packet path, hardware performance, clean-machine packaging, reviewed VEX, and production GUI/IPC.
