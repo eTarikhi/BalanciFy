@@ -61,5 +61,5 @@ Status: in progress; PR #19 remains open at `02409cf` (IPv6 boundary regressions
 ## Current validation snapshot
 
 - PR head `02409cf`; PR #19 is open. Latest push run `39922008067` and PR run `39922014929` passed all six CI jobs. Rust CI summaries: 305 Ubuntu / 304 Windows tests.
-- Local checks after the documentation refresh: 24 Python CI tests, 12 driver packet/OID/INF test binaries under strict warnings plus AddressSanitizer/UndefinedBehaviorSanitizer; parser test includes 12,000 deterministic length mutations, generated portal checks, SVG XML parsing, and `git diff --check`.
+- Local checks after the documentation refresh: 24 Python CI tests, including 12 driver OID/INF contract checks, plus four portable C fixture programs run under strict warnings and again with AddressSanitizer/UndefinedBehaviorSanitizer; the packet parser processes 12,000 deterministic length mutations per execution. Generated portal checks, SVG XML parsing, and `git diff --check` also pass.
 - Runtime acceptance remains outstanding: signed installation, Driver Verifier, HVCI, real NDIS packet path, hardware performance, clean-machine packaging, reviewed VEX, and production GUI/IPC.
