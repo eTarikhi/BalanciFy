@@ -39,11 +39,11 @@ class DocsSiteTests(unittest.TestCase):
                 "index.html",
                 "404.html",
                 ".nojekyll",
-                "assets/progress/status-dashboard-2026-10-22.svg",
-                "assets/progress/test-evidence-2026-10-22.svg",
-                "assets/progress/delivery-signal-2026-10-22.svg",
-                "assets/progress/roadmap-sequence-2026-10-22.svg",
-                "assets/progress/strategic-alignment-2026-10-22.svg",
+                "assets/progress/status-dashboard-2026-10-23.svg",
+                "assets/progress/test-evidence-2026-10-23.svg",
+                "assets/progress/delivery-signal-2026-10-23.svg",
+                "assets/progress/roadmap-sequence-2026-10-23.svg",
+                "assets/progress/strategic-alignment-2026-10-23.svg",
             ):
                 with self.subTest(path=relative):
                     self.assertTrue((output / relative).is_file(), relative)
@@ -52,6 +52,10 @@ class DocsSiteTests(unittest.TestCase):
             parser.feed(html)
             self.assertIn('lang="en"', html)
             self.assertIn("not release-ready", html)
+            self.assertIn("301 passed", html)
+            self.assertIn("300 passed", html)
+            self.assertIn("not claimed live", html)
+            self.assertNotIn("has not been WDK-built", html)
             self.assertFalse(parser.external_assets, parser.external_assets)
             self.assertEqual(len(parser.assets), 5)
             for asset in parser.assets:
