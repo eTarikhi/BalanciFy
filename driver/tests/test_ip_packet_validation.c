@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <string.h>
+#include <stdint.h>
 #include "../src/ip_packet_validation.h"
 
 static void test_ipv4_minimum_packet(void) {
@@ -113,6 +114,49 @@ static void test_rejects_truncated_unknown_and_oversize_packets(void) {
     assert(!BalancifyIsValidIpPacket(packet, sizeof(packet), 1500));
 }
 
+static uint32_t next_random(uint32_t *state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    return *state;
+}
+
+static unsigned char random_protocol(uint32_t value) {
+    static const unsigned char protocols[] = { 0, 6, 17, 43, 44, 51, 60, 59 };
+    return protocols[value % (uint32_t)(sizeof(protocols) / sizeof(protocols[0]))];
+}
+
+/* Deterministic malformed/near-valid length mutations for sanitizer CI. */
+static void test_randomized_length_fields_remain_bounded(void) {
+    unsigned char packet[2048];
+    uint32_t state = UINT32_C(0xA17E5EED);
+    unsigned int iteration;
+
+    for (iteration = 0u; iteration < 12000u; iteration++) {
+        size_t length = (size_t)(next_random(&state) % (uint32_t)sizeof(packet));
+        size_t index;
+        for (index = 0u; index < length; index++) {
+            packet[index] = (unsigned char)(next_random(&state) & UINT32_C(0xFF));
+        }
+
+        if (length >= 20u && (iteration & 1u) == 0u) {
+            packet[0] = (unsigned char)(0x40u + 5u + (next_random(&state) % 11u));
+            packet[2] = (unsigned char)((length >> 8u) & 0xFFu);
+            packet[3] = (unsigned char)(length & 0xFFu);
+            packet[9] = random_protocol(next_random(&state));
+        } else if (length >= 40u) {
+            size_t payloadLength = length - 40u;
+            packet[0] = 0x60u;
+            packet[4] = (unsigned char)((payloadLength >> 8u) & 0xFFu);
+            packet[5] = (unsigned char)(payloadLength & 0xFFu);
+            packet[6] = random_protocol(next_random(&state));
+        }
+
+        (void)BalancifyIsValidIpPacket(packet, length,
+            (iteration & 1u) == 0u ? 1500u : 9000u);
+    }
+}
+
 int main(void) {
     test_ipv4_minimum_packet();
     test_ipv4_options_and_payload();
@@ -121,5 +165,6 @@ int main(void) {
     test_ipv6_exact_payload_length();
     test_ipv6_extension_and_transport_bounds();
     test_rejects_truncated_unknown_and_oversize_packets();
+    test_randomized_length_fields_remain_bounded();
     return 0;
 }
