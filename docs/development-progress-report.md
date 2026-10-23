@@ -1,8 +1,8 @@
 # Balancify — Development Progress Report
 
 **As of:** 23 October 2026 (Asia/Tehran)<br>
-**Repository state:** `main` at merge commit [`a1ec9b0`](https://github.com/eTarikhi/BalanciFy/commit/a1ec9b059c695ca0dc7926fff6a6f651a8da2499); active continuation: `arena/81ef53da-balancify`, PR [#19](https://github.com/eTarikhi/BalanciFy/pull/19) open; latest code-validated commit `8d98b60`<br>
-**Latest verified PR CI:** [Run 39908817177](https://github.com/eTarikhi/BalanciFy/actions/runs/39908817177) — all six jobs succeeded; 304 Linux / 303 Windows Rust tests, pinned x64/ARM64 WDK builds, and static PE/INF checks passed.<br>
+**Repository state:** `main` at merge commit [`a1ec9b0`](https://github.com/eTarikhi/BalanciFy/commit/a1ec9b059c695ca0dc7926fff6a6f651a8da2499); active continuation: `arena/81ef53da-balancify`, PR [#19](https://github.com/eTarikhi/BalanciFy/pull/19) open; latest code-validated commit `9be616f`<br>
+**Latest verified PR CI:** [Run 39913195342](https://github.com/eTarikhi/BalanciFy/actions/runs/39913195342) — all six jobs succeeded; 305 Linux / 304 Windows Rust tests, pinned x64/ARM64 WDK builds, and static PE/INF checks passed.<br>
 **Overall status:** active engineering prototype; **not release-ready**. G2–G8 acceptance remains open; G1 formal sign-off was not found in the repository evidence reviewed for this report.
 
 > **Measurement and evidence rule.** This report separates source/CI evidence from Windows driver execution, network measurements and release validation. Passing Rust tests or a synthetic benchmark does not prove that the product works through an NDIS driver, meets throughput/latency targets, installs offline, or is ready for release. Percent-complete figures and velocity forecasts are omitted where no auditable basis exists.
@@ -11,13 +11,13 @@
 
 ![Status and gate dashboard](assets/progress/status-dashboard-2026-10-23.svg)
 
-The project has a substantial first-party Rust software foundation: current PR CI passes on Ubuntu and Windows with 304 and 303 Rust tests, the dependency/crypto audit and lab-tool checks pass, and pinned x64/ARM64 WDK compile/link plus static PE/INF checks pass. Those driver artifacts are unsigned and have not been installed or exercised in a Windows VM. The service and miniport now have source for both directions: tunnel-delivered packets can be injected into NDIS, while OS-originated raw-IP packets enter a bounded driver TX queue and are polled into `Service::send_ip_packet`. Neither direction has been exercised against an installed driver, and bidirectional packet-path acceptance remains open. The app remains a Rust CLI rather than the planned WinUI 3 desktop application. The 11 acceptance items listed in the throughput/clean-machine plan have no accepted results.
+The project has a substantial first-party Rust software foundation: current PR CI passes on Ubuntu and Windows with 305 and 304 Rust tests, the dependency/crypto audit and lab-tool checks pass, and pinned x64/ARM64 WDK compile/link plus static PE/INF checks pass. Those driver artifacts are unsigned and have not been installed or exercised in a Windows VM. The service and miniport now have source for both directions: tunnel-delivered packets can be injected into NDIS, while OS-originated raw-IP packets enter a bounded driver TX queue and are polled into `Service::send_ip_packet`. Neither direction has been exercised against an installed driver, and bidirectional packet-path acceptance remains open. The app remains a Rust CLI rather than the planned WinUI 3 desktop application. The 11 acceptance items listed in the throughput/clean-machine plan have no accepted results.
 
 ### Current decision view
 
 | Dimension | Evidence-based position | Decision implication |
 |---|---|---|
-| Software integration | Latest PR CI: 6/6 jobs pass; 304 Linux / 303 Windows Rust tests pass | Continue software development; the CI baseline is healthy |
+| Software integration | Latest PR CI: 6/6 jobs pass; 305 Linux / 304 Windows Rust tests pass | Continue software development; the CI baseline is healthy |
 | Driver / OS integration | Pinned x64/ARM64 WDK compile/link, PE mitigation/unsigned checks, and INF source-contract tests pass. Optional injection and bounded reverse TX queue/polling source paths exist; portable C packet checks validate IP lengths, IPv6 extension bounds, and TCP/UDP header boundaries. No signed install, Driver Verifier, HVCI or packet-path runtime result. | G2 remains open; unsigned builds and source paths do not establish an operational miniport |
 | Network performance | Software microbenchmarks exist; no real netem S2c or Rig B run | No throughput, added-delay, CPU/Gbit or failover acceptance claim |
 | User-facing product | Rust lab CLI and loopback IPC exist; production WinUI/.NET GUI and authenticated named-pipe service transport do not | Production UX and IPC remain unimplemented |
@@ -38,7 +38,7 @@ The repository contains **40 ADR documents (ADR-0002 through ADR-0041)** and a t
 | **Diagnostics and lab tooling** | IPC v1, loopback lab service adapter, telemetry and redacted support bundle, ETW event-writing source, netem safety/analyzer tools, software benchmarks. | Contract tests and tool tests pass; no live ETW trace, real netem acceptance, or Rig B evidence. |
 | **PR #13 · installer/service hardening** | Transactional SPDX sidecar handling, journal persistence and rollback, fail-closed lab service transport, Home stale-state behavior, loopback-only client policy; source-level driver and SBOM/ETW hardening also landed in earlier merged work. | PR #13 merged 21 Oct 2026; associated CI passed. Driver work remains source-only. |
 | **PR #14 · CI and installer hardening** | Ubuntu 24.04 Linux runner pins, Node 24-compatible Pages actions, CI pin contract tests, strict installer CLI parsing, unique exclusively reserved/private default journals, strict UTF-8 IPC decoding. | PR #14 merged as `e3f2e24`; merge CI run 39688256976 passed all four jobs. Pages deployment separately failed at Setup Pages. |
-| **PR #19 · driver evidence and raw-IP ingress** | Verify x64/ARM64 unsigned artifacts' PE architecture, mitigation flags and certificate-table state; add bounded IPv4/IPv6 flow parsing, optional `INJECT_NBL`, a 64-slot miniport TX queue with `DEQUEUE_TX` service polling, and kernel IPv4/IPv6 TCP/UDP structural validation aligned with the service parser, including exact unfragmented UDP/IP payload lengths (ADR-0041). Refresh evidence report and static portal. | PR #19 remains open. CI run 39908817177 passed all six jobs, including 304/303 Rust tests and both WDK builds. The driver binaries are unsigned; neither packet direction has been exercised against an installed driver. InfVerif was not retained after its runner invocation failed without retrievable diagnostics. |
+| **PR #19 · driver evidence and raw-IP ingress** | Verify x64/ARM64 unsigned artifacts' PE architecture, mitigation flags and certificate-table state; add bounded IPv4/IPv6 flow parsing, optional `INJECT_NBL`, a 64-slot miniport TX queue with `DEQUEUE_TX` service polling, and kernel IPv4/IPv6 TCP/UDP structural validation aligned with the service parser, including exact unfragmented UDP/IP payload lengths and IPv6 UDP regression coverage (ADR-0041). Refresh evidence report and static portal. | PR #19 remains open. CI run 39913195342 passed all six jobs, including 305/304 Rust tests and both WDK builds. The driver binaries are unsigned; neither packet direction has been exercised against an installed driver. InfVerif was not retained after its runner invocation failed without retrievable diagnostics. |
 
 **Legacy visualization warning:** the older PNG dashboards under `docs/assets/progress/` contain unsupported completion/velocity percentages and stale gate labels. This report intentionally does not reuse them; the dated 2026-10-23 SVGs linked below are the current evidence-based visuals.
 
@@ -53,7 +53,7 @@ The repository contains **40 ADR documents (ADR-0002 through ADR-0041)** and a t
 | **IPC and app shell** | IPC v1 request/response/event framing, bounded payloads, strict UTF-8 decoding, client timeout/stale-state behavior, redacted support bundle, Rust CLI modes for Home/Rules/Diagnostics/Tray/Relay/Bundle. | IPC/app tests pass. Production named-pipe ACL/caller authentication, persistent UI state and the WinUI 3/.NET 10 UI are not delivered. |
 | **NDIS/WDF driver** | C source for a first-party miniport/control device, raw-IP medium, bounded OIDs, packet checks, owned NBL/MDL handling, pause/return lifecycle hardening and restricted control-device SDDL. Both directions have source: `INJECT_NBL` for service-to-OS packets and a 64-slot bounded TX FIFO plus `DEQUEUE_TX` for OS-to-service packets. The WDK-independent C validator checks TCP/UDP boundaries and IPv6 extension traversal before retaining/indicating packets; service and driver validators require exact unfragmented UDP/IP payload lengths. | Pinned x64/ARM64 WDK compile/link and unsigned PE architecture/mitigation checks pass in CI; INF source contracts pass. No signed install, Driver Verifier, HVCI/HLK run, or runtime packet-path test. |
 | **Installer** | Lab CLI parsing, dry-run flow, journal JSON serialization/permissions, exclusive reservation of default journal paths, transactional sidecar-copy/rollback logic, collision and failure tests. | Rust tests cover logic only. No production MSI/bootstrapper, bundled runtime, offline VM install/uninstall, power-loss recovery or rollback drill. |
-| **Supply chain and CI** | Locked dependency graph and crypto policy audit; SPDX 2.3 and SPDX 3.0.1 inventory generation, validation and CI artifacts; Linux jobs pinned to Ubuntu 24.04; Pages workflow actions updated to exact releases. | PR run 39908817177 passes all six software/static CI jobs. This proves source/build/test/policy checks, not driver signing or deployment. No reviewed VEX or release attestation. |
+| **Supply chain and CI** | Locked dependency graph and crypto policy audit; SPDX 2.3 and SPDX 3.0.1 inventory generation, validation and CI artifacts; Linux jobs pinned to Ubuntu 24.04; Pages workflow actions updated to exact releases. | PR run 39913195342 passes all six software/static CI jobs. This proves source/build/test/policy checks, not driver signing or deployment. No reviewed VEX or release attestation. |
 | **Observability and lab tooling** | ETW event-writing source, telemetry and redacted support bundle, netem safety tooling, analysis utilities, software microbenchmarks, HVCI and clean-machine procedures. | No live ETW trace decode, netem measurement, real Rig B measurement, or HVCI/clean-machine procedure execution. |
 
 ### 1.3 Current test evidence
@@ -65,7 +65,7 @@ The latest verified PR check run publishes the following test counts (zero-test 
 | Suite | Ubuntu | Windows |
 |---|---:|---:|
 | Core | 83 | 83 |
-| Service library | 58 | 58 |
+| Service library | 59 | 59 |
 | Service binary | 10 | 10 |
 | Crypto | 39 | 39 |
 | Tunnel | 35 | 35 |
@@ -76,15 +76,15 @@ The latest verified PR check run publishes the following test counts (zero-test 
 | App | 8 | 8 |
 | End-to-end | 9 | 9 |
 | Fuzz/property tests | 6 | 6 |
-| **Total** | **304** | **303** |
+| **Total** | **305** | **304** |
 
-PR run 39908817177 also passed the dependency/crypto policy audit, lab analysis/tool tests, and pinned x64/ARM64 WDK compile/link plus static PE and INF source-contract checks. Driver artifacts are unsigned and do not establish an install, runtime packet path, HVCI or product acceptance result; see `.github/workflows/ci.yml` and `docs/phase2/lab-progress.md`.
+PR run 39913195342 also passed the dependency/crypto policy audit, lab analysis/tool tests, and pinned x64/ARM64 WDK compile/link plus static PE and INF source-contract checks. Driver artifacts are unsigned and do not establish an install, runtime packet path, HVCI or product acceptance result; see `.github/workflows/ci.yml` and `docs/phase2/lab-progress.md`.
 
 ### 1.4 Momentum and velocity
 
 ![Delivery signal: integration versus acceptance evidence](assets/progress/delivery-signal-2026-10-23.svg)
 
-**Software integration remains green:** PR #19 is open; PR CI run 39908817177 passed all six jobs on code-validated commit `8d98b60`, including Ubuntu and Windows workspace tests, x64/ARM64 WDK builds, static PE checks, dependency audit and lab-tool tests. The portal source is refreshed with this evidence, but deployment is unverified and is not claimed live.
+**Software integration remains green:** PR #19 is open; PR CI run 39913195342 passed all six jobs on code-validated commit `9be616f`, including Ubuntu and Windows workspace tests, x64/ARM64 WDK builds, static PE checks, dependency audit and lab-tool tests. The portal source is refreshed with this evidence, but deployment is unverified and is not claimed live.
 
 **Velocity is not quantified.** The repository does not contain a consistent sprint cadence, estimated story-point history, stable backlog denominator, staffing record, or approved phase dates. Commit counts and test counts are not substitutes for scope-normalized throughput. Consequently this report provides no velocity slope, burn-down percentage, or completion percentage. A measured velocity/burn-down chart should be added only after agreeing a work-unit scheme and maintaining dated sprint snapshots.
 
@@ -155,7 +155,7 @@ Balancify has a credible, testable first-party software base, healthy cross-plat
 
 ## Sources, definitions and reproducibility
 
-- Current PR #19 CI/check summaries: [run 39908817177](https://github.com/eTarikhi/BalanciFy/actions/runs/39908817177), code head `8d98b60`; all six jobs passed. PR remains open, so these results are not merged-main evidence.
+- Current PR #19 CI/check summaries: [run 39913195342](https://github.com/eTarikhi/BalanciFy/actions/runs/39913195342), code head `9be616f`; all six jobs passed. PR remains open, so these results are not merged-main evidence.
 - Documentation deployment: [main run 39793993235](https://github.com/eTarikhi/BalanciFy/actions/runs/39793993235) failed; the cause has not been investigated in this continuation. The portal is not claimed live.
 - Product gates and 47–58 week phase estimate: `docs/technical-blueprint.md`, especially §11.1–§11.3. Estimates assume a 5–6 engineer team and require re-baselining.
 - Demonstrated behavior and limitations: `docs/phase2/lab-progress.md`.

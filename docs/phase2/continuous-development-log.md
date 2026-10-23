@@ -69,6 +69,8 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `7b73d6e` ported the completed client hardening to the active continuation branch `arena/096b15fe-balancify` so review and further work stay on the current session branch. PR #6 passes CI run `39520659434` (259 Linux / 258 Windows Rust tests, SPDX validation, lab tests, and dependency/crypto audit); earlier PR #5 was closed as superseded. Local cargo was unavailable in this sandbox, so validation came from GitHub Actions.
 
 ## Active branch update (2026-10-23)
+- `9be616f` adds service and portable-C regression cases for IPv6 UDP minimum/mismatched lengths; current CI therefore reports 305 Ubuntu / 304 Windows Rust tests. Push run `39913188520` and PR run `39913195342` passed all six jobs, including both pinned WDK builds.
+
 
 - `8d98b60` requires an unfragmented UDP length to exactly equal the IP payload in both the service parser and kernel-facing C validator, preventing accepted trailing bytes and keeping the two validation layers aligned. Added Rust and C regression cases; push CI `39908812610` and PR CI `39908817177` passed all six jobs.
 - `ba45cba` hardens the portable miniport IP validator to reject malformed IPv4/IPv6 lengths, reserved fragment flags, truncated TCP/UDP headers, overlong UDP lengths, malformed IPv6 extension chains and excessive extension counts before packets enter NBL/queue storage. Added positive/negative C fixtures and ADR-0041. Push CI `39905228349` and PR CI `39905231812` both passed all six jobs, including x64/ARM64 WDK builds and 304/303 Rust tests.

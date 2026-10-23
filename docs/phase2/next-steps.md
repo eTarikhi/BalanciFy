@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-23
-Status: continuous on `arena/81ef53da-balancify`; PR #19 remains open at `8d98b60`. Latest push CI `39908812610` and PR CI `39908817177` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, unsigned-status verification, Windows and Ubuntu Rust tests, lab tests, and dependency/crypto audit. Hardware/product gates remain pending.
+Status: continuous on `arena/81ef53da-balancify`; PR #19 remains open at `9be616f`. Latest push CI `39913188520` and PR CI `39913195342` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE machine-type, mitigation-flag, unsigned-status verification, Windows and Ubuntu Rust tests, lab tests, and dependency/crypto audit. Hardware/product gates remain pending.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -22,7 +22,7 @@ User instruction: "continue the development process without stopping to report" 
 - PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. PR #19 adds the bounded reverse TX queue and service polling (ADR-0040); `SET_QUANTA` remains unsupported until a driver scheduler consumes it. Current x64/ARM64 WDK builds and unsigned PE/INF checks pass in CI. This does not establish installation or runtime behavior.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
-Current validation: PR CI `39908817177` passed all six jobs; Rust summaries report 304 Ubuntu / 303 Windows tests. Local CI suite: 24 Python tests and 12 driver packet/OID/INF tests. These are source/build checks, not runtime acceptance.
+Current validation: PR CI `39913195342` passed all six jobs; Rust summaries report 305 Ubuntu / 304 Windows tests. Local CI suite: 24 Python tests and 12 driver packet/OID/INF tests. These are source/build checks, not runtime acceptance.
 
 ## What remains (ordered, still without stopping)
 
@@ -36,7 +36,7 @@ Current validation: PR CI `39908817177` passed all six jobs; Rust summaries repo
 
 ## Process
 
-- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (304 Linux / 303 Windows Rust tests; current SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
+- Keep CI green at all times: each push must pass Ubuntu + Windows + lab checks + dependency/crypto audit (305 Linux / 304 Windows Rust tests; current SPDX 2.3/3.0.1 SBOM tests and SPDX validators also run)
 - Use `gh run list --limit 1 --branch arena/81ef53da-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
@@ -46,5 +46,5 @@ Current validation: PR CI `39908817177` passed all six jobs; Rust summaries repo
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0041
-- Latest active-branch CI: push `39908812610` and PR `39908817177` success; latest head `8d98b60`
+- Latest active-branch CI: push `39913188520` and PR `39913195342` success; latest head `9be616f`
 - ADR-0038 through ADR-0041 cover bounded raw-IP ingress, the miniport TX queue, and kernel packet-boundary validation
