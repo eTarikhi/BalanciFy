@@ -76,11 +76,11 @@
     <section id="status" aria-labelledby="status-title">
       <div class="callout">
         <div><strong id="status-title">Current decision: validate the first-party driver runtime next.</strong><p>Pinned x64/ARM64 WDK compile/link and static PE checks pass in PR CI. G2 remains open: no test-signed install, Driver Verifier/HVCI run, or packet-path runtime evidence exists.</p></div>
-        <div class="meta"><b>Snapshot:</b> 23 Oct 2026 · main at <code>a1ec9b0</code>; PR #19 validated code <code>8e65c7d</code><br><b>CI:</b> <a href="https://github.com/eTarikhi/BalanciFy/actions/runs/39889937100">6 of 6 PR jobs passed</a><br><b>Pages:</b> deployment is unverified; this portal is not claimed live</div>
+        <div class="meta"><b>Snapshot:</b> 23 Oct 2026 · main at <code>a1ec9b0</code>; PR #19 validated code <code>601d7d5</code><br><b>CI:</b> <a href="https://github.com/eTarikhi/BalanciFy/actions/runs/39896314464">6 of 6 PR jobs passed</a><br><b>Pages:</b> deployment is unverified; this portal is not claimed live</div>
       </div>
       <div class="metrics" aria-label="Current project metrics">
-        <div class="metric"><div class="label">Rust tests · Ubuntu</div><strong>301 passed</strong><small>0 failed in PR #19 CI</small></div>
-        <div class="metric"><div class="label">Rust tests · Windows</div><strong>300 passed</strong><small>0 failed in PR #19 CI</small></div>
+        <div class="metric"><div class="label">Rust tests · Ubuntu</div><strong>304 passed</strong><small>0 failed in PR #19 CI</small></div>
+        <div class="metric"><div class="label">Rust tests · Windows</div><strong>303 passed</strong><small>0 failed in PR #19 CI</small></div>
         <div class="metric"><div class="label">Formal gates closed</div><strong>0 / 8 verified</strong><small>G1 sign-off not located; G2–G8 open</small></div>
         <div class="metric"><div class="label">§10.3 acceptance</div><strong>0 / 11 evidenced</strong><small>No Rig B / clean-machine results recorded</small></div>
       </div>
@@ -89,12 +89,12 @@
       <h2 id="evidence-title">Software foundations; product proof still ahead</h2>
       <p class="intro">The project has implemented substantial first-party Rust control, tunnel, crypto, service and lab tooling. CI validates software behavior and supply-chain checks; it does not establish driver runtime, live network performance, HVCI, installer readiness or field stability.</p>
       <div class="cards">
-        <article class="panel"><h3>Implemented foundations</h3><p>Flow scheduling and affinity, link health, capacity/congestion models, pacing/DRR, authenticated tunnel framing, replay protection, per-flow repair, key management, lab relay, IPC v1, installer journal logic, bounded raw-IP ingress and an opt-in Windows injection adapter source path.</p><span class="pill good">Cross-platform Rust tests</span><span class="pill good">x64/ARM64 WDK CI builds</span><span class="pill good">SPDX 2.3 / 3.0.1 CI</span></article>
-        <article class="panel"><h3>Critical gaps</h3><p>WDK build/link and static artifact checks pass, but driver artifacts are unsigned and have not been installed or run. Service IPC still uses loopback TCP and uplinks are simulated; the optional injection path is unvalidated, reverse miniport TX is absent, and production named-pipe authentication and WinUI 3/.NET GUI are missing. No real netem, Rig B, HVCI/HLK, clean-machine install or reviewed VEX evidence exists.</p><span class="pill open">G2 open</span><span class="pill open">G3 blocked</span><span class="pill open">G4–G8 pending</span></article>
+        <article class="panel"><h3>Implemented foundations</h3><p>Flow scheduling and affinity, link health, capacity/congestion models, pacing/DRR, authenticated tunnel framing, replay protection, per-flow repair, key management, lab relay, IPC v1, installer journal logic, bounded raw-IP ingress, opt-in <code>INJECT_NBL</code>, and a bounded NDIS TX queue/polling source path.</p><span class="pill good">Cross-platform Rust tests</span><span class="pill good">x64/ARM64 WDK CI builds</span><span class="pill good">SPDX 2.3 / 3.0.1 CI</span></article>
+        <article class="panel"><h3>Critical gaps</h3><p>WDK build/link and static artifact checks pass, but driver artifacts are unsigned and have not been installed or run. Both packet directions now have bounded source paths, but neither has runtime validation. Service IPC still uses loopback TCP and uplinks are simulated; production named-pipe authentication and WinUI 3/.NET GUI are missing. No real netem, Rig B, HVCI/HLK, clean-machine install or reviewed VEX evidence exists.</p><span class="pill open">G2 open</span><span class="pill open">G3 blocked</span><span class="pill open">G4–G8 pending</span></article>
       </div>
       <div class="figures" style="margin-top:16px">
         <figure><img src="assets/progress/status-dashboard-2026-10-23.svg" alt="Gate dashboard: six PR CI jobs pass; G2 remains open, G3 blocked, and later gates pending"><figcaption>Gate status is based on exit evidence, not feature percentages.</figcaption></figure>
-        <figure><img src="assets/progress/test-evidence-2026-10-23.svg" alt="301 Ubuntu and 300 Windows Rust tests in latest verified PR CI"><figcaption>CI test counts are software verification, not product acceptance.</figcaption></figure>
+        <figure><img src="assets/progress/test-evidence-2026-10-23.svg" alt="304 Ubuntu and 303 Windows Rust tests in latest verified PR CI"><figcaption>CI test counts are software verification, not product acceptance.</figcaption></figure>
         <figure><img src="assets/progress/delivery-signal-2026-10-23.svg" alt="Six of six CI jobs pass, zero of eleven acceptance items have evidence, and velocity is not quantified"><figcaption>Momentum is positive on software integration; there is no defensible velocity forecast.</figcaption></figure>
         <figure><img src="assets/progress/strategic-alignment-2026-10-23.svg" alt="Strategic alignment matrix of foundations, current status, and remaining evidence"><figcaption>Strategic objectives are mapped to concrete implementation and validation gaps.</figcaption></figure>
       </div>
@@ -104,7 +104,7 @@
       <p class="intro">First close the Windows integration gate, then measure the driver, then complete product acceptance. The blueprint's 47–58 week schedule is an estimate for a 5–6 engineer team, not a current forecast.</p>
       <figure class="roadmap"><img src="assets/progress/roadmap-sequence-2026-10-23.svg" alt="Blueprint phase durations from feasibility through production, with current G2 gate open"><figcaption>Estimated phase-duration ranges from the blueprint; not an earned-value or date forecast.</figcaption></figure>
       <div class="cards" style="margin-top:16px">
-        <article class="panel"><h3>Next: G2</h3><p>Review the optional injection adapter, implement the reverse miniport-to-service TX path, prepare a test-signed Windows VM, then verify steering and bidirectional packet flow across adapter classes.</p></article>
+        <article class="panel"><h3>Next: G2</h3><p>Review both source directions, prepare a test-signed Windows VM, then validate device open/IOCTL behavior, steering and bidirectional packet flow across adapter classes.</p></article>
         <article class="panel"><h3>Then: G3 → G4</h3><p>Measure driver latency/CPU, complete the HVCI trio and signing dry-run; then validate the real Rig B rows and offline clean-machine installation.</p></article>
       </div>
     </section>
