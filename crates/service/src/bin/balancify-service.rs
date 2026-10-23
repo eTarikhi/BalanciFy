@@ -9,6 +9,7 @@
 
 use balancify_core::UplinkId;
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
+use balancify_service::driver_device::DriverDevice;
 use balancify_service::ipc::server::IpcServer;
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
@@ -238,14 +239,17 @@ fn main() -> std::io::Result<()> {
     let mut positional = Vec::new();
     let mut insecure_lab_requested = false;
     let mut simulate_app_traffic_requested = false;
+    let mut driver_device_requested = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--insecure-lab" => insecure_lab_requested = true,
             "--simulate-app-traffic" => simulate_app_traffic_requested = true,
+            "--driver-device" => driver_device_requested = true,
             "--help" | "-h" => {
-                println!("Usage: balancify-service [--insecure-lab] [--simulate-app-traffic] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
+                println!("Usage: balancify-service [--insecure-lab] [--simulate-app-traffic] [--driver-device] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
                 println!("Without a relay identity, the service fails closed. Insecure lab mode is debug-only and loopback-only.");
                 println!("Synthetic app traffic is opt-in and restricted to --insecure-lab mode.");
+                println!("--driver-device opens the Windows control device and injects received tunnel packets; it requires the driver and appropriate access.");
                 return Ok(());
             }
             _ if arg.starts_with('-') => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unknown option: {arg}"))),
@@ -275,8 +279,16 @@ fn main() -> std::io::Result<()> {
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
     validate_lab_target(mode, relay_primary, relay_secondary)?;
     validate_simulated_traffic(mode, simulate_app_traffic_requested)?;
+    let driver_device = if driver_device_requested {
+        Some(DriverDevice::open()?)
+    } else {
+        None
+    };
 
     println!("Balancify service -- state_dir={}, primary={}, secondary={:?}", state_dir.display(), relay_primary, relay_secondary);
+    if driver_device.is_some() {
+        println!("  NDIS packet injection: enabled through the Balancify control device");
+    }
     println!("  public key: {:02x?}...", &keypair.public_bytes()[..8]);
 
     let cfg = ServiceConfig {
@@ -406,7 +418,12 @@ fn main() -> std::io::Result<()> {
                             for act in actions {
                                 match act {
                                     Action::Deliver { data } => {
-                                        println!("Deliver {} bytes from {}: {:?}", data.len(), from, String::from_utf8_lossy(&data[..data.len().min(64)]));
+                                        if let Some(device) = &driver_device {
+                                            device.inject_nbl(&data)?;
+                                            println!("Injected {} received tunnel bytes into the NDIS miniport", data.len());
+                                        } else {
+                                            println!("Received {} tunnel bytes from {} (not injected; pass --driver-device to use the miniport)", data.len(), from);
+                                        }
                                     }
                                     Action::Send { uplink, bytes } => {
                                         let s = if uplink.0 == 0 { &sock0 } else { &sock1 };

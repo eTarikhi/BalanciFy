@@ -21,6 +21,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 pub mod support;
+pub mod driver_device;
 pub mod etw;
 pub mod packet;
 pub mod wintun;
