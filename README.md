@@ -71,7 +71,9 @@ not exactly pinned, fails the build. Lab rigs still need the null cipher
 explicitly — `cargo run -p balancify-relay --features lab-crypto -- 4430,4431` —
 and a release build of the relay refuses to start without one.
 
-Driver, shell and installer build on Windows only (see their READMEs).
+Driver, shell and installer build on Windows only (see their READMEs). For complete
+machine setup, local CI, safe push-after-green behavior, WDK builds, and remote-run
+monitoring, see [Local development and CI/CD](docs/local-development-and-ci.md).
 
 Phase-2 status and the honest list of what is *not* yet proven:
 [`docs/phase2/lab-progress.md`](docs/phase2/lab-progress.md).
