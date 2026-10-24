@@ -1523,8 +1523,11 @@ mod tests {
             assert!(limiter.try_consume(start));
         }
         assert!(!limiter.try_consume(start));
-        assert!(limiter.try_consume(start + Duration::from_millis(10)));
-        assert!(!limiter.try_consume(start + Duration::from_millis(10)));
+        let refill_at = start + Duration::from_millis(250);
+        for _ in 0..25 {
+            assert!(limiter.try_consume(refill_at));
+        }
+        assert!(!limiter.try_consume(refill_at));
     }
 
     #[test]
