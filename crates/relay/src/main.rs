@@ -104,6 +104,8 @@ const HANDSHAKE_MSG1: u8 = 0x01;
 const HANDSHAKE_MSG2: u8 = 0x02;
 const PROLOGUE: &[u8] = b"balancify handshake v1";
 const MAX_TRACKED_HANDSHAKE_IPS: usize = 4096;
+const GLOBAL_HANDSHAKE_BURST: f64 = 200.0;
+const GLOBAL_HANDSHAKE_RATE_PER_SECOND: f64 = 100.0;
 
 fn default_state_dir() -> std::path::PathBuf {
     #[cfg(windows)]
@@ -379,6 +381,30 @@ impl RelaySession {
     }
 }
 
+/// Smooth global handshake admission limits protect crypto work from spoofed-IP churn.
+struct HandshakeLimiter {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl HandshakeLimiter {
+    fn new(now: Instant) -> Self {
+        Self { tokens: GLOBAL_HANDSHAKE_BURST, last_refill: now }
+    }
+
+    fn try_consume(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * GLOBAL_HANDSHAKE_RATE_PER_SECOND)
+            .min(GLOBAL_HANDSHAKE_BURST);
+        self.last_refill = now;
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
+}
+
 struct SecureRelay {
     static_keypair: balancify_crypto::StaticKeypair,
     pinned_clients: balancify_crypto::PinnedKeys,
@@ -389,6 +415,7 @@ struct SecureRelay {
     max_sessions: usize,
     max_sessions_per_ip: usize,
     handshake_attempts: BTreeMap<std::net::IpAddr, (u64, Instant)>, // ip -> (count, window_start)
+    global_handshake_limiter: HandshakeLimiter,
     total_bytes_forwarded: u64,
     total_packets_forwarded: u64,
     total_handshakes: u64,
@@ -407,6 +434,7 @@ impl SecureRelay {
             max_sessions: 1024,
             max_sessions_per_ip: 8,
             handshake_attempts: BTreeMap::new(),
+            global_handshake_limiter: HandshakeLimiter::new(Instant::now()),
             total_bytes_forwarded: 0,
             total_packets_forwarded: 0,
             total_handshakes: 0,
@@ -470,8 +498,13 @@ impl SecureRelay {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
-        // Abuse: handshake rate limit per IP
+        // Cheap per-IP admission first so one over-quota source cannot drain the global bucket.
         if !self.check_rate_limit_handshake(peer, now) {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        // Bound aggregate unauthenticated crypto work even when source IPs are spoofed.
+        if !self.global_handshake_limiter.try_consume(now) {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
@@ -1457,6 +1490,18 @@ mod tests {
     }
 
     #[test]
+    fn global_handshake_limiter_bounds_bursts_and_refills_smoothly() {
+        let start = Instant::now();
+        let mut limiter = HandshakeLimiter::new(start);
+        for _ in 0..GLOBAL_HANDSHAKE_BURST as usize {
+            assert!(limiter.try_consume(start));
+        }
+        assert!(!limiter.try_consume(start));
+        assert!(limiter.try_consume(start + Duration::from_millis(10)));
+        assert!(!limiter.try_consume(start + Duration::from_millis(10)));
+    }
+
+    #[test]
     fn secure_relay_rate_limits_handshakes_per_ip() {
         let relay_kp = balancify_crypto::StaticKeypair::generate();
         let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
@@ -1491,6 +1536,8 @@ mod tests {
             &999u64.to_be_bytes(),
         );
         assert!(relay.handle_msg1(&msg1, peer, now).is_err(), "11th should be rate limited");
+        assert_eq!(relay.global_handshake_limiter.tokens, GLOBAL_HANDSHAKE_BURST - 10.0,
+            "an over-quota IP must not drain the aggregate bucket");
 
         // After window, should succeed again
         let later = now + Duration::from_secs(61);
