@@ -466,17 +466,30 @@ impl SecureRelay {
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
         let mut responder = balancify_crypto::Responder::new(self.static_keypair.secret_bytes(), &self.prologue);
-        let payload = responder.read_message_checked(
+        let payload = match responder.read_message_checked(
             msg1,
             Some(&self.pinned_clients),
             Some(&mut self.replay_cache),
             Some(now),
-        )?;
+        ) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.total_rejected += 1;
+                return Err(error);
+            }
+        };
         if payload.len() != std::mem::size_of::<u64>() {
+            self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::Truncated);
         }
         let session_id = u64::from_be_bytes(payload[..8].try_into().unwrap());
-        let peer_static = responder.peer_static().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
+        let peer_static = match responder.peer_static() {
+            Some(peer_static) => peer_static,
+            None => {
+                self.total_rejected += 1;
+                return Err(balancify_crypto::HandshakeError::AuthFailed);
+            }
+        };
         if !self.is_peer_allowed(&peer_static) {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
@@ -487,9 +500,27 @@ impl SecureRelay {
         }
         let eph = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
         let resp_payload = session_id.to_be_bytes().to_vec();
-        let (msg2, transport_keys) = responder.write_message(eph, &resp_payload)?;
-        let recv_cipher = transport_keys.recv_cipher().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
-        let send_cipher = transport_keys.send_cipher().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
+        let (msg2, transport_keys) = match responder.write_message(eph, &resp_payload) {
+            Ok(result) => result,
+            Err(error) => {
+                self.total_rejected += 1;
+                return Err(error);
+            }
+        };
+        let recv_cipher = match transport_keys.recv_cipher() {
+            Some(cipher) => cipher,
+            None => {
+                self.total_rejected += 1;
+                return Err(balancify_crypto::HandshakeError::AuthFailed);
+            }
+        };
+        let send_cipher = match transport_keys.send_cipher() {
+            Some(cipher) => cipher,
+            None => {
+                self.total_rejected += 1;
+                return Err(balancify_crypto::HandshakeError::AuthFailed);
+            }
+        };
         let session = RelaySession::new(session_id, peer_static, peer, recv_cipher, send_cipher, now);
         self.sessions.insert(session_id, session);
         self.total_handshakes += 1;
@@ -1153,6 +1184,7 @@ mod tests {
         }
         assert!(relay.sessions.is_empty(), "malformed payloads must not create sessions");
         assert_eq!(relay.total_handshakes, 0);
+        assert_eq!(relay.total_rejected, 2, "each malformed authenticated request is counted");
     }
 
     #[test]
@@ -1175,6 +1207,7 @@ mod tests {
         let peer = "127.0.0.1:1234".parse().unwrap();
         assert!(relay.handle_msg1(&msg1, peer, now).is_err());
         assert_eq!(relay.sessions.len(), 0);
+        assert_eq!(relay.total_rejected, 1);
     }
 
     #[test]
@@ -1200,6 +1233,7 @@ mod tests {
         );
         let msg1_replay = initiator2.write_message(eph, &session_id.to_be_bytes());
         assert!(relay.handle_msg1(&msg1_replay, peer, now + Duration::from_secs(1)).is_err());
+        assert_eq!(relay.total_rejected, 1);
     }
 
     #[test]

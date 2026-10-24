@@ -165,3 +165,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Forwarding-socket admission: per-session upstream sockets (including their required read timeout) are now prepared before sending handshake msg2. If socket setup fails, the session is removed and no success response or peer mapping is emitted.
 
 - Relay error-log abuse control: malformed/unknown handshake traffic now shares a one-line-per-second failure-log throttle, keeping unauthenticated packet floods from turning stderr into an unbounded per-datagram workload. Added a monotonic throttle regression.
+
+- Relay rejection telemetry: malformed Noise messages, noncanonical session payloads, replayed flights, missing peer identity, and responder-key construction errors now increment `total_rejected` consistently. Regressions assert malformed, replay, and pinning failures are reflected in the counter.
