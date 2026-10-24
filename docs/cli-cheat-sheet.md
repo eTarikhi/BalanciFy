@@ -2,7 +2,7 @@
 
 Windows PowerShell is the primary local workflow for this Windows NDIS/WDF project; **WSL/Linux is not required**. The codebase combines a Rust 2021 workspace, a Windows C/WDK driver, Python test/SBOM helpers, Git Bash scripts, and GitHub Actions. There is no `package.json`, Docker/Compose workflow, production WinUI GUI, or ML training pipeline.
 
-The native Windows runner uses MSVC for portable driver C fixtures and covers Rust, Python, SBOM, and WDK builds. GitHub's Ubuntu CI separately runs Linux Rust and ASan/UBSan C tests. Build success does not equal driver install/runtime/hardware acceptance.
+The native Windows runner uses MSVC for portable driver C fixtures and covers Rust, Python, SBOM, and WDK builds. GitHub Actions runs a native MSVC quick-check job plus Ubuntu 24.04 validation of the Bash entrypoint used inside WSL2; hosted Ubuntu validates WSL-compatible userland, not the WSL kernel itself. Linux CI also runs Rust and ASan/UBSan C tests. Build success does not equal driver install/runtime/hardware acceptance.
 
 ## 1. Development & setup
 

@@ -157,7 +157,7 @@ if [[ "$PROFILE" == full ]]; then
     run_step generate-spdx-2 sh tools/ci/sbom.sh 0.1.0
     run_step validate-spdx-2 "$VENV/bin/python" -m spdx_tools.spdx.clitools.pyspdxtools --infile sbom.spdx.json
     run_step generate-spdx-3 "$VENV/bin/python" tools/ci/sbom_v3.py 0.1.0
-    run_step validate-spdx-3 "$VENV/bin/python" -m spdx3_validate --json sbom.spdx3.json --spdx-version 3.0.1 --quiet
+    run_step validate-spdx-3 "$VENV/bin/python" tools/ci/validate_spdx3.py sbom.spdx3.json
 else
     printf 'SKIP  Rust, release build, and SPDX validation (quick profile)\n' | tee -a "$LOG_DIR/summary.txt"
 fi

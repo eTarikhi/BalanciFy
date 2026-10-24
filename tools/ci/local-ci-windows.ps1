@@ -220,7 +220,7 @@ try {
             Invoke-NativeChecked $venvPython @('tools/ci/sbom_v3.py', '0.1.0')
         }
         Invoke-Step 'validate-spdx-3' {
-            Invoke-NativeChecked $venvPython @('-m', 'spdx3_validate', '--json', 'sbom.spdx3.json', '--spdx-version', '3.0.1', '--quiet')
+            Invoke-NativeChecked $venvPython @('tools/ci/validate_spdx3.py', 'sbom.spdx3.json')
         }
         if (-not $SkipWdk) {
             Invoke-Step 'wdk-x64-arm64-build-and-pe-check' {

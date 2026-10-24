@@ -7,7 +7,8 @@ This repository contains a Windows NDIS/WDF driver and Rust workspace. **Windows
 - Rust 2021 workspace: control plane, tunnel/crypto, IPC, service, relay, client, lab shell CLI, installer.
 - Windows driver: first-party C NDIS/WDF source in `driver/`, built using MSBuild and the WDK.
 - Tooling: Python test/SBOM helpers, POSIX shell policy and lab scripts, PowerShell WDK/native-Windows runner.
-- GitHub Actions (`.github/workflows/ci.yml`): dependency audit; Python/lab tests; Linux and Windows Rust tests; release build and SPDX validation; Windows x64 and ARM64 WDK builds and PE checks.
+- GitHub Actions (`.github/workflows/ci.yml`): dependency audit; Linux and Windows Rust tests; native x64 MSVC quick checks (including portable driver C/OID tests); WSL-compatible Ubuntu 24.04 quick validation; release build and SPDX validation; Windows x64 and ARM64 WDK builds and PE checks.
+- The WSL parity job runs the same Bash quick-validation entrypoint and Ubuntu 24.04 userland used inside WSL2. GitHub-hosted Ubuntu is not itself a WSL VM, so this validates the Linux/WSL userland path rather than WSL-kernel integration.
 - The static Pages deploy workflow is separate and publishes from `main`.
 - No Docker/Compose workflow or ML training scripts are present. The app shell is a lab CLI, not the planned production WinUI GUI.
 
@@ -103,7 +104,7 @@ The full profile performs:
 4. Portable packet/queue/OID C contract tests compiled and run natively with MSVC.
 5. `cargo test --workspace --all-targets --no-fail-fast` using native Windows Rust.
 6. `cargo build --release --workspace`.
-7. SPDX 2.3 and 3.0.1 generation and validation using an isolated Python venv under ignored `target/local-ci-windows/`.
+7. SPDX 2.3 and 3.0.1 generation and validation using an isolated Python venv under ignored `target/local-ci-windows/`. SPDX 3.0.1 checks use `tools/ci/validate_spdx3.py`, which inspects the validator result and fails closed even if the third-party CLI emits schema errors with a zero exit code.
 8. x64 and ARM64 WDK build and PE verification with `tools/ci/local-wdk-build.ps1`.
 
 To skip the local WDK build temporarily (remote CI still runs it):

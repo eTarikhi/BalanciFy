@@ -1,5 +1,12 @@
 # Continuous development log — without stopping to report
 
+## Evidence-driven continuation (2026-10-24)
+
+- The provided local full-profile logs show 306 Rust tests passing and a successful release build on `69b5804eda4fc9c6387732e3a2383dafb37ffac4`. The first run stopped at validator dependency installation due transient PyPI/network resolution; the later run completed all steps according to its summary.
+- A manual review of that later run found `validate-spdx-3.log` contained a JSON Schema error despite the validator process returning success: `software_sbomType` was a string, but SPDX 3.0.1 requires an array. Corrected the generated field to `["source"]` and added a regression assertion.
+- Added `tools/ci/validate_spdx3.py`, which uses the validator's documented library API and fails the CI step whenever its `ValidationResult` contains findings. Wired it into Linux, Windows, and GitHub validation so a nonzero CLI bug cannot hide schema errors.
+- Validation in this sandbox: `bash tools/ci/local-ci.sh --quick` passes at branch head `b0b9a14`; Python CI suite 48/48, lab suite 5/5, portable driver suite 12/12 with strict C plus ASan/UBSan; dependency policy and shell syntax pass. Full Rust/SPDX validation was not rerun here because Cargo is unavailable. WDK installation/runtime, Driver Verifier/HVCI, and Rig B acceptance remain pending.
+
 Date: 2026-10-22
 Status: continuous; active branch `arena/81ef53da-balancify`, PR #18 merged as `a1ec9b0`, PR #19 open at `b91b9ee`; push run `39811703258` and PR run `39811711106` passed all six jobs, including unsigned x64/ARM64 WDK compile/link, PE architecture and DYNAMIC_BASE/FORCE_INTEGRITY/NX_COMPAT checks, and INF source-contract tests. An InfVerif CI trial failed without retrievable diagnostics and was removed; no InfVerif/package validation is claimed. Signed installation and hardware acceptance remain pending.
 
