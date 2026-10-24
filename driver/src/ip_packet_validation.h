@@ -82,7 +82,9 @@ static int BalancifyIsValidIpv6Packet(
             unsigned int fragmentField;
             if (totalLength - offset < 8u) return 0;
             followingHeader = (unsigned int)packet[offset];
+            if (packet[offset + 1u] != 0u) return 0;
             fragmentField = BalancifyReadNetworkU16(packet + offset + 2u);
+            if ((fragmentField & 0x0006u) != 0u) return 0;
             if ((fragmentField & 0xFFF9u) != 0u) {
                 // Non-atomic fragments do not need a transport header here.
                 // The service's bounded parser applies the same rule.

@@ -101,6 +101,11 @@ static void test_ipv6_extension_and_transport_bounds(void) {
         fragment[40] = 6;
         fragment[43] = 1; /* More Fragments: transport header may be split */
         assert(BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
+        fragment[41] = 1; /* Reserved byte must be zero */
+        assert(!BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
+        fragment[41] = 0;
+        fragment[43] = 3; /* Reserved fragment-field bit must be zero */
+        assert(!BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
     }
 }
 

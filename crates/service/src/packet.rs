@@ -134,11 +134,17 @@ fn parse_ipv6(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
             return Err(PacketFlowError::TooManyIpv6ExtensionHeaders);
         }
         if next_header == 44 {
-            let following = *packet.get(offset).ok_or(PacketFlowError::InvalidIpv6Extension)?;
-            let fragment_field = read_u16(packet, offset + 2)
-                .map_err(|_| PacketFlowError::InvalidIpv6Extension)?;
             let end = offset.checked_add(8).ok_or(PacketFlowError::InvalidIpv6Extension)?;
             if end > total_len {
+                return Err(PacketFlowError::InvalidIpv6Extension);
+            }
+            let following = packet[offset];
+            if packet[offset + 1] != 0 {
+                return Err(PacketFlowError::InvalidIpv6Extension);
+            }
+            let fragment_field = read_u16(packet, offset + 2)
+                .map_err(|_| PacketFlowError::InvalidIpv6Extension)?;
+            if fragment_field & 0x0006 != 0 {
                 return Err(PacketFlowError::InvalidIpv6Extension);
             }
             let is_fragmented = fragment_field & 0xfff9 != 0;
@@ -350,6 +356,25 @@ mod tests {
         assert_eq!(first, later);
         assert_eq!(first.proto, 6);
         assert_eq!(first.src.port(), 0);
+    }
+
+    #[test]
+    fn rejects_nonzero_ipv6_fragment_reserved_fields() {
+        let valid_fragment = vec![6, 0, 0, 1, 0, 0, 0, 1, 0xaa, 0xbb];
+
+        let mut reserved_octet = valid_fragment.clone();
+        reserved_octet[1] = 1;
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &reserved_octet)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+
+        let mut reserved_bits = valid_fragment;
+        reserved_bits[3] |= 0x02;
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &reserved_bits)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
     }
 
     #[test]
