@@ -48,19 +48,33 @@ fn select_connection_mode(
     Ok(ConnectionMode::InsecureLab)
 }
 
+fn parse_remote_relay_address(value: &str, label: &str) -> std::io::Result<SocketAddr> {
+    let address = value.parse::<SocketAddr>().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid {label} relay address"),
+        )
+    })?;
+    if address.port() == 0 || address.ip().is_unspecified() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} relay address must use a nonzero port and specified IP"),
+        ));
+    }
+    Ok(address)
+}
+
 fn parse_relay_addresses(
     primary: Option<&str>,
     secondary: Option<&str>,
 ) -> std::io::Result<(SocketAddr, Option<SocketAddr>)> {
     let primary = primary
-        .map(|value| value.parse::<SocketAddr>())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid primary relay address"))?
+        .map(|value| parse_remote_relay_address(value, "primary"))
+        .transpose()?
         .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
     let secondary = secondary
-        .map(|value| value.parse::<SocketAddr>())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid secondary relay address"))?;
+        .map(|value| parse_remote_relay_address(value, "secondary"))
+        .transpose()?;
     Ok((primary, secondary))
 }
 
@@ -718,6 +732,9 @@ mod ipc_capacity_tests {
                 .kind(),
             std::io::ErrorKind::InvalidInput
         );
+        assert!(parse_relay_addresses(Some("127.0.0.1:0"), None).is_err());
+        assert!(parse_relay_addresses(Some("0.0.0.0:4430"), None).is_err());
+        assert!(parse_relay_addresses(None, Some("[::]:4431")).is_err());
     }
 
     #[test]

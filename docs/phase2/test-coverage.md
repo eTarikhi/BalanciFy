@@ -1,7 +1,7 @@
-# Test coverage — current inventory: 330 Rust tests, what is covered
+# Test coverage — current inventory: 331 Rust tests, what is covered
 
 Date: 2026-10-24
-Status: full local profile at `7ae0033` passed 323 Rust tests and all twelve profile stages (logs: `target/local-ci/logs/20261024T201038Z/`). Recent relay and service changes add aggregate-handshake-limiter burst/refill and early-rejection tests, plus IPv4 option and IPv4/IPv6 fragment validation regressions, after that full run; the current source inventory is therefore 330 tests, pending the next consolidated Rust run.
+Status: full local profile at `7ae0033` passed 323 Rust tests and all twelve profile stages (logs: `target/local-ci/logs/20261024T201038Z/`). Recent relay, client, and service changes add aggregate-handshake-limiter, remote-address validation, IPv4 option, and IPv4/IPv6 fragment regressions after that full run; the current source inventory is therefore 331 tests, pending the next consolidated Rust run.
 
 ## Counts
 
@@ -36,13 +36,13 @@ Status: full local profile at `7ae0033` passed 323 Rust tests and all twelve pro
   - ECN: ack_with_ecn FLAG_ECN_CE=0x04
 - e2e: 9 tests (striped_flow_is_reordered_back_across_a_40ms_delay_gap, reinjection_recovers_a_lost_packet_inside_the_hold_cap, unplugging_an_uplink_mid_transfer_keeps_the_stream_alive, flow_level_mode_is_not_held_up_by_the_other_path, duplicate_mode_delivers_each_packet_once, shell_and_service_speak_contract_v1_over_a_stream, secure_handshake_over_real_udp_delivers_encrypted_stream, etc.)
 - fuzz: 6 tests (20k rounds each for datagram and IPC-frame loops, no panic, no invented payload, session and hold caps bound memory, length checks hold, replay cannot manufacture delivery)
-- client: 13 Linux / 12 Windows tests (missing identity fails closed, release builds reject insecure mode, debug lab requires explicit opt-in and loopback, pinned relay resolution, malformed/all-zero key rejection, per-user state-directory override, absolute-path validation, platform fallback selection, unexpected relay-source filtering, duplicate handshake-response rejection)
+- client: 14 Linux / 13 Windows tests (missing identity fails closed, release builds reject insecure mode, debug lab requires explicit opt-in and loopback, pinned relay resolution, malformed/all-zero key rejection, per-user state-directory override, absolute-path validation, platform fallback selection, unexpected relay-source filtering, duplicate handshake-response rejection, relay address parser rejects unspecified addresses and zero ports)
 - app: 8 tests (lab CLI)
 - installer: 12 tests (journaled transactional/dry-run plus required SBOM copy and missing-SBOM rejection)
 - SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-The full-profile run at `7ae0033` passed 323 Rust tests on Linux, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency policy, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. The two aggregate-handshake-limiter regressions and five raw-IP parser regressions added after `7ae0033` bring the source inventory to 329 and should be included in the next consolidated Rust run. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
+The full-profile run at `7ae0033` passed 323 Rust tests on Linux, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency policy, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. The two aggregate-handshake-limiter regressions, five raw-IP parser regressions, and one client remote-address regression added after `7ae0033` bring the source inventory to 331 and should be included in the next consolidated Rust run. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 
