@@ -828,7 +828,6 @@ impl<C: Crypto + Clone> Service<C> {
                     self.relay_failover_count,
                     self.relay_failover_timeout,
                 );
-                self.etw.warn(etw::EVT_RELAY_FAILOVER, &message);
                 eprintln!("{message}");
             }
         }
