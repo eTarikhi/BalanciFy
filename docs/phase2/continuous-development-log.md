@@ -153,3 +153,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay forwarding configuration: an absent `BALANCIFY_FORWARD_ADDR` still selects documented lab echo mode, but a present malformed or non-Unicode setting now fails startup rather than silently disabling upstream forwarding. Added parser regressions for absent, valid, and invalid values.
 
 - Relay listen-port parsing: secure and lab modes now share strict comma-list parsing, rejecting malformed, empty, or duplicate ports instead of dropping invalid entries or starting with no listeners. Added coverage for defaults, valid lists, partial failures, empty fields, duplicate ports, and extra positional arguments.
+
+- Relay state-directory resolution: secure-mode preflight and key-store initialization now share one `PathBuf` resolver. This fixes the Windows default-path mismatch (preflight previously checked `/tmp/balancify` while secure startup used `%ProgramData%\\Balancify`) and rejects an explicitly empty override; added a focused path-resolution regression.

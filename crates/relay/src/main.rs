@@ -105,6 +105,33 @@ const HANDSHAKE_MSG2: u8 = 0x02;
 const PROLOGUE: &[u8] = b"balancify handshake v1";
 const MAX_TRACKED_HANDSHAKE_IPS: usize = 4096;
 
+fn default_state_dir() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("ProgramData")
+            .map(|path| std::path::PathBuf::from(path).join("Balancify"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/balancify"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from("/tmp/balancify")
+    }
+}
+
+fn resolve_state_dir(
+    configured: Option<std::ffi::OsString>,
+    default: std::path::PathBuf,
+) -> std::io::Result<std::path::PathBuf> {
+    match configured {
+        Some(path) if !path.is_empty() => Ok(path.into()),
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "BALANCIFY_STATE_DIR must not be empty",
+        )),
+        None => Ok(default),
+    }
+}
+
 fn load_pinned_clients(
     store: &impl balancify_crypto::KeyStore,
 ) -> std::io::Result<balancify_crypto::PinnedKeys> {
@@ -544,8 +571,8 @@ fn run() -> std::io::Result<()> {
          Lab use: cargo run -p balancify-relay --features lab-crypto -- 4430,4431\n\
          Secure use: cargo run -p balancify-relay -- 4430,4431 (keys in $BALANCIFY_STATE_DIR or /tmp/balancify)"
     );
-    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| "/tmp/balancify".to_string());
-    if std::path::Path::new(&state_dir).exists() {
+    let state_dir = resolve_state_dir(std::env::var_os("BALANCIFY_STATE_DIR"), default_state_dir())?;
+    if state_dir.exists() {
         return run_secure(args);
     }
     std::process::exit(2)
@@ -554,14 +581,9 @@ fn run() -> std::io::Result<()> {
 fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
     let ports = parse_listen_args(&args)?;
-    let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
-        #[cfg(windows)]
-        { std::env::var("ProgramData").map(|pd| format!("{}\\Balancify", pd)).unwrap_or_else(|_| "/tmp/balancify".to_string()) }
-        #[cfg(not(windows))]
-        { "/tmp/balancify".to_string() }
-    });
-    let secret_path = std::path::Path::new(&state_dir).join("relay_secret.key");
-    let pinned_path = std::path::Path::new(&state_dir).join("pinned_clients.keys");
+    let state_dir = resolve_state_dir(std::env::var_os("BALANCIFY_STATE_DIR"), default_state_dir())?;
+    let secret_path = state_dir.join("relay_secret.key");
+    let pinned_path = state_dir.join("pinned_clients.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
     let keypair = match store.load_or_generate() {
         Ok(kp) => kp,
@@ -574,7 +596,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
         eprintln!("Failed to load pinned client identities from {:?}: {}", pinned_path, error);
         error
     })?;
-    eprintln!("balancify-relay (secure mode): listening on UDP {:?}, state_dir={}, pinned_clients={}", ports, state_dir, pinned.len());
+    eprintln!("balancify-relay (secure mode): listening on UDP {:?}, state_dir={}, pinned_clients={}", ports, state_dir.display(), pinned.len());
     eprintln!("  relay public key: {:02x?}...", &keypair.public_bytes()[..8]);
     let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
     for s in &sockets { s.set_read_timeout(Some(Duration::from_millis(100)))?; }
@@ -720,6 +742,17 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
+
+    #[test]
+    fn relay_state_dir_resolution_uses_one_default_and_rejects_empty_override() {
+        let default = std::path::PathBuf::from("/test/default-state");
+        assert_eq!(resolve_state_dir(None, default.clone()).unwrap(), default);
+        assert_eq!(
+            resolve_state_dir(Some(std::ffi::OsString::from("/custom/state")), std::path::PathBuf::new()).unwrap(),
+            std::path::PathBuf::from("/custom/state"),
+        );
+        assert!(resolve_state_dir(Some(std::ffi::OsString::new()), std::path::PathBuf::new()).is_err());
+    }
 
     #[test]
     fn relay_refuses_a_corrupt_pinned_client_store() {
