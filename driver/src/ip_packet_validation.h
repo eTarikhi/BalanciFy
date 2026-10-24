@@ -68,6 +68,7 @@ static int BalancifyIsValidIpv6Packet(
     size_t offset = 40u;
     unsigned int nextHeader = (unsigned int)packet[6];
     unsigned int extensionCount = 0u;
+    int fragmentHeaderSeen = 0;
 
     if (totalLength != packetLength) return 0;
     while (BalancifyIsIpv6Extension(nextHeader)) {
@@ -80,7 +81,8 @@ static int BalancifyIsValidIpv6Packet(
         }
         if (nextHeader == 44u) {
             unsigned int fragmentField;
-            if (totalLength - offset < 8u) return 0;
+            if (fragmentHeaderSeen || totalLength - offset < 8u) return 0;
+            fragmentHeaderSeen = 1;
             followingHeader = (unsigned int)packet[offset];
             if (packet[offset + 1u] != 0u) return 0;
             fragmentField = BalancifyReadNetworkU16(packet + offset + 2u);

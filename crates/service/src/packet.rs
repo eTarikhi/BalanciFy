@@ -125,6 +125,7 @@ fn parse_ipv6(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     let mut next_header = packet[6];
     let mut offset = IPV6_HEADER_LEN;
     let mut extension_count = 0usize;
+    let mut fragment_header_seen = false;
     loop {
         if !is_ipv6_extension(next_header) {
             break;
@@ -134,6 +135,10 @@ fn parse_ipv6(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
             return Err(PacketFlowError::TooManyIpv6ExtensionHeaders);
         }
         if next_header == 44 {
+            if fragment_header_seen {
+                return Err(PacketFlowError::InvalidIpv6Extension);
+            }
+            fragment_header_seen = true;
             let end = offset.checked_add(8).ok_or(PacketFlowError::InvalidIpv6Extension)?;
             if end > total_len {
                 return Err(PacketFlowError::InvalidIpv6Extension);
@@ -373,6 +378,18 @@ mod tests {
         reserved_bits[3] |= 0x02;
         assert_eq!(
             flow_key_from_packet(&ipv6(44, &reserved_bits)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_ipv6_fragment_headers() {
+        let duplicate_fragments = [
+            44, 0, 0, 0, 0, 0, 0, 0,
+            59, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &duplicate_fragments)),
             Err(PacketFlowError::InvalidIpv6Extension),
         );
     }

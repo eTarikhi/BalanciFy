@@ -96,6 +96,14 @@ static void test_ipv6_extension_and_transport_bounds(void) {
     }
 
     {
+        unsigned char duplicate_fragments[56] = { 0x60, 0, 0, 0, 0, 16 };
+        duplicate_fragments[6] = 44;
+        duplicate_fragments[40] = 44;
+        duplicate_fragments[48] = 59;
+        assert(!BalancifyIsValidIpPacket(duplicate_fragments, sizeof(duplicate_fragments), 1500));
+    }
+
+    {
         unsigned char fragment[48] = { 0x60, 0, 0, 0, 0, 8 };
         fragment[6] = 44;
         fragment[40] = 6;
