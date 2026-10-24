@@ -130,8 +130,9 @@ impl Header {
 pub trait Crypto: Send + Sync {
     fn seal(&self, path: u8, seq: u64, aad: &[u8], plain: &[u8], out: &mut Vec<u8>);
     fn open(&self, path: u8, seq: u64, aad: &[u8], cipher: &[u8]) -> Option<Vec<u8>>;
-    /// Optional rekey for forward secrecy (Sec.11.3). Default returns None (not rekeyable).
-    /// Implementations that support rekey should return Some(new_cipher).
+    /// Optional one-way key derivation primitive. This does not coordinate a
+    /// live peer update; callers must not activate the returned cipher until
+    /// both endpoints have authenticated the same key epoch. Default returns None.
     fn rekey(&self) -> Option<Self>
     where
         Self: Sized,

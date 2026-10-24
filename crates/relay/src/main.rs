@@ -199,29 +199,6 @@ impl RelaySession {
             created_at: now,
         }
     }
-    fn rekey(&mut self, now: Instant) -> bool {
-        let rx_cipher = self.rx.crypto().clone();
-        let tx_cipher = self.tx.crypto().clone();
-        let new_rx = match rx_cipher.rekey() {
-            Some(c) => c,
-            None => return false,
-        };
-        let new_tx = match tx_cipher.rekey() {
-            Some(c) => c,
-            None => return false,
-        };
-        let rx_cfg = self.rx.config().clone();
-        let tx_cfg = self.tx.config().clone();
-        let id = self.id;
-        let mut rx = Receiver::new(new_rx, rx_cfg);
-        rx.open_session(id, now);
-        let tx = Sender::with_config(id, new_tx, vec![(0, 2000), (1, 2000)], tx_cfg);
-        self.rx = rx;
-        self.tx = tx;
-        self.last_activity = now;
-        true
-    }
-
     fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let before = self.rx.counters();
         let mut payloads = Vec::new();

@@ -2,7 +2,7 @@
 //! Blueprint Sec.4.2, Sec.11.1 Phase 4 MVP.
 //!
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
-//! (one per uplink), with secure handshake, pacing, congestion control, rekey,
+//! (one per uplink), with secure handshake, pacing, congestion control, key-update diagnostics,
 //! and dual-relay failover. It also serves IPC v1 request/response and
 //! subscribed event frames on a loopback-only TCP adapter for the lab; production uses an ACL-protected
 //! Windows named pipe. In production, packets come from the NDIS miniport.

@@ -122,7 +122,7 @@ fn main() {
             svc.cc.on_loss(0, t);
         }
 
-        // Tick for keepalives, rekey, failover, probes
+        // Tick for keepalives, key-update due status, failover, and probes
         let _ = svc.tick(t);
 
         // Check for leaked routes/filters/handles: pending probes should not accumulate, sessions bounded, retx bounded
