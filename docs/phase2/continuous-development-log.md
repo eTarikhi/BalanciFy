@@ -5,9 +5,9 @@
 - Inspected secure session call paths: the service's count/time trigger replaced only its local ciphers; the relay-side `RelaySession::rekey` had no callers. Deterministic local key derivation is not a wire protocol, and independent count/time triggers can diverge under loss or timer skew.
 - Added ADR-0043. Disabled unilateral live cipher rotation; configured thresholds now set `update_required`, generate ETW/support-bundle warnings, and leave the current epoch intact. Removed the unused relay-local rotation method and clarified that KDF helpers do not coordinate peers.
 - Added `crates/service/tests/rekey_safety.rs`, using actual `TunnelCipher` and peer `Receiver` types to verify the peer continues authenticating traffic after a threshold, while status reports that no update occurred. Coordinated update/ack, epoch transitions, recovery, and security-limit acceptance remain pending.
-- Added `tools/ci/inspect-driver-device.ps1`: elevated, read-only `GET_STATS` against `\\.\BalanciFy`; emits OS/device evidence to ignored `target/local-wdk/runtime-checks/`. It never injects or dequeues. This script has not been run against installed Windows hardware; packet-path, signing, Verifier, and HVCI acceptance remain pending.
+- Added `tools/ci/inspect-driver-device.ps1`: elevated, read-only `GET_STATS` against `\\.\BalanciFy`; emits OS/device evidence to ignored `target/local-wdk/runtime-checks/`. It uses an exact `CreateFileW` P/Invoke entry point and never injects or dequeues. This script has not been run against installed Windows hardware; packet-path, signing, Verifier, and HVCI acceptance remain pending.
 - Local quick profile passed: dependency policy, lab Python 5/5, CI Python 49/49, netem safety, and portable driver tests 12/12 (strict C + ASan/UBSan). Quick mode skips Rust, release, and SPDX checks; the new Rust regression is queued for the user's combined full-profile run.
-- Commits: `1f69589` (read-only driver-device preflight) and `b237ab5` (coordinated key-update safety); branch push follows this log update.
+- Commits pushed to `arena/3f48d354-balancify`: `1f69589` (read-only driver-device preflight), `b237ab5` (coordinated key-update safety), and `d149f5f` (exact Win32 entrypoint contract + repository-root usage).
 
 ## Evidence-driven continuation (2026-10-24)
 
