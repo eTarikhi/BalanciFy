@@ -103,6 +103,7 @@ const HANDSHAKE_VERSION: u8 = 0xFF;
 const HANDSHAKE_MSG1: u8 = 0x01;
 const HANDSHAKE_MSG2: u8 = 0x02;
 const PROLOGUE: &[u8] = b"balancify handshake v1";
+const MAX_TRACKED_HANDSHAKE_IPS: usize = 4096;
 
 struct RateLimiter {
     /// Token bucket: tokens in bytes, refill rate bytes/sec
@@ -296,6 +297,17 @@ impl SecureRelay {
         let ip = peer.ip();
         let window = Duration::from_secs(60);
         let max_per_window = 10; // 10 handshakes per minute per IP
+        if !self.handshake_attempts.contains_key(&ip)
+            && self.handshake_attempts.len() >= MAX_TRACKED_HANDSHAKE_IPS
+        {
+            // Bound state under source-address churn; evict the oldest window entry.
+            if let Some(oldest_ip) = self.handshake_attempts.iter()
+                .min_by_key(|(_, (_, window_start))| *window_start)
+                .map(|(tracked_ip, _)| *tracked_ip)
+            {
+                self.handshake_attempts.remove(&oldest_ip);
+            }
+        }
         let entry = self.handshake_attempts.entry(ip).or_insert((0, now));
         if now.duration_since(entry.1) >= window {
             *entry = (1, now);
@@ -1027,6 +1039,36 @@ mod tests {
         assert_eq!(sessions, 2);
         assert_eq!(handshakes, 2);
         assert!(rejected >= 2);
+    }
+
+    #[test]
+    fn handshake_rate_limit_tracking_is_bounded_under_source_churn() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp, balancify_crypto::PinnedKeys::new());
+        let now = Instant::now();
+        let oldest_ip = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::from(1u32)),
+            1234,
+        );
+        assert!(relay.check_rate_limit_handshake(oldest_ip, now - Duration::from_secs(55)));
+
+        for address in 2..=MAX_TRACKED_HANDSHAKE_IPS as u32 {
+            let peer = std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::from(address)),
+                1234,
+            );
+            assert!(relay.check_rate_limit_handshake(peer, now));
+        }
+        assert_eq!(relay.handshake_attempts.len(), MAX_TRACKED_HANDSHAKE_IPS);
+
+        let new_ip = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::from(MAX_TRACKED_HANDSHAKE_IPS as u32 + 1)),
+            1234,
+        );
+        assert!(relay.check_rate_limit_handshake(new_ip, now));
+        assert_eq!(relay.handshake_attempts.len(), MAX_TRACKED_HANDSHAKE_IPS);
+        assert!(!relay.handshake_attempts.contains_key(&oldest_ip.ip()));
+        assert!(relay.handshake_attempts.contains_key(&new_ip.ip()));
     }
 
     #[test]

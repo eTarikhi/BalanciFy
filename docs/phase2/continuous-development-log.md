@@ -143,3 +143,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay handshake consistency hardening: `SecureRelay::handle_msg1` now requires the authenticated session payload to be exactly 8 bytes, matching the service's response validation. A regression exercises both short and trailing-byte payloads and asserts neither creates a session. Hardware acceptance is not implicated.
 
 - Relay session-id collision hardening: a valid new Noise handshake using an already active session id is rejected instead of overwriting the established relay session and its tunnel keys. The regression verifies the original session remains unchanged and counters reflect rejection.
+
+- Relay source-churn hardening: per-IP handshake-rate state is capped at 4096 entries; when full, a new source replaces the oldest window entry. A focused regression fills the table, adds a new IP, and verifies the bound and deterministic oldest-entry eviction.
