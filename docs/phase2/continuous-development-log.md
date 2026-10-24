@@ -171,3 +171,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay data-plane rejection telemetry: malformed tunnel headers, unknown sessions, per-session rate-limit drops, unauthenticated frames, and replayed frames now contribute to the global reject counter in addition to handshake rejects. The NAT-rebinding regression asserts a spoofed frame is counted.
 
 - Relay upstream-source authentication: each per-session UDP forwarding socket is connected to the configured upstream address and uses connected send/receive operations. This lets the OS reject forged datagrams from unrelated sources before they can be re-encrypted as client traffic; a loopback regression verifies rogue-source filtering and expected-source delivery.
+
+- Relay upstream destination validation: `BALANCIFY_FORWARD_ADDR` now rejects port zero and unspecified IPs during startup parsing, before any client handshake can allocate a session or produce a later socket-connect failure; added invalid-address regressions.

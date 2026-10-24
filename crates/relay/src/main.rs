@@ -206,12 +206,21 @@ fn parse_forward_addr(
     setting: Result<String, std::env::VarError>,
 ) -> std::io::Result<Option<std::net::SocketAddr>> {
     match setting {
-        Ok(value) => value.parse().map(Some).map_err(|error| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid BALANCIFY_FORWARD_ADDR '{value}': {error}"),
-            )
-        }),
+        Ok(value) => {
+            let address = value.parse::<std::net::SocketAddr>().map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid BALANCIFY_FORWARD_ADDR '{value}': {error}"),
+                )
+            })?;
+            if address.port() == 0 || address.ip().is_unspecified() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "BALANCIFY_FORWARD_ADDR must use a nonzero port and a specified IP address",
+                ));
+            }
+            Ok(Some(address))
+        },
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(std::io::Error::other(format!("invalid BALANCIFY_FORWARD_ADDR setting: {error}"))),
     }
@@ -930,6 +939,8 @@ mod tests {
             Some("127.0.0.1:8080".parse().unwrap()),
         );
         assert!(parse_forward_addr(Ok("not-an-address".to_string())).is_err());
+        assert!(parse_forward_addr(Ok("127.0.0.1:0".to_string())).is_err());
+        assert!(parse_forward_addr(Ok("0.0.0.0:8080".to_string())).is_err());
     }
 
     #[test]
