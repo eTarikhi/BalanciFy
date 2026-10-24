@@ -4,13 +4,13 @@
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
 //! (one per uplink), with secure handshake, pacing, congestion control, key-update diagnostics,
 //! and dual-relay failover. It also serves IPC v1 request/response and
-//! subscribed event frames on a loopback-only TCP adapter for the lab; production uses an ACL-protected
-//! Windows named pipe. In production, packets come from the NDIS miniport.
+//! subscribed event frames over loopback TCP on non-Windows lab hosts or an
+//! ACL-protected Windows named pipe. In production, packets come from the NDIS miniport.
 
 use balancify_core::UplinkId;
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
 use balancify_service::driver_device::{should_retry_driver_tx, DriverDevice};
-use balancify_service::ipc::server::IpcServer;
+use balancify_service::ipc::server::{IpcServer, IpcStream};
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
 use std::net::{UdpSocket, SocketAddr};
@@ -438,7 +438,7 @@ fn main() -> std::io::Result<()> {
     svc.publish(now);
 
     let (ipc_calls, ipc_addr) = start_ipc_listener()?;
-    println!("  IPC v1 loopback listener: {}", ipc_addr);
+    println!("  IPC v1 listener: {}", ipc_addr);
 
     // Handshake
     let handshake_started_at = Instant::now();
@@ -713,10 +713,55 @@ fn reserve_ipc_client_slot(active: &AtomicUsize) -> bool {
     }
 }
 
-/// Start the lab TCP adapter on loopback. The actual product transport is an
-/// ACL-protected Windows named pipe; keeping this adapter local-only prevents
-/// accidental exposure of control operations to the LAN.
-fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
+fn spawn_ipc_client<S>(
+    stream: S,
+    requests_tx: Sender<IpcCall>,
+    active_clients: Arc<AtomicUsize>,
+) where
+    S: IpcStream + Send + 'static,
+{
+    if !reserve_ipc_client_slot(&active_clients) {
+        eprintln!("IPC client limit reached ({MAX_IPC_CLIENTS}); rejecting local connection");
+        return;
+    }
+    let slot = ActiveIpcClient(active_clients);
+    let requests = requests_tx.clone();
+    let event_requests = requests_tx;
+    let _ = std::thread::Builder::new()
+        .name("balancify-ipc-client".to_string())
+        .spawn(move || {
+            let _slot = slot;
+            let _ = balancify_service::ipc::server::handle_stream_with_events(
+                stream,
+                move |request| {
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if requests.send(IpcCall::Request(request, reply_tx)).is_err() {
+                        return Response::Error {
+                            status: Status::Unavailable,
+                            message: "service IPC dispatcher stopped".to_string(),
+                        };
+                    }
+                    reply_rx.recv().unwrap_or_else(|_| Response::Error {
+                        status: Status::Unavailable,
+                        message: "service did not return an IPC response".to_string(),
+                    })
+                },
+                move || {
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if event_requests.send(IpcCall::PollEvents(reply_tx)).is_err() {
+                        return Vec::new();
+                    }
+                    reply_rx.recv().unwrap_or_default()
+                },
+            );
+        });
+}
+
+fn start_loopback_tcp_listener(
+    request_tx: Sender<IpcCall>,
+    request_rx: Receiver<IpcCall>,
+    active_clients: Arc<AtomicUsize>,
+) -> std::io::Result<(Receiver<IpcCall>, String)> {
     let port_value = match std::env::var("BALANCIFY_IPC_PORT") {
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => "5000".to_string(),
@@ -735,56 +780,79 @@ fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
     })?;
     let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
     let server = IpcServer::bind_loopback_at(bind_addr)?;
-    let local_addr = server.addr();
-    let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
-    let active_clients = Arc::new(AtomicUsize::new(0));
-
+    let local_addr = server.addr().to_string();
     std::thread::Builder::new()
         .name("balancify-ipc-accept".to_string())
         .spawn(move || loop {
             if let Some(stream) = server.accept() {
-                if !reserve_ipc_client_slot(&active_clients) {
-                    eprintln!("IPC client limit reached ({MAX_IPC_CLIENTS}); rejecting local connection");
-                    drop(stream);
-                    continue;
-                }
-                let slot = ActiveIpcClient(Arc::clone(&active_clients));
-                let requests = request_tx.clone();
-                let event_requests = request_tx.clone();
-                let _ = std::thread::Builder::new()
-                    .name("balancify-ipc-client".to_string())
-                    .spawn(move || {
-                        let _slot = slot;
-                        let _ = balancify_service::ipc::server::handle_stream_with_events(
-                            stream,
-                            move |request| {
-                                let (reply_tx, reply_rx) = mpsc::channel();
-                                if requests.send(IpcCall::Request(request, reply_tx)).is_err() {
-                                    return Response::Error {
-                                        status: Status::Unavailable,
-                                        message: "service IPC dispatcher stopped".to_string(),
-                                    };
-                                }
-                                reply_rx.recv().unwrap_or_else(|_| Response::Error {
-                                    status: Status::Unavailable,
-                                    message: "service did not return an IPC response".to_string(),
-                                })
-                            },
-                            move || {
-                                let (reply_tx, reply_rx) = mpsc::channel();
-                                if event_requests.send(IpcCall::PollEvents(reply_tx)).is_err() {
-                                    return Vec::new();
-                                }
-                                reply_rx.recv().unwrap_or_default()
-                            },
-                        );
-                    });
+                spawn_ipc_client(
+                    stream,
+                    request_tx.clone(),
+                    Arc::clone(&active_clients),
+                );
             } else {
                 std::thread::sleep(Duration::from_millis(10));
             }
         })?;
-
     Ok((request_rx, local_addr))
+}
+
+/// Windows defaults to ACL-protected named-pipe IPC. The explicit debug-only
+/// override keeps the loopback CLI usable during native Windows development;
+/// non-Windows lab hosts retain loopback TCP.
+fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, String)> {
+    let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
+    let active_clients = Arc::new(AtomicUsize::new(0));
+
+    #[cfg(windows)]
+    {
+        match std::env::var("BALANCIFY_IPC_TRANSPORT") {
+            Ok(value) if value == "loopback-tcp" && cfg!(debug_assertions) => {
+                return start_loopback_tcp_listener(request_tx, request_rx, active_clients);
+            }
+            Ok(value) if value == "loopback-tcp" => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "loopback TCP IPC override is available only in debug builds",
+                ));
+            }
+            Ok(value) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unsupported BALANCIFY_IPC_TRANSPORT value: {value}"),
+                ));
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "BALANCIFY_IPC_TRANSPORT must be valid UTF-8",
+                ));
+            }
+        }
+
+        const PIPE_NAME: &str = r"\\.\pipe\BalanciFy.Service.v1";
+        let server = balancify_service::ipc::server::NamedPipeServer::bind(PIPE_NAME)?;
+        std::thread::Builder::new()
+            .name("balancify-ipc-accept".to_string())
+            .spawn(move || loop {
+                match server.accept() {
+                    Ok(stream) => spawn_ipc_client(
+                        stream,
+                        request_tx.clone(),
+                        Arc::clone(&active_clients),
+                    ),
+                    Err(error) => {
+                        eprintln!("IPC named-pipe accept failed: {error}");
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            })?;
+        Ok((request_rx, PIPE_NAME.to_string()))
+    }
+
+    #[cfg(not(windows))]
+    start_loopback_tcp_listener(request_tx, request_rx, active_clients)
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {

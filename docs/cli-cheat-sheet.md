@@ -67,7 +67,8 @@ Use a private absolute state directory and do not share development keys:
 
 ```powershell
 $env:BALANCIFY_STATE_DIR = "$env:LOCALAPPDATA\BalanciFy\dev"
-$env:BALANCIFY_IPC_PORT = '5000'                       # loopback-only local IPC
+$env:BALANCIFY_IPC_PORT = '5000'                       # loopback-only developer IPC
+$env:BALANCIFY_IPC_TRANSPORT = 'loopback-tcp'          # debug builds only; omit for named-pipe default
 $env:BALANCIFY_RELAY_PUBLIC_KEY = '<64 hex characters>' # pinned primary relay public identity
 # Optional with a secondary relay address; defaults to the primary identity for shared-key clusters:
 $env:BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY = '<64 hex characters>'
@@ -101,7 +102,7 @@ cargo run -p balancify-service -- --insecure-lab --simulate-app-traffic 127.0.0.
 cargo run -p balancify-app -- 127.0.0.1:5000 home
 ```
 
-The app is a lab IPC client, not the planned production GUI. The service uses loopback TCP IPC for local testing, not the production ACL-protected named pipe.
+The app is a lab TCP IPC client, not the planned production GUI. Non-Windows service runs use loopback TCP. Windows defaults to the ACL-protected named pipe; set `BALANCIFY_IPC_TRANSPORT=loopback-tcp` only in debug builds when using this TCP CLI workflow. Per-caller identity/session authorization and Windows named-pipe runtime validation remain pending.
 
 ## 2. Build processes
 
