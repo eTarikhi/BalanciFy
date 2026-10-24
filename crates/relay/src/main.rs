@@ -514,18 +514,18 @@ impl SecureRelay {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
-        // Abuse: per-IP session cap
-        if self.sessions_for_ip(peer.ip()) >= self.max_sessions_per_ip {
-            self.total_rejected += 1;
-            return Err(balancify_crypto::HandshakeError::AuthFailed);
-        }
         // Cheap per-IP admission first so one over-quota source cannot drain the global bucket.
         if !self.check_rate_limit_handshake(peer, now) {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
-        // Bound aggregate unauthenticated crypto work even when source IPs are spoofed.
+        // Bound aggregate unauthenticated work before the O(session-cap) IP scan or crypto.
         if !self.global_handshake_limiter.try_consume(now) {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        // Abuse: per-IP session cap; scan only after the aggregate admission gate.
+        if self.sessions_for_ip(peer.ip()) >= self.max_sessions_per_ip {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
