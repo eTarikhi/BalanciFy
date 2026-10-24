@@ -1,8 +1,0 @@
-ERROR: JSON Schema validation failed for sbom.spdx3.json:
-sbom.spdx3.json::$['@graph'][148]: Is not valid
-  This error was caused by other underlying errors:
-    $['@graph'][148].software_sbomType: 'source' is not of type 'array'
-    $['@graph'][148]: Is not valid
-
-sbom.spdx3.json::$['@graph'][148]: Is not valid
-
