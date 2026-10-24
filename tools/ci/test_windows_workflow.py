@@ -5,6 +5,8 @@ ROOT = Path(__file__).resolve().parents[2]
 WINDOWS_RUNNER = (ROOT / "tools/ci/local-ci-windows.ps1").read_text(encoding="utf-8")
 WINDOWS_PR = (ROOT / "tools/ci/pr-workflow.ps1").read_text(encoding="utf-8")
 WINDOWS_C_TESTS = (ROOT / "tools/ci/test-driver-packets.ps1").read_text(encoding="utf-8")
+DRIVER_PREFLIGHT = (ROOT / "tools/ci/inspect-driver-device.ps1").read_text(encoding="utf-8")
+DRIVER_IOCTL_SOURCE = (ROOT / "driver/src/ioctl.c").read_text(encoding="utf-8")
 
 
 class WindowsWorkflowTests(unittest.TestCase):
@@ -54,11 +56,28 @@ class WindowsWorkflowTests(unittest.TestCase):
             WINDOWS_PR.index("'pr', 'merge'"),
         )
 
+    def test_driver_device_preflight_is_read_only_and_emits_runtime_evidence(self):
+        self.assertIn("$ioctlGetStats = 0x00126004", DRIVER_PREFLIGHT)
+        self.assertIn("#define IOCTL_BALANCIFY_GET_STATS CTL_CODE(FILE_DEVICE_NETWORK, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)", DRIVER_IOCTL_SOURCE)
+        self.assertIn(r"$devicePath = '\\.\Balancify'", DRIVER_PREFLIGHT)
+        self.assertIn("[uint32]0x80000000, # GENERIC_READ", DRIVER_PREFLIGHT)
+        self.assertIn("$statsSize = 48", DRIVER_PREFLIGHT)
+        self.assertIn("[Out] byte[] outputBuffer", DRIVER_PREFLIGHT)
+        self.assertIn("GET_STATS (read-only)", DRIVER_PREFLIGHT)
+        self.assertIn("no packet was injected or dequeued", DRIVER_PREFLIGHT)
+        self.assertIn(r"$outputDirectory = Join-Path $repoRoot 'target\local-wdk\runtime-checks'", DRIVER_PREFLIGHT)
+        self.assertNotIn("IOCTL_BALANCIFY_INJECT_NBL", DRIVER_PREFLIGHT)
+        self.assertNotIn("IOCTL_BALANCIFY_DEQUEUE_TX", DRIVER_PREFLIGHT)
+        self.assertNotIn("0x0012a008", DRIVER_PREFLIGHT.lower())
+        self.assertNotIn("0x00126010", DRIVER_PREFLIGHT.lower())
+
     def test_docs_make_native_windows_the_primary_workflow(self):
         guide = (ROOT / "docs/local-development-and-ci.md").read_text(encoding="utf-8")
+        driver_guide = (ROOT / "driver/README.md").read_text(encoding="utf-8")
         self.assertIn("WSL/Linux is not required", guide)
         self.assertIn("local-ci-windows.ps1", guide)
         self.assertIn("pr-workflow.ps1 -Merge", guide)
+        self.assertIn("inspect-driver-device.ps1", driver_guide)
 
 
 if __name__ == "__main__":
