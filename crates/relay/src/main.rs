@@ -188,6 +188,9 @@ fn parse_listen_ports(value: Option<&str>) -> std::io::Result<Vec<u16>> {
         let port = raw_port.parse::<u16>().map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("invalid listen port '{raw_port}': {error}"))
         })?;
+        if port == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "listen ports must be nonzero"));
+        }
         if ports.contains(&port) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("duplicate listen port: {port}")));
         }
@@ -955,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn listen_port_configuration_rejects_partial_or_empty_lists() {
+    fn listen_port_configuration_rejects_invalid_values() {
         assert_eq!(parse_listen_ports(None).unwrap(), vec![4430, 4431]);
         assert_eq!(parse_listen_ports(Some("4430, 4431")).unwrap(), vec![4430, 4431]);
         assert_eq!(parse_listen_args(&["4430,4431".to_string()]).unwrap(), vec![4430, 4431]);
@@ -964,6 +967,7 @@ mod tests {
         assert!(parse_listen_ports(Some("4430,")).is_err());
         assert!(parse_listen_ports(Some("")).is_err());
         assert!(parse_listen_ports(Some("4430,4430")).is_err());
+        assert!(parse_listen_ports(Some("0")).is_err());
     }
 
     #[test]
