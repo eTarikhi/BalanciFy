@@ -120,6 +120,21 @@ fn forward_socket_for_session(
     forward_socks.get(&session_id)
 }
 
+fn parse_forward_addr(
+    setting: Result<String, std::env::VarError>,
+) -> std::io::Result<Option<std::net::SocketAddr>> {
+    match setting {
+        Ok(value) => value.parse().map(Some).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid BALANCIFY_FORWARD_ADDR '{value}': {error}"),
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(std::io::Error::other(format!("invalid BALANCIFY_FORWARD_ADDR setting: {error}"))),
+    }
+}
+
 struct RateLimiter {
     /// Token bucket: tokens in bytes, refill rate bytes/sec
     tokens: u64,
@@ -542,9 +557,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     // If BALANCIFY_FORWARD_ADDR is set (e.g. 127.0.0.1:8080), decrypted payloads are forwarded via UDP
     // to that address, and replies are re-encrypted back to the client session.
     // If not set, we echo payloads (lab mode).
-    let forward_addr: Option<std::net::SocketAddr> = std::env::var("BALANCIFY_FORWARD_ADDR")
-        .ok()
-        .and_then(|s| s.parse().ok());
+    let forward_addr = parse_forward_addr(std::env::var("BALANCIFY_FORWARD_ADDR"))?;
     if let Some(fa) = forward_addr {
         eprintln!("Forwarding enabled: decrypted payloads -> {} (stable egress)", fa);
     } else {
@@ -697,6 +710,16 @@ mod tests {
         assert!(load_pinned_clients(&store).is_err(), "corrupt pin state must not become an empty allow-all set");
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn forward_address_configuration_fails_closed_on_invalid_values() {
+        assert_eq!(parse_forward_addr(Err(std::env::VarError::NotPresent)).unwrap(), None);
+        assert_eq!(
+            parse_forward_addr(Ok("127.0.0.1:8080".to_string())).unwrap(),
+            Some("127.0.0.1:8080".parse().unwrap()),
+        );
+        assert!(parse_forward_addr(Ok("not-an-address".to_string())).is_err());
     }
 
     #[test]
