@@ -103,6 +103,37 @@ const HANDSHAKE_VERSION: u8 = 0xFF;
 const HANDSHAKE_MSG1: u8 = 0x01;
 const HANDSHAKE_MSG2: u8 = 0x02;
 const PROLOGUE: &[u8] = b"balancify handshake v1";
+const MAX_TRACKED_HANDSHAKE_IPS: usize = 4096;
+
+fn load_pinned_clients(
+    store: &impl balancify_crypto::KeyStore,
+) -> std::io::Result<balancify_crypto::PinnedKeys> {
+    store.load_pinned().map_err(|error| {
+        std::io::Error::other(format!("failed to load pinned client identities: {error}"))
+    })
+}
+
+fn forward_socket_for_session(
+    forward_socks: &BTreeMap<u64, UdpSocket>,
+    session_id: u64,
+) -> Option<&UdpSocket> {
+    forward_socks.get(&session_id)
+}
+
+fn parse_forward_addr(
+    setting: Result<String, std::env::VarError>,
+) -> std::io::Result<Option<std::net::SocketAddr>> {
+    match setting {
+        Ok(value) => value.parse().map(Some).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid BALANCIFY_FORWARD_ADDR '{value}': {error}"),
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(std::io::Error::other(format!("invalid BALANCIFY_FORWARD_ADDR setting: {error}"))),
+    }
+}
 
 struct RateLimiter {
     /// Token bucket: tokens in bytes, refill rate bytes/sec
@@ -199,29 +230,6 @@ impl RelaySession {
             created_at: now,
         }
     }
-    fn rekey(&mut self, now: Instant) -> bool {
-        let rx_cipher = self.rx.crypto().clone();
-        let tx_cipher = self.tx.crypto().clone();
-        let new_rx = match rx_cipher.rekey() {
-            Some(c) => c,
-            None => return false,
-        };
-        let new_tx = match tx_cipher.rekey() {
-            Some(c) => c,
-            None => return false,
-        };
-        let rx_cfg = self.rx.config().clone();
-        let tx_cfg = self.tx.config().clone();
-        let id = self.id;
-        let mut rx = Receiver::new(new_rx, rx_cfg);
-        rx.open_session(id, now);
-        let tx = Sender::with_config(id, new_tx, vec![(0, 2000), (1, 2000)], tx_cfg);
-        self.rx = rx;
-        self.tx = tx;
-        self.last_activity = now;
-        true
-    }
-
     fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let before = self.rx.counters();
         let mut payloads = Vec::new();
@@ -319,6 +327,17 @@ impl SecureRelay {
         let ip = peer.ip();
         let window = Duration::from_secs(60);
         let max_per_window = 10; // 10 handshakes per minute per IP
+        if !self.handshake_attempts.contains_key(&ip)
+            && self.handshake_attempts.len() >= MAX_TRACKED_HANDSHAKE_IPS
+        {
+            // Bound state under source-address churn; evict the oldest window entry.
+            if let Some(oldest_ip) = self.handshake_attempts.iter()
+                .min_by_key(|(_, (_, window_start))| *window_start)
+                .map(|(tracked_ip, _)| *tracked_ip)
+            {
+                self.handshake_attempts.remove(&oldest_ip);
+            }
+        }
         let entry = self.handshake_attempts.entry(ip).or_insert((0, now));
         if now.duration_since(entry.1) >= window {
             *entry = (1, now);
@@ -361,10 +380,16 @@ impl SecureRelay {
             Some(&mut self.replay_cache),
             Some(now),
         )?;
-        if payload.len() < 8 { return Err(balancify_crypto::HandshakeError::Truncated); }
+        if payload.len() != std::mem::size_of::<u64>() {
+            return Err(balancify_crypto::HandshakeError::Truncated);
+        }
         let session_id = u64::from_be_bytes(payload[..8].try_into().unwrap());
         let peer_static = responder.peer_static().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
         if !self.is_peer_allowed(&peer_static) {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        if self.sessions.contains_key(&session_id) {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
@@ -517,7 +542,10 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)));
         }
     };
-    let pinned = store.load_pinned().unwrap_or_else(|_| PinnedKeys::new());
+    let pinned = load_pinned_clients(&store).map_err(|error| {
+        eprintln!("Failed to load pinned client identities from {:?}: {}", pinned_path, error);
+        error
+    })?;
     eprintln!("balancify-relay (secure mode): listening on UDP {:?}, state_dir={}, pinned_clients={}", ports, state_dir, pinned.len());
     eprintln!("  relay public key: {:02x?}...", &keypair.public_bytes()[..8]);
     let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
@@ -529,9 +557,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     // If BALANCIFY_FORWARD_ADDR is set (e.g. 127.0.0.1:8080), decrypted payloads are forwarded via UDP
     // to that address, and replies are re-encrypted back to the client session.
     // If not set, we echo payloads (lab mode).
-    let forward_addr: Option<std::net::SocketAddr> = std::env::var("BALANCIFY_FORWARD_ADDR")
-        .ok()
-        .and_then(|s| s.parse().ok());
+    let forward_addr = parse_forward_addr(std::env::var("BALANCIFY_FORWARD_ADDR"))?;
     if let Some(fa) = forward_addr {
         eprintln!("Forwarding enabled: decrypted payloads -> {} (stable egress)", fa);
     } else {
@@ -582,12 +608,10 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                             for payload in payloads {
                                 if let Some(fa) = forward_addr {
                                     if let Some(sid) = session_id_opt {
-                                        if let Some(fs) = forward_socks.get(&sid) {
+                                        // Never borrow another session's egress socket: its replies
+                                        // are routed back through a different tunnel key.
+                                        if let Some(fs) = forward_socket_for_session(&forward_socks, sid) {
                                             let _ = fs.send_to(&payload, fa);
-                                        } else if let Some((found_sid, _)) = peers.iter().find(|(_, p)| **p == peer) {
-                                            if let Some(fs) = forward_socks.get(found_sid) {
-                                                let _ = fs.send_to(&payload, fa);
-                                            }
                                         }
                                     }
                                 } else {
@@ -668,6 +692,48 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
+
+    #[test]
+    fn relay_refuses_a_corrupt_pinned_client_store() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("balancify-relay-pins-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        let store = balancify_crypto::FileKeyStore::new(&secret_path, &pinned_path);
+
+        assert!(load_pinned_clients(&store).unwrap().is_empty(), "a missing pin file remains an empty pin set");
+        std::fs::write(&pinned_path, [0xff]).unwrap();
+        assert!(load_pinned_clients(&store).is_err(), "corrupt pin state must not become an empty allow-all set");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn forward_address_configuration_fails_closed_on_invalid_values() {
+        assert_eq!(parse_forward_addr(Err(std::env::VarError::NotPresent)).unwrap(), None);
+        assert_eq!(
+            parse_forward_addr(Ok("127.0.0.1:8080".to_string())).unwrap(),
+            Some("127.0.0.1:8080".parse().unwrap()),
+        );
+        assert!(parse_forward_addr(Ok("not-an-address".to_string())).is_err());
+    }
+
+    #[test]
+    fn forwarding_socket_lookup_does_not_cross_sessions() {
+        let socket_a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let socket_b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr_a = socket_a.local_addr().unwrap();
+        let addr_b = socket_b.local_addr().unwrap();
+        let forward_socks = BTreeMap::from([(10, socket_a), (20, socket_b)]);
+
+        assert_eq!(forward_socket_for_session(&forward_socks, 10).unwrap().local_addr().unwrap(), addr_a);
+        assert_eq!(forward_socket_for_session(&forward_socks, 20).unwrap().local_addr().unwrap(), addr_b);
+        assert!(forward_socket_for_session(&forward_socks, 30).is_none());
+    }
 
     #[test]
     fn two_paths_with_delay_gap_reassemble_in_order() {
@@ -831,6 +897,74 @@ mod tests {
     }
 
     #[test]
+    fn secure_relay_rejects_duplicate_session_id_without_replacing_session() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        let session_id = 42u64;
+        let now = Instant::now();
+
+        let mut first = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let first_msg = first.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &session_id.to_be_bytes(),
+        );
+        relay.handle_msg1(&first_msg, peer, now).expect("first handshake succeeds");
+
+        let mut second = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let second_msg = second.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &session_id.to_be_bytes(),
+        );
+        assert!(
+            relay.handle_msg1(&second_msg, peer, now + Duration::from_secs(1)).is_err(),
+            "a fresh handshake must not reuse an active session id"
+        );
+
+        assert_eq!(relay.sessions.len(), 1);
+        assert_eq!(relay.sessions[&session_id].created_at, now, "the original session must remain intact");
+        assert_eq!(relay.total_handshakes, 1);
+        assert_eq!(relay.total_rejected, 1);
+    }
+
+    #[test]
+    fn secure_relay_rejects_noncanonical_session_payload_length() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        let now = Instant::now();
+        let mut trailing = 42u64.to_be_bytes().to_vec();
+        trailing.push(0);
+
+        for (offset, payload) in [vec![0x2a], trailing].into_iter().enumerate() {
+            let mut initiator = balancify_crypto::Initiator::new(
+                client_kp.secret_bytes(),
+                relay_kp.public_bytes(),
+                PROLOGUE,
+            );
+            let eph = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
+            let msg1 = initiator.write_message(eph, &payload);
+            assert!(
+                relay.handle_msg1(&msg1, peer, now + Duration::from_secs(offset as u64)).is_err(),
+                "noncanonical session payload length {} must be rejected",
+                payload.len()
+            );
+        }
+        assert!(relay.sessions.is_empty(), "malformed payloads must not create sessions");
+        assert_eq!(relay.total_handshakes, 0);
+    }
+
+    #[test]
     fn secure_relay_rejects_unpinned_client() {
         let relay_kp = balancify_crypto::StaticKeypair::generate();
         let client_kp = balancify_crypto::StaticKeypair::generate();
@@ -976,6 +1110,36 @@ mod tests {
         assert_eq!(sessions, 2);
         assert_eq!(handshakes, 2);
         assert!(rejected >= 2);
+    }
+
+    #[test]
+    fn handshake_rate_limit_tracking_is_bounded_under_source_churn() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp, balancify_crypto::PinnedKeys::new());
+        let now = Instant::now();
+        let oldest_ip = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::from(1u32)),
+            1234,
+        );
+        assert!(relay.check_rate_limit_handshake(oldest_ip, now - Duration::from_secs(55)));
+
+        for address in 2..=MAX_TRACKED_HANDSHAKE_IPS as u32 {
+            let peer = std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::from(address)),
+                1234,
+            );
+            assert!(relay.check_rate_limit_handshake(peer, now));
+        }
+        assert_eq!(relay.handshake_attempts.len(), MAX_TRACKED_HANDSHAKE_IPS);
+
+        let new_ip = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::from(MAX_TRACKED_HANDSHAKE_IPS as u32 + 1)),
+            1234,
+        );
+        assert!(relay.check_rate_limit_handshake(new_ip, now));
+        assert_eq!(relay.handshake_attempts.len(), MAX_TRACKED_HANDSHAKE_IPS);
+        assert!(!relay.handshake_attempts.contains_key(&oldest_ip.ip()));
+        assert!(relay.handshake_attempts.contains_key(&new_ip.ip()));
     }
 
     #[test]
