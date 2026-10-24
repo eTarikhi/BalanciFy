@@ -823,12 +823,13 @@ impl<C: Crypto + Clone> Service<C> {
         // the alternate endpoint. The socket adapter detects the switch and
         // initiates a fresh secure handshake for that relay.
         if self.relay_primary.is_some() {
-            if let Some(new_relay) = self.check_relay_failover(now) {
-                self.etw.warn(
-                    etw::EVT_RELAY_FAILOVER,
-                    &format!("relay failover: {} -> {} count={}", self.relay_primary.unwrap(), new_relay, self.relay_failover_count),
+            if self.check_relay_failover(now).is_some() {
+                let message = relay_failover_event_message(
+                    self.relay_failover_count,
+                    self.relay_failover_timeout,
                 );
-                eprintln!("relay failover: {} -> {}", self.relay_primary.unwrap(), new_relay);
+                self.etw.warn(etw::EVT_RELAY_FAILOVER, &message);
+                eprintln!("{message}");
             }
         }
 
@@ -2382,6 +2383,7 @@ mod tests {
         let message = relay_failover_event_message(1, Duration::from_secs(5));
         assert_eq!(message, "relay failover count=1 timeout=5s");
         assert!(!message.contains("10.0.0.1"));
+        assert!(!message.contains("10.0.0.2"));
     }
 
     #[test]
