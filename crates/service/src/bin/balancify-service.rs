@@ -75,6 +75,12 @@ fn parse_relay_addresses(
     let secondary = secondary
         .map(|value| parse_remote_relay_address(value, "secondary"))
         .transpose()?;
+    if secondary == Some(primary) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "primary and secondary relay addresses must differ",
+        ));
+    }
     Ok((primary, secondary))
 }
 
@@ -735,6 +741,7 @@ mod ipc_capacity_tests {
         assert!(parse_relay_addresses(Some("127.0.0.1:0"), None).is_err());
         assert!(parse_relay_addresses(Some("0.0.0.0:4430"), None).is_err());
         assert!(parse_relay_addresses(None, Some("[::]:4431")).is_err());
+        assert!(parse_relay_addresses(Some("127.0.0.1:4430"), Some("127.0.0.1:4430")).is_err());
     }
 
     #[test]

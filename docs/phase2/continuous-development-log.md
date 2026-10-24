@@ -181,3 +181,4 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay secure startup validates listen ports and the optional upstream endpoint before loading or generating key material, so a malformed forwarding configuration cannot create persistent key state as a side effect.
 - Service startup now parses the configured relay public key before opening the key store or generating a persistent client identity, avoiding identity-file side effects on malformed key configuration.
 - Relay, service, and client now validate configured endpoints/keys and read pin stores before generating persistent keypairs, so invalid settings or corrupt pin files fail without leaving newly generated identity files behind.
+- Service relay configuration now rejects identical primary and secondary endpoints, preventing a declared failover pair from silently targeting the same relay; the existing malformed-address regression covers this case.
