@@ -107,6 +107,14 @@ const MAX_TRACKED_HANDSHAKE_IPS: usize = 4096;
 const GLOBAL_HANDSHAKE_BURST: f64 = 200.0;
 const GLOBAL_HANDSHAKE_RATE_PER_SECOND: f64 = 100.0;
 
+fn datagram_requires_rejection(datagram: &[u8]) -> bool {
+    if datagram.len() >= 2 && datagram[0] == HANDSHAKE_VERSION {
+        datagram[1] != HANDSHAKE_MSG1
+    } else {
+        datagram.len() < 20 || datagram[0] != balancify_tunnel::WIRE_VERSION
+    }
+}
+
 fn default_state_dir() -> std::path::PathBuf {
     #[cfg(windows)]
     {
@@ -801,8 +809,13 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                     }
                                 }
                             }
-                        } else if failure_log_due(&mut last_handshake_failure_log, now, Duration::from_secs(1)) {
-                            eprintln!("Unknown handshake kind {} from {} (further errors are rate-limited)", dg[1], peer);
+                        } else {
+                            if datagram_requires_rejection(&dg[..n]) {
+                                relay.total_rejected += 1;
+                            }
+                            if failure_log_due(&mut last_handshake_failure_log, now, Duration::from_secs(1)) {
+                                eprintln!("Unknown handshake kind {} from {} (further errors are rate-limited)", dg[1], peer);
+                            }
                         }
                     } else if n >= 20 && dg[0] == balancify_tunnel::WIRE_VERSION {
                         // Decode session id for forwarding mapping
@@ -827,6 +840,11 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                     let _ = s.send_to(&payload, peer);
                                 }
                             }
+                        }
+                    } else if datagram_requires_rejection(&dg[..n]) {
+                        relay.total_rejected += 1;
+                        if failure_log_due(&mut last_handshake_failure_log, now, Duration::from_secs(1)) {
+                            eprintln!("Unsupported datagram ({} bytes) from {} (further errors are rate-limited)", n, peer);
                         }
                     }
                 }
@@ -911,6 +929,21 @@ mod tests {
         assert!(failure_log_due(&mut last_log, start, interval));
         assert!(!failure_log_due(&mut last_log, start + Duration::from_millis(500), interval));
         assert!(failure_log_due(&mut last_log, start + interval, interval));
+    }
+
+    #[test]
+    fn unsupported_datagram_shapes_are_marked_for_rejection_accounting() {
+        assert!(datagram_requires_rejection(&[]));
+        assert!(datagram_requires_rejection(&[HANDSHAKE_VERSION]));
+        assert!(!datagram_requires_rejection(&[HANDSHAKE_VERSION, HANDSHAKE_MSG1]));
+        assert!(datagram_requires_rejection(&[HANDSHAKE_VERSION, HANDSHAKE_MSG2]));
+        assert!(datagram_requires_rejection(&[balancify_tunnel::WIRE_VERSION]));
+
+        let mut tunnel_frame = vec![0u8; 20];
+        tunnel_frame[0] = balancify_tunnel::WIRE_VERSION;
+        assert!(!datagram_requires_rejection(&tunnel_frame));
+        tunnel_frame[0] = 0;
+        assert!(datagram_requires_rejection(&tunnel_frame));
     }
 
     #[test]
