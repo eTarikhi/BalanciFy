@@ -297,7 +297,7 @@ impl RelaySession {
             created_at: now,
         }
     }
-    fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    fn ingest(&mut self, dg: &[u8], now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, bool) {
         let before = self.rx.counters();
         let mut payloads = Vec::new();
         let mut replies = Vec::new();
@@ -321,10 +321,13 @@ impl RelaySession {
             }
         }
         let after = self.rx.counters();
-        if after.frames > before.frames && after.dropped == before.dropped && after.duplicates == before.duplicates {
+        let authenticated = after.frames > before.frames
+            && after.dropped == before.dropped
+            && after.duplicates == before.duplicates;
+        if authenticated {
             self.last_activity = now;
         }
-        (payloads, replies)
+        (payloads, replies, authenticated)
     }
     fn drain(&mut self, now: Instant) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let mut payloads = Vec::new();
@@ -470,16 +473,25 @@ impl SecureRelay {
         self.total_handshakes += 1;
         Ok((msg2, session_id))
     }
-    fn ingest_tunnel(&mut self, dg: &[u8], now: Instant) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
+    fn ingest_tunnel(
+        &mut self,
+        dg: &[u8],
+        peer: std::net::SocketAddr,
+        now: Instant,
+    ) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>, bool)> {
         let (hdr, _) = balancify_tunnel::Header::decode(dg)?;
         let session_id = hdr.session;
         // Rate limiting per session
         let session = self.sessions.get_mut(&session_id)?;
         if !session.rate_limiter.try_consume(dg.len(), now) {
             // Drop frame if over limit -- counts as abuse, but don't kill session
-            return Some((Vec::new(), Vec::new()));
+            return Some((Vec::new(), Vec::new(), false));
         }
-        let (payloads, replies) = session.ingest(dg, now);
+        let (payloads, replies, authenticated) = session.ingest(dg, now);
+        if authenticated {
+            // Only an authenticated, non-replayed frame may move the peer mapping.
+            session.peer_addr = peer;
+        }
         // Account forwarded bytes
         for p in &payloads {
             session.bytes_forwarded += p.len() as u64;
@@ -487,7 +499,7 @@ impl SecureRelay {
             self.total_bytes_forwarded += p.len() as u64;
             self.total_packets_forwarded += 1;
         }
-        Some((payloads, replies))
+        Some((payloads, replies, authenticated))
     }
     fn drain_all(&mut self, now: Instant) -> Vec<(u64, Vec<Vec<u8>>, Vec<Vec<u8>>)> {
         let mut out = Vec::new();
@@ -662,7 +674,12 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                     } else if n >= 20 && dg[0] == balancify_tunnel::WIRE_VERSION {
                         // Decode session id for forwarding mapping
                         let session_id_opt = balancify_tunnel::Header::decode(&dg[..n]).map(|(h, _)| h.session);
-                        if let Some((payloads, replies)) = relay.ingest_tunnel(&dg[..n], now) {
+                        if let Some((payloads, replies, authenticated)) = relay.ingest_tunnel(&dg[..n], peer, now) {
+                            if authenticated {
+                                if let Some(session_id) = session_id_opt {
+                                    peers.insert(session_id, peer);
+                                }
+                            }
                             for frame in replies { let _ = s.send_to(&frame, peer); }
                             for payload in payloads {
                                 if let Some(fa) = forward_addr {
@@ -1108,6 +1125,52 @@ mod tests {
     }
 
     #[test]
+    fn relay_peer_rebinding_requires_a_fresh_authenticated_frame() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let session_id = 778u64;
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let msg1 = initiator.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &session_id.to_be_bytes(),
+        );
+        let now = Instant::now();
+        let original_peer = "127.0.0.1:1234".parse().unwrap();
+        let spoofed_peer = "127.0.0.2:2345".parse().unwrap();
+        let rebound_peer = "127.0.0.3:3456".parse().unwrap();
+        let (msg2, _) = relay.handle_msg1(&msg1, original_peer, now).unwrap();
+        let (_, client_keys) = initiator.read_message(&msg2).unwrap();
+        let mut client_tx = Sender::new(session_id, client_keys.send_cipher().unwrap(), vec![(0, 2000)]);
+
+        let first = client_tx.send(b"before-rebind", now).unwrap();
+        let (_, _, authenticated) = relay.ingest_tunnel(&first.bytes, original_peer, now).unwrap();
+        assert!(authenticated);
+        assert_eq!(relay.sessions[&session_id].peer_addr, original_peer);
+
+        let mut forged = Vec::new();
+        Header::new(FrameKind::Keepalive, 0, session_id, 900).encode(&mut forged);
+        forged.extend_from_slice(&[0; 16]);
+        let (_, _, authenticated) = relay
+            .ingest_tunnel(&forged, spoofed_peer, now + Duration::from_secs(1))
+            .unwrap();
+        assert!(!authenticated);
+        assert_eq!(relay.sessions[&session_id].peer_addr, original_peer, "unauthenticated traffic cannot hijack the peer route");
+
+        let second_time = now + Duration::from_secs(2);
+        let second = client_tx.send(b"after-rebind", second_time).unwrap();
+        let (_, _, authenticated) = relay
+            .ingest_tunnel(&second.bytes, rebound_peer, second_time)
+            .unwrap();
+        assert!(authenticated);
+        assert_eq!(relay.sessions[&session_id].peer_addr, rebound_peer);
+    }
+
+    #[test]
     fn secure_tunnel_after_handshake() {
         let relay_kp = balancify_crypto::StaticKeypair::generate();
         let client_kp = balancify_crypto::StaticKeypair::generate();
@@ -1132,7 +1195,10 @@ mod tests {
         let frame = client_tx.send(b"hello secure world", now).unwrap();
 
         // Relay ingests
-        let (payloads, replies) = relay.ingest_tunnel(&frame.bytes, now).expect("session exists");
+        let (payloads, replies, authenticated) = relay
+            .ingest_tunnel(&frame.bytes, peer, now)
+            .expect("session exists");
+        assert!(authenticated);
         assert_eq!(payloads.len(), 1);
         assert_eq!(payloads[0], b"hello secure world");
         assert!(!replies.is_empty(), "must ACK");

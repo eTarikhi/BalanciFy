@@ -157,3 +157,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay state-directory resolution: secure-mode preflight and key-store initialization now share one `PathBuf` resolver. This fixes the Windows default-path mismatch (preflight previously checked `/tmp/balancify` while secure startup used `%ProgramData%\\Balancify`) and rejects an explicitly empty override; added a focused path-resolution regression.
 
 - Relay maintenance scheduling: replaced `now.elapsed() % 10` (which measured age from a freshly captured instant, causing per-datagram sweeps/logging) with a monotonic 10-second deadline. Maintenance now runs after both packet handling and socket timeouts, allowing idle sessions and their forwarding sockets to be reclaimed without requiring fresh traffic; added deterministic scheduler regression.
+
+- Secure relay NAT rebinding: peer routing now follows a session only after a fresh authenticated, non-replayed tunnel frame; invalid/spoofed datagrams cannot redirect deferred ACKs or upstream replies. Added an end-to-end relay regression that verifies spoof rejection and valid rebinding.
