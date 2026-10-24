@@ -2237,6 +2237,8 @@ mod tests {
         let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
         let cfg = ServiceConfig { session: 12345, seed: 0xBEEF, auto_accept: false, ..ServiceConfig::default() };
         let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        svc.set_relays("192.0.2.10:4430".parse().unwrap(), None);
+        svc.note_relay_attempt(now - Duration::from_secs(1));
         svc.set_static_keypair(client_kp.clone());
         let mut pinned_relays = PinnedKeys::new();
         pinned_relays.pin(relay_kp.public_bytes());
@@ -2267,6 +2269,7 @@ mod tests {
 
         // Now service should have transport keys applied and session open
         assert_eq!(svc.sessions(), 1, "session opened after handshake");
+        assert_eq!(svc.relay_timeout_since, Some(now), "authenticated handshake response refreshes relay liveness");
 
         // Verify that service can now send and relay can receive (using relay's keys)
         // We already have relay's transport keys from responder, but we need to reconstruct
