@@ -288,8 +288,6 @@ impl RateLimiter {
 }
 
 struct RelaySession {
-    id: u64,
-    peer_static: [u8; 32],
     peer_addr: std::net::SocketAddr,
     rx: Receiver<balancify_crypto::TunnelCipher>,
     tx: Sender<balancify_crypto::TunnelCipher>,
@@ -304,7 +302,6 @@ struct RelaySession {
 impl RelaySession {
     fn new(
         id: u64,
-        peer_static: [u8; 32],
         peer_addr: std::net::SocketAddr,
         recv_cipher: balancify_crypto::TunnelCipher,
         send_cipher: balancify_crypto::TunnelCipher,
@@ -323,8 +320,6 @@ impl RelaySession {
         // Default limits: 100 Mbit/s, 10k pps per session (Sec.4.4 B4 rate-limited)
         let rate_limiter = RateLimiter::new(12_500_000, 10_000, now);
         Self {
-            id,
-            peer_static,
             peer_addr,
             rx,
             tx,
@@ -601,7 +596,7 @@ impl SecureRelay {
                 return Err(balancify_crypto::HandshakeError::AuthFailed);
             }
         };
-        let session = RelaySession::new(session_id, peer_static, peer, recv_cipher, send_cipher, now);
+        let session = RelaySession::new(session_id, peer, recv_cipher, send_cipher, now);
         self.sessions.insert(session_id, session);
         self.total_handshakes += 1;
         Ok((msg2, session_id))
@@ -740,7 +735,7 @@ fn run() -> std::io::Result<()> {
 }
 
 fn run_secure(args: Vec<String>) -> std::io::Result<()> {
-    use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
+    use balancify_crypto::{FileKeyStore, KeyStore};
     let ports = parse_listen_args(&args)?;
     let forward_addr = parse_forward_addr(std::env::var("BALANCIFY_FORWARD_ADDR"))?;
     let state_dir = resolve_state_dir(std::env::var_os("BALANCIFY_STATE_DIR"), default_state_dir())?;
@@ -1149,7 +1144,7 @@ mod tests {
         let recv = balancify_crypto::TunnelCipher::new(&key, salt).unwrap();
         let send = balancify_crypto::TunnelCipher::new(&key, salt).unwrap();
         let addr = "127.0.0.1:9000".parse().unwrap();
-        let mut session = RelaySession::new(12, [0u8; 32], addr, recv, send, now);
+        let mut session = RelaySession::new(12, addr, recv, send, now);
         let mut client = Sender::new(
             12,
             balancify_crypto::TunnelCipher::new(&key, salt).unwrap(),

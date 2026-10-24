@@ -2420,7 +2420,12 @@ mod tests {
 
     #[test]
     fn relay_failover_timeout_starts_with_handshake_attempt_without_ack() {
-        let mut svc = new_service();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let cfg = ServiceConfig { session: 1, ..ServiceConfig::default() };
+        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
         let primary = "192.0.2.1:4430".parse().unwrap();
         let secondary = "192.0.2.2:4430".parse().unwrap();
         let now = Instant::now();
