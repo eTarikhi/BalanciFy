@@ -326,17 +326,19 @@ mod tests {
         let now = Instant::now();
         let mut svc = Service::new(ServiceConfig::default(), PassThrough, PassThrough);
         svc.add_uplink(UplinkId(0), 100_000_000, false, 1500, now);
-        for _ in 0..3 {
+        for _ in 0..5 {
             svc.on_probe_ok(UplinkId(0), Duration::from_millis(10), now);
         }
-        svc.publish(now);
+        assert!(svc.publish(now));
         svc.set_rekey_interval(Duration::from_secs(3600), 1);
         let flow = FlowKey::new(
             6,
             "10.0.0.1:5000".parse().unwrap(),
             "203.0.113.10:443".parse().unwrap(),
         );
-        svc.send_app_packet(&flow, None, b"threshold", now);
+        let actions = svc.send_app_packet(&flow, None, b"threshold", now);
+        assert!(actions.iter().any(|action| matches!(action, crate::Action::Send { .. })));
+        assert_eq!(svc.packets_since_rekey(), 1);
         let _ = svc.tick(now + Duration::from_secs(1));
 
         let bundle = SupportBundle::collect(&svc, now + Duration::from_secs(1));
