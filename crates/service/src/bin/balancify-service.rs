@@ -304,11 +304,11 @@ fn main() -> std::io::Result<()> {
     let pinned_path = state_dir.join("pinned_relays.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
     let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
-    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
     validate_lab_target(mode, relay_primary, relay_secondary)?;
     validate_simulated_traffic(mode, simulate_app_traffic_requested)?;
+    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
     let driver_device = if driver_device_requested {
         Some(DriverDevice::open()?)
     } else {

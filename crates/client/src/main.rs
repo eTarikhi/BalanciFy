@@ -211,27 +211,25 @@ fn main() -> std::io::Result<()> {
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet count must be a non-negative integer"))?
         .unwrap_or(10);
 
-    // Load or generate client static keypair
-    let state_dir = default_state_dir()?;
-    let secret_path = state_dir.join("client_secret.key");
-    let pinned_path = state_dir.join("pinned_relays.keys");
-    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let keypair = store.load_or_generate().map_err(|e| {
-        std::io::Error::other(format!("failed to load or persist client identity: {e}"))
-    })?;
-    let pinned_relays = store.load_pinned().map_err(|e| {
-        std::io::Error::other(format!("failed to load pinned relay identities: {e}"))
-    })?;
-
     let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
         Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
         Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
     };
+    let state_dir = default_state_dir()?;
+    let secret_path = state_dir.join("client_secret.key");
+    let pinned_path = state_dir.join("pinned_relays.keys");
+    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+    let pinned_relays = store.load_pinned().map_err(|e| {
+        std::io::Error::other(format!("failed to load pinned relay identities: {e}"))
+    })?;
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
     validate_lab_target(mode, relay_addr)?;
     let relay_public = relay_public.unwrap_or([0; 32]);
+    let keypair = store.load_or_generate().map_err(|e| {
+        std::io::Error::other(format!("failed to load or persist client identity: {e}"))
+    })?;
 
     println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir.display(), relay_addr, count);
     println!("  client public: {:02x?}...", &keypair.public_bytes()[..8]);
