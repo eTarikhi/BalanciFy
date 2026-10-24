@@ -1502,6 +1502,22 @@ mod tests {
     }
 
     #[test]
+    fn global_handshake_limit_rejects_before_parsing_or_allocating_session() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp, balancify_crypto::PinnedKeys::new());
+        let now = Instant::now();
+        relay.global_handshake_limiter.tokens = 0.0;
+        relay.global_handshake_limiter.last_refill = now;
+        let peer: std::net::SocketAddr = "192.0.2.10:1234".parse().unwrap();
+
+        assert!(relay.handle_msg1(&[0], peer, now).is_err());
+        let (sessions, handshakes, rejected, _, _, _) = relay.stats();
+        assert_eq!(sessions, 0);
+        assert_eq!(handshakes, 0);
+        assert_eq!(rejected, 1);
+    }
+
+    #[test]
     fn secure_relay_rate_limits_handshakes_per_ip() {
         let relay_kp = balancify_crypto::StaticKeypair::generate();
         let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
