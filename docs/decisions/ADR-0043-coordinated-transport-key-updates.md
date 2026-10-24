@@ -24,4 +24,4 @@ The service previously replaced its transmit and receive ciphers locally when ei
 
 ## Regression coverage
 
-`crates/service/tests/rekey_safety.rs::threshold_marks_key_update_due_without_unilateral_cipher_rotation` uses a real `TunnelCipher` sender and peer `Receiver`. It reaches a low threshold, ticks the client, and verifies the peer still authenticates and delivers subsequent traffic while diagnostics report that an update is due and no rotation occurred.
+`crates/service/tests/rekey_safety.rs` uses a real `TunnelCipher` sender and peer `Receiver` to test both packet-count and elapsed-time thresholds. Each scenario ticks the client at the threshold and verifies the peer still authenticates and delivers subsequent traffic while diagnostics report that an update is due and no local rotation occurred.
