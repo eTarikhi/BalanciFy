@@ -532,12 +532,19 @@ impl SecureRelay {
         peer: std::net::SocketAddr,
         now: Instant,
     ) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>, bool)> {
-        let (hdr, _) = balancify_tunnel::Header::decode(dg)?;
+        let Some((hdr, _)) = balancify_tunnel::Header::decode(dg) else {
+            self.total_rejected += 1;
+            return None;
+        };
         let session_id = hdr.session;
         // Rate limiting per session
-        let session = self.sessions.get_mut(&session_id)?;
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            self.total_rejected += 1;
+            return None;
+        };
         if !session.rate_limiter.try_consume(dg.len(), now) {
             // Drop frame if over limit -- counts as abuse, but don't kill session
+            self.total_rejected += 1;
             return Some((Vec::new(), Vec::new(), false));
         }
         let (payloads, replies, authenticated) = session.ingest(dg, now);
@@ -551,6 +558,9 @@ impl SecureRelay {
             session.packets_forwarded += 1;
             self.total_bytes_forwarded += p.len() as u64;
             self.total_packets_forwarded += 1;
+        }
+        if !authenticated {
+            self.total_rejected += 1;
         }
         Some((payloads, replies, authenticated))
     }
@@ -1272,6 +1282,7 @@ mod tests {
             .unwrap();
         assert!(!authenticated);
         assert_eq!(relay.sessions[&session_id].peer_addr, original_peer, "unauthenticated traffic cannot hijack the peer route");
+        assert_eq!(relay.total_rejected, 1, "unauthenticated tunnel frames are counted");
 
         let second_time = now + Duration::from_secs(2);
         let second = client_tx.send(b"after-rebind", second_time).unwrap();

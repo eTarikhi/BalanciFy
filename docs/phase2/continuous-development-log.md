@@ -167,3 +167,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay error-log abuse control: malformed/unknown handshake traffic now shares a one-line-per-second failure-log throttle, keeping unauthenticated packet floods from turning stderr into an unbounded per-datagram workload. Added a monotonic throttle regression.
 
 - Relay rejection telemetry: malformed Noise messages, noncanonical session payloads, replayed flights, missing peer identity, and responder-key construction errors now increment `total_rejected` consistently. Regressions assert malformed, replay, and pinning failures are reflected in the counter.
+
+- Relay data-plane rejection telemetry: malformed tunnel headers, unknown sessions, per-session rate-limit drops, unauthenticated frames, and replayed frames now contribute to the global reject counter in addition to handshake rejects. The NAT-rebinding regression asserts a spoofed frame is counted.
