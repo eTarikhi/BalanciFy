@@ -44,6 +44,32 @@ static int BalancifyIsValidTransport(
     }
 }
 
+static int BalancifyIsValidIpv4Options(
+    const unsigned char *packet,
+    size_t headerLength) {
+    size_t offset = 20u;
+    while (offset < headerLength) {
+        unsigned int optionType = (unsigned int)packet[offset];
+        size_t optionLength;
+        if (optionType == 0u) {
+            size_t padding;
+            for (padding = offset + 1u; padding < headerLength; padding++) {
+                if (packet[padding] != 0u) return 0;
+            }
+            return 1;
+        }
+        if (optionType == 1u) {
+            offset++;
+            continue;
+        }
+        if (headerLength - offset < 2u) return 0;
+        optionLength = (size_t)packet[offset + 1u];
+        if (optionLength < 2u || optionLength > headerLength - offset) return 0;
+        offset += optionLength;
+    }
+    return 1;
+}
+
 static int BalancifyIsValidIpv4Packet(
     const unsigned char *packet,
     size_t packetLength) {
@@ -55,7 +81,8 @@ static int BalancifyIsValidIpv4Packet(
 
     if (headerLength < 20u || headerLength > packetLength ||
         totalLength < headerLength || totalLength != packetLength ||
-        (fragment & 0x8000u) != 0u) {
+        (fragment & 0x8000u) != 0u ||
+        !BalancifyIsValidIpv4Options(packet, headerLength)) {
         return 0;
     }
     fragmentPayloadLength = totalLength - headerLength;

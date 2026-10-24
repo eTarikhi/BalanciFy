@@ -70,6 +70,27 @@ pub fn flow_key_from_packet(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     }
 }
 
+fn valid_ipv4_options(packet: &[u8], header_len: usize) -> bool {
+    let mut offset = IPV4_MIN_HEADER_LEN;
+    while offset < header_len {
+        match packet[offset] {
+            0 => return packet[offset + 1..header_len].iter().all(|byte| *byte == 0),
+            1 => offset += 1,
+            _ => {
+                if header_len - offset < 2 {
+                    return false;
+                }
+                let option_len = usize::from(packet[offset + 1]);
+                if option_len < 2 || option_len > header_len - offset {
+                    return false;
+                }
+                offset += option_len;
+            }
+        }
+    }
+    true
+}
+
 fn parse_ipv4(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     if packet.len() < IPV4_MIN_HEADER_LEN {
         return Err(PacketFlowError::EmptyOrTruncated);
@@ -81,6 +102,9 @@ fn parse_ipv4(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     let total_len = usize::from(read_u16(packet, 2)?);
     if total_len != packet.len() || total_len < header_len {
         return Err(PacketFlowError::LengthMismatch);
+    }
+    if !valid_ipv4_options(packet, header_len) {
+        return Err(PacketFlowError::InvalidIpv4Header);
     }
     let fragment = read_u16(packet, 6)?;
     if fragment & 0x8000 != 0 {
@@ -446,6 +470,29 @@ mod tests {
             flow_key_from_packet(&ipv6(44, &duplicate_fragments)),
             Err(PacketFlowError::InvalidIpv6Extension),
         );
+    }
+
+    #[test]
+    fn rejects_malformed_ipv4_option_lengths_and_padding() {
+        let mut valid = ipv4(59, &[], 0, true);
+        valid[20..24].copy_from_slice(&[1, 0, 0, 0]); // NOP, then zero padding
+        assert!(flow_key_from_packet(&valid).is_ok());
+
+        for options in [
+            [0x9e, 1, 0, 0], // TLV length is shorter than its header
+            [0x9e, 5, 0, 0], // TLV extends beyond the option area
+            [0x9e, 0, 0, 0], // TLV length zero
+            [0x9e, 3, 0, 0x9e], // no length byte for the final TLV
+            [0, 1, 0, 0], // nonzero byte after End of Option List
+        ] {
+            let mut malformed = ipv4(59, &[], 0, true);
+            malformed[20..24].copy_from_slice(&options);
+            assert_eq!(
+                flow_key_from_packet(&malformed),
+                Err(PacketFlowError::InvalidIpv4Header),
+                "malformed IPv4 options must be rejected: {options:?}",
+            );
+        }
     }
 
     #[test]

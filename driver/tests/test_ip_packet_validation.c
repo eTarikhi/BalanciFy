@@ -66,6 +66,24 @@ static void test_ipv4_tcp_udp_and_fragment_bounds(void) {
         assert(!BalancifyIsValidIpPacket(empty_fragment, sizeof(empty_fragment), 1500));
         assert(!BalancifyIsValidIpPacket(unaligned_fragment, sizeof(unaligned_fragment), 1500));
     }
+    {
+        unsigned char options[24] = { 0x46, 0, 0, 24 };
+        options[9] = 59; /* No transport header */
+        options[20] = 1; /* NOP followed by zero padding */
+        assert(BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[20] = 0x9e;
+        options[21] = 1; /* TLV length shorter than its header */
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[21] = 5; /* TLV overruns the option area */
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[20] = 0; /* End of Option List requires zero padding */
+        options[21] = 1;
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[20] = 0x9e;
+        options[21] = 3;
+        options[23] = 0x9e; /* Final TLV is missing its length byte */
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+    }
 }
 
 static void test_ipv6_exact_payload_length(void) {
