@@ -140,9 +140,10 @@ fn load_pinned_clients(
     })
 }
 
-fn create_forward_socket() -> std::io::Result<UdpSocket> {
+fn create_forward_socket(upstream: std::net::SocketAddr) -> std::io::Result<UdpSocket> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.set_read_timeout(Some(Duration::from_millis(10)))?;
+    socket.connect(upstream)?;
     Ok(socket)
 }
 
@@ -715,8 +716,8 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                     out.push(HANDSHAKE_VERSION);
                                     out.push(HANDSHAKE_MSG2);
                                     out.extend_from_slice(&msg2);
-                                    let forward_socket = if forward_addr.is_some() {
-                                        match create_forward_socket() {
+                                    let forward_socket = if let Some(upstream) = forward_addr {
+                                        match create_forward_socket(upstream) {
                                             Ok(socket) => Some(socket),
                                             Err(error) => {
                                                 relay.remove_session(session_id);
@@ -767,12 +768,12 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                             }
                             for frame in replies { let _ = s.send_to(&frame, peer); }
                             for payload in payloads {
-                                if let Some(fa) = forward_addr {
+                                if forward_addr.is_some() {
                                     if let Some(sid) = session_id_opt {
                                         // Never borrow another session's egress socket: its replies
                                         // are routed back through a different tunnel key.
                                         if let Some(fs) = forward_socket_for_session(&forward_socks, sid) {
-                                            let _ = fs.send_to(&payload, fa);
+                                            let _ = fs.send(&payload);
                                         }
                                     }
                                 } else {
@@ -789,9 +790,9 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                         if let Some(peer) = peers.get(&session_id) {
                             for frame in replies { let _ = s.send_to(&frame, peer); }
                             for payload in payloads {
-                                if let Some(fa) = forward_addr {
+                                if forward_addr.is_some() {
                                     if let Some(fs) = forward_socks.get(&session_id) {
-                                        let _ = fs.send_to(&payload, fa);
+                                        let _ = fs.send(&payload);
                                     }
                                 } else {
                                     let _ = s.send_to(&payload, peer);
@@ -804,8 +805,8 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                         let mut to_remove = Vec::new();
                         for (sid, fs) in forward_socks.iter() {
                             loop {
-                                match fs.recv_from(&mut forward_buf) {
-                                    Ok((n, _from)) => {
+                                match fs.recv(&mut forward_buf) {
+                                    Ok(n) => {
                                         if let Some(peer) = peers.get(sid) {
                                             if let Some(sess) = relay.sessions.get_mut(sid) {
                                                 // Re-encrypt reply as tunnel data
@@ -929,6 +930,23 @@ mod tests {
             Some("127.0.0.1:8080".parse().unwrap()),
         );
         assert!(parse_forward_addr(Ok("not-an-address".to_string())).is_err());
+    }
+
+    #[test]
+    fn connected_forward_socket_rejects_unexpected_udp_sources() {
+        let upstream = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let forward = create_forward_socket(upstream.local_addr().unwrap()).unwrap();
+        let forward_addr = forward.local_addr().unwrap();
+        let rogue = UdpSocket::bind("127.0.0.1:0").unwrap();
+        rogue.send_to(b"forged upstream", forward_addr).unwrap();
+
+        let mut buf = [0u8; 64];
+        let error = forward.recv(&mut buf).expect_err("connected UDP socket must filter other sources");
+        assert!(matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut));
+
+        upstream.send_to(b"expected upstream", forward_addr).unwrap();
+        let n = forward.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"expected upstream");
     }
 
     #[test]
