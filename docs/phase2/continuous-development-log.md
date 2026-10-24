@@ -155,3 +155,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay listen-port parsing: secure and lab modes now share strict comma-list parsing, rejecting malformed, empty, or duplicate ports instead of dropping invalid entries or starting with no listeners. Added coverage for defaults, valid lists, partial failures, empty fields, duplicate ports, and extra positional arguments.
 
 - Relay state-directory resolution: secure-mode preflight and key-store initialization now share one `PathBuf` resolver. This fixes the Windows default-path mismatch (preflight previously checked `/tmp/balancify` while secure startup used `%ProgramData%\\Balancify`) and rejects an explicitly empty override; added a focused path-resolution regression.
+
+- Relay maintenance scheduling: replaced `now.elapsed() % 10` (which measured age from a freshly captured instant, causing per-datagram sweeps/logging) with a monotonic 10-second deadline. Maintenance now runs after both packet handling and socket timeouts, allowing idle sessions and their forwarding sockets to be reclaimed without requiring fresh traffic; added deterministic scheduler regression.

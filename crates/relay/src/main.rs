@@ -147,6 +147,14 @@ fn forward_socket_for_session(
     forward_socks.get(&session_id)
 }
 
+fn sweep_due(last_sweep: &mut Instant, now: Instant, interval: Duration) -> bool {
+    if now.duration_since(*last_sweep) < interval {
+        return false;
+    }
+    *last_sweep = now;
+    true
+}
+
 fn parse_listen_ports(value: Option<&str>) -> std::io::Result<Vec<u16>> {
     let Some(value) = value else { return Ok(vec![4430, 4431]); };
     if value.trim().is_empty() {
@@ -617,6 +625,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     // This gives us stable egress per session and lets us map replies back to session.
     let mut forward_socks: BTreeMap<u64, UdpSocket> = BTreeMap::new();
     let mut forward_buf = [0u8; 65535];
+    let mut last_sweep = Instant::now();
 
     loop {
         for (_idx, s) in sockets.iter().enumerate() {
@@ -670,18 +679,6 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                             }
                         }
                     }
-                    // Periodic sweep every ~10s
-                    if now.elapsed().as_secs() % 10 == 0 {
-                        let evicted = relay.sweep(now);
-                        for sid in evicted {
-                            peers.remove(&sid);
-                            forward_socks.remove(&sid);
-                        }
-                        let (sess_cnt, hs, rej, bytes, pkts, ecn) = relay.stats();
-                        if sess_cnt > 0 {
-                            eprintln!("Stats: sessions={} handshakes={} rejected={} bytes={} pkts={} ecn={}", sess_cnt, hs, rej, bytes, pkts, ecn);
-                        }
-                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
                     let now = Instant::now();
@@ -732,6 +729,18 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                 }
                 Err(e) => return Err(e),
             }
+            let maintenance_now = Instant::now();
+            if sweep_due(&mut last_sweep, maintenance_now, Duration::from_secs(10)) {
+                let evicted = relay.sweep(maintenance_now);
+                for sid in evicted {
+                    peers.remove(&sid);
+                    forward_socks.remove(&sid);
+                }
+                let (sess_cnt, hs, rej, bytes, pkts, ecn) = relay.stats();
+                if sess_cnt > 0 {
+                    eprintln!("Stats: sessions={} handshakes={} rejected={} bytes={} pkts={} ecn={}", sess_cnt, hs, rej, bytes, pkts, ecn);
+                }
+            }
         }
     }
 }
@@ -742,6 +751,20 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
+
+    #[test]
+    fn relay_sweep_scheduler_uses_elapsed_time_not_fresh_instant_age() {
+        let start = Instant::now();
+        let mut last_sweep = start;
+        let interval = Duration::from_secs(10);
+
+        assert!(!sweep_due(&mut last_sweep, start + Duration::from_secs(9), interval));
+        assert_eq!(last_sweep, start);
+        assert!(sweep_due(&mut last_sweep, start + interval, interval));
+        assert_eq!(last_sweep, start + interval);
+        assert!(!sweep_due(&mut last_sweep, start + Duration::from_secs(19), interval));
+        assert!(sweep_due(&mut last_sweep, start + Duration::from_secs(20), interval));
+    }
 
     #[test]
     fn relay_state_dir_resolution_uses_one_default_and_rejects_empty_override() {
