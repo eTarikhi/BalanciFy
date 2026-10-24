@@ -715,6 +715,10 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     let secret_path = state_dir.join("relay_secret.key");
     let pinned_path = state_dir.join("pinned_clients.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+    let pinned = load_pinned_clients(&store).map_err(|error| {
+        eprintln!("Failed to load pinned client identities from {:?}: {}", pinned_path, error);
+        error
+    })?;
     let keypair = match store.load_or_generate() {
         Ok(kp) => kp,
         Err(e) => {
@@ -722,10 +726,6 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)));
         }
     };
-    let pinned = load_pinned_clients(&store).map_err(|error| {
-        eprintln!("Failed to load pinned client identities from {:?}: {}", pinned_path, error);
-        error
-    })?;
     eprintln!("balancify-relay (secure mode): listening on UDP {:?}, state_dir={}, pinned_clients={}", ports, state_dir.display(), pinned.len());
     eprintln!("  relay public key: {:02x?}...", &keypair.public_bytes()[..8]);
     let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;

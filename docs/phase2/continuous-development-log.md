@@ -179,3 +179,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay listen-port parsing now rejects port zero alongside malformed, empty, and duplicate entries, preventing an accidental ephemeral bind that would be logged as the configured port and remain undiscoverable to clients.
 - Client and service relay address parsers now reject remote endpoints with port zero or an unspecified IP, catching invalid primary/secondary configurations before UDP socket setup or handshake attempts.
 - Relay secure startup validates listen ports and the optional upstream endpoint before loading or generating key material, so a malformed forwarding configuration cannot create persistent key state as a side effect.
+- Service startup now parses the configured relay public key before opening the key store or generating a persistent client identity, avoiding identity-file side effects on malformed key configuration.
+- Both relay and service now read/validate their pin stores before generating persistent keypairs, so corrupt pin files fail without leaving newly generated identity files behind.

@@ -293,18 +293,18 @@ fn main() -> std::io::Result<()> {
         positional.first().map(String::as_str),
         positional.get(1).map(String::as_str),
     )?;
-
-    let state_dir = default_state_dir()?;
-    let secret_path = state_dir.join("client_secret.key");
-    let pinned_path = state_dir.join("pinned_relays.keys");
-    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
-    let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
     let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
         Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
         Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
     };
+
+    let state_dir = default_state_dir()?;
+    let secret_path = state_dir.join("client_secret.key");
+    let pinned_path = state_dir.join("pinned_relays.keys");
+    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+    let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
+    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
     validate_lab_target(mode, relay_primary, relay_secondary)?;
