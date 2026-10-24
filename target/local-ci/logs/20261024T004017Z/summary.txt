@@ -1,0 +1,3 @@
+BalanciFy local CI · profile=quick · branch=arena/3f48d354-balancify · HEAD=69b5804eda4fc9c6387732e3a2383dafb37ffac4
+FAIL  dependency-policy (exit 1)
+Log: /mnt/c/Users/Administrator/Desktop/Git-Clones/BalanciFy/target/local-ci/logs/20261024T004017Z/dependency-policy.log
