@@ -1371,17 +1371,21 @@ impl Service<balancify_crypto::TunnelCipher> {
             msg
         };
 
-        let initiator = self.handshake_initiator.as_mut().ok_or(balancify_crypto::HandshakeError::BadOrder)?;
+        // A handshake response is single-use, including malformed or
+        // mismatched responses. Do not leave an authenticated-but-rejected
+        // transcript available for another attempt.
+        let mut initiator = self
+            .handshake_initiator
+            .take()
+            .ok_or(balancify_crypto::HandshakeError::BadOrder)?;
         let (payload, keys) = initiator.read_message(raw)?;
 
-        // Payload should echo session id
-        if payload.len() >= 8 {
-            let echoed = u64::from_be_bytes(payload[..8].try_into().unwrap());
-            if echoed != self.cfg.session {
-                // Session mismatch, but still allow? For now, treat as ok if we trust relay
-                // The session id is what we sent, so mismatch is suspicious.
-                // We'll still apply keys but log via counter? For now, continue.
-            }
+        if payload.len() != std::mem::size_of::<u64>() {
+            return Err(balancify_crypto::HandshakeError::Truncated);
+        }
+        let echoed = u64::from_be_bytes(payload[..8].try_into().unwrap());
+        if echoed != self.cfg.session {
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
 
         self.apply_transport_keys(&keys, now);
@@ -2266,6 +2270,76 @@ mod tests {
         svc.publish(now);
         let actions = svc.send_app_packet(&flow, None, b"hello secure", now);
         assert!(actions.iter().any(|a| matches!(a, Action::Send { .. })), "must send after secure session");
+    }
+
+    #[test]
+    fn handshake_rejects_wrong_session_echo_without_installing_keys() {
+        use balancify_crypto::{EphemeralKeypair, Responder, StaticKeypair};
+        let now = Instant::now();
+        let relay_kp = StaticKeypair::generate();
+        let client_kp = StaticKeypair::generate();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let cfg = ServiceConfig { session: 12345, auto_accept: false, ..ServiceConfig::default() };
+        let mut svc = Service::new(
+            cfg,
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+        );
+        svc.set_static_keypair(client_kp);
+
+        let msg1 = svc.initiate_handshake(relay_kp.public_bytes(), b"balancify handshake v1").unwrap();
+        let mut responder = Responder::new(relay_kp.secret_bytes(), b"balancify handshake v1");
+        let request_payload = responder.read_message_checked(&msg1[2..], None, None, None).unwrap();
+        assert_eq!(request_payload, 12345u64.to_be_bytes());
+        let wrong_session = 54321u64.to_be_bytes();
+        let eph = EphemeralKeypair::generate().secret_bytes();
+        let (msg2, _) = responder.write_message(eph, &wrong_session).unwrap();
+        let mut framed = vec![0xFF, 0x02];
+        framed.extend_from_slice(&msg2);
+
+        assert_eq!(
+            svc.handle_handshake_msg2(&framed, now),
+            Err(balancify_crypto::HandshakeError::AuthFailed)
+        );
+        assert_eq!(svc.sessions(), 0, "mismatched session echo must not install keys");
+        assert_eq!(
+            svc.handle_handshake_msg2(&framed, now),
+            Err(balancify_crypto::HandshakeError::BadOrder),
+            "a rejected response consumes the pending initiator"
+        );
+    }
+
+    #[test]
+    fn handshake_rejects_malformed_session_echo_without_installing_keys() {
+        use balancify_crypto::{EphemeralKeypair, Responder, StaticKeypair};
+        let now = Instant::now();
+        let relay_kp = StaticKeypair::generate();
+        let client_kp = StaticKeypair::generate();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let cfg = ServiceConfig { session: 12345, auto_accept: false, ..ServiceConfig::default() };
+        let mut svc = Service::new(
+            cfg,
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+        );
+        svc.set_static_keypair(client_kp);
+
+        let msg1 = svc.initiate_handshake(relay_kp.public_bytes(), b"balancify handshake v1").unwrap();
+        let mut responder = Responder::new(relay_kp.secret_bytes(), b"balancify handshake v1");
+        let request_payload = responder.read_message_checked(&msg1[2..], None, None, None).unwrap();
+        assert_eq!(request_payload, 12345u64.to_be_bytes());
+        let eph = EphemeralKeypair::generate().secret_bytes();
+        let (msg2, _) = responder.write_message(eph, &[0x01]).unwrap();
+        let mut framed = vec![0xFF, 0x02];
+        framed.extend_from_slice(&msg2);
+
+        assert_eq!(
+            svc.handle_handshake_msg2(&framed, now),
+            Err(balancify_crypto::HandshakeError::Truncated)
+        );
+        assert_eq!(svc.sessions(), 0, "malformed session echo must not install keys");
     }
 
     #[test]
