@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-24
-Status: continuous on `arena/3f48d354-balancify`; its PR remains open. Full local profile at `7ae0033` passed all twelve stages, including 323 Linux Rust tests, release build, SPDX 2.3/3.0.1 validation, Windows/WSL workflow contracts, and portable driver tests (logs: `target/local-ci/logs/20261024T201038Z/`). Latest changes after that run add relay aggregate admission, client/service endpoint validation, and kernel/service IP-parser hardening; include them in the next consolidated Rust validation. Hardware/product acceptance remains tracked in the gated plan below.
+Status: continuous on `arena/3f48d354-balancify`; its PR remains open. Full local profile at `d630d5d` passed all twelve stages, including 331 Linux Rust tests, release build, SPDX 2.3/3.0.1 validation, Windows/WSL workflow contracts, and portable driver tests (logs: `target/local-ci/logs/20261024T204831Z/`). The latest unsupported-datagram accounting regression and handshake-response rejection telemetry were added afterward; include the new test in the next consolidated Rust validation. Hardware/product acceptance remains tracked in the gated plan below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -23,7 +23,7 @@ User instruction: "continue the development process without stopping to report" 
 - PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. PR #19 adds the bounded reverse TX queue and service polling (ADR-0040); `SET_QUANTA` remains unsupported until a driver scheduler consumes it. Current x64/ARM64 WDK builds and unsigned PE/INF checks pass in CI. This does not establish installation or runtime behavior.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
-Current validation: the full local profile at `7ae0033` passed all twelve stages: 323 Linux Rust tests, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency audit, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. A subsequent quick profile passed after adding the global-handshake limiter, but its profile does not run Rust or SPDX validation. The new Rust regression is included in the next consolidated run. These source/build checks do not establish hardware/runtime acceptance.
+Current validation: the full local profile at `d630d5d` passed all twelve stages: 331 Linux Rust tests, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency audit, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. Subsequent quick profiles passed after the unsupported-datagram accounting and handshake-response telemetry changes. Include the new Rust regression in the next consolidated run. These source/build checks do not establish hardware/runtime acceptance.
 
 ## What remains (ordered, still without stopping)
 

@@ -1,7 +1,7 @@
 # Test coverage — current inventory: 332 Rust tests, what is covered
 
 Date: 2026-10-24
-Status: full local profile at `7ae0033` passed 323 Rust tests and all twelve profile stages (logs: `target/local-ci/logs/20261024T201038Z/`). Recent relay, client, and service changes add unsupported-datagram rejection accounting, aggregate-handshake-limiter, remote-address validation, IPv4 option, and IPv4/IPv6 fragment regressions after that full run; the current source inventory is therefore 332 tests, pending the next consolidated Rust run.
+Status: full local profile at `d630d5d` passed 331 Rust tests and all twelve profile stages (logs: `target/local-ci/logs/20261024T204831Z/`). Commit `cbf4379` adds one unsupported-datagram rejection-accounting regression after that full run; the current source inventory is therefore 332 tests, pending the next consolidated Rust run.
 
 ## Counts
 
@@ -26,7 +26,7 @@ Status: full local profile at `7ae0033` passed 323 Rust tests and all twelve pro
   - replay.rs: 5 tests (new ephemeral not replay, same within window is replay, expired not replay, capacity evicts oldest, different ephemerals not replay)
   - lib.rs rekey: 3 tests (rekey changes key but keeps salt, rekey deterministic and one-way, transport keys rekey both directions)
 - ipc: 18 tests (wire contract, message round-trips, truncation/partial-frame handling, strict decoding, stable opcodes, loopback-only binding, fragmented/pipelined transport, event push, malformed-frame rejection, and 60-second timeout for idle unsubscribed clients)
-- relay: 29 tests in current source (26 passed in the recorded full-profile run)
+- relay: 29 tests in current source (28 passed in the recorded full-profile run)
   - Endpoint: two_paths_with_delay_gap_reassemble_in_order, ignores_garbage, deduplicates_duplicate_mode_copy, answers_probes, drains_gap_after_hold_cap, ordered_stream_survives_a_real_udp_socket
   - SecureRelay: relay_handshake_failure_logs_are_rate_limited, unsupported_datagram_shapes_are_marked_for_rejection_accounting, relay_sweep_scheduler_uses_elapsed_time_not_fresh_instant_age, relay_state_dir_resolution_uses_one_default_and_rejects_empty_override, relay_refuses_a_corrupt_pinned_client_store, listen_port_configuration_rejects_invalid_values, forward_address_configuration_fails_closed_on_invalid_values, connected_forward_socket_rejects_unexpected_udp_sources (nonblocking receive), forwarding_socket_lookup_does_not_cross_sessions, secure_handshake_creates_session, secure_relay_rejects_duplicate_session_id_without_replacing_session, secure_relay_rejects_noncanonical_session_payload_length, failed_handshake_response_removes_session_and_counts_rejection, secure_relay_rejects_unpinned_client, secure_relay_rejects_replay, secure_tunnel_after_handshake, relay_peer_rebinding_requires_a_fresh_authenticated_frame, secure_relay_enforces_rate_limit_and_session_cap, handshake_rate_limit_tracking_is_bounded_under_source_churn, global_handshake_limiter_bounds_bursts_and_refills_smoothly, global_handshake_limit_rejects_before_parsing_or_allocating_session, secure_relay_rate_limits_handshakes_per_ip, relay_session_idle_timer_ignores_unauthenticated_datagrams
 - service: 67 library tests plus 10 service-binary tests
@@ -42,7 +42,7 @@ Status: full local profile at `7ae0033` passed 323 Rust tests and all twelve pro
 - SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-The full-profile run at `7ae0033` passed 323 Rust tests on Linux, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency policy, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. The unsupported-datagram accounting regression, two aggregate-handshake-limiter regressions, five raw-IP parser regressions, and one client remote-address regression added after `7ae0033` bring the source inventory to 332 and should be included in the next consolidated Rust run. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
+The full-profile run at `d630d5d` passed 331 Rust tests on Linux, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency policy, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. One unsupported-datagram accounting regression added at `cbf4379` brings the source inventory to 332 and should be included in the next consolidated Rust run. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 

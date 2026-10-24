@@ -1,7 +1,7 @@
 # Security hardening — what is done, what remains
 
 Date: 2026-10-24
-Status: continuing on active branch `arena/3f48d354-balancify` (PR open). Full local profile at `7ae0033` passed all twelve stages; subsequent relay forwarding and raw-IP parser hardening are being incorporated into the next consolidated run. Driver signing/install, Driver Verifier, HVCI, VM, and hardware packet-path acceptance remain tracked separately.
+Status: continuing on active branch `arena/3f48d354-balancify` (PR open). Full local profile at `d630d5d` passed all twelve stages; one relay rejection-accounting regression was added afterward. Driver signing/install, Driver Verifier, HVCI, VM, and hardware packet-path acceptance remain tracked separately.
 
 ## Done
 
