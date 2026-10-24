@@ -142,6 +142,16 @@ fn parse_listen_ports(value: Option<&str>) -> std::io::Result<Vec<u16>> {
     Ok(ports)
 }
 
+fn parse_listen_args(args: &[String]) -> std::io::Result<Vec<u16>> {
+    if args.len() > 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "expected one comma-separated listen-port argument",
+        ));
+    }
+    parse_listen_ports(args.first().map(String::as_str))
+}
+
 fn parse_forward_addr(
     setting: Result<String, std::env::VarError>,
 ) -> std::io::Result<Option<std::net::SocketAddr>> {
@@ -489,7 +499,7 @@ fn run() -> std::io::Result<()> {
     if args.first().map(|s| s == "secure").unwrap_or(false) {
         return run_secure(args.into_iter().skip(1).collect());
     }
-    let ports = parse_listen_ports(args.first().map(String::as_str))?;
+    let ports = parse_listen_args(&args)?;
     let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
     for s in &sockets { s.set_read_timeout(Some(Duration::from_millis(100)))?; }
     eprintln!("balancify-relay (lab form; lab-crypto = NO CONFIDENTIALITY): listening on UDP {:?}", ports);
@@ -543,7 +553,7 @@ fn run() -> std::io::Result<()> {
 
 fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
-    let ports = parse_listen_ports(args.first().map(String::as_str))?;
+    let ports = parse_listen_args(&args)?;
     let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
         #[cfg(windows)]
         { std::env::var("ProgramData").map(|pd| format!("{}\\Balancify", pd)).unwrap_or_else(|_| "/tmp/balancify".to_string()) }
@@ -734,6 +744,8 @@ mod tests {
     fn listen_port_configuration_rejects_partial_or_empty_lists() {
         assert_eq!(parse_listen_ports(None).unwrap(), vec![4430, 4431]);
         assert_eq!(parse_listen_ports(Some("4430, 4431")).unwrap(), vec![4430, 4431]);
+        assert_eq!(parse_listen_args(&["4430,4431".to_string()]).unwrap(), vec![4430, 4431]);
+        assert!(parse_listen_args(&["4430".to_string(), "4431".to_string()]).is_err());
         assert!(parse_listen_ports(Some("4430,not-a-port")).is_err());
         assert!(parse_listen_ports(Some("4430,")).is_err());
         assert!(parse_listen_ports(Some("")).is_err());
