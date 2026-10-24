@@ -1535,8 +1535,9 @@ mod tests {
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &999u64.to_be_bytes(),
         );
+        let global_tokens_before_over_quota_attempt = relay.global_handshake_limiter.tokens;
         assert!(relay.handle_msg1(&msg1, peer, now).is_err(), "11th should be rate limited");
-        assert_eq!(relay.global_handshake_limiter.tokens, GLOBAL_HANDSHAKE_BURST - 10.0,
+        assert_eq!(relay.global_handshake_limiter.tokens, global_tokens_before_over_quota_attempt,
             "an over-quota IP must not drain the aggregate bucket");
 
         // After window, should succeed again
