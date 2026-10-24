@@ -139,3 +139,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - `5e2922a` makes the portable packet, MTU, RX pause, and TX queue C fixtures run under strict warnings and AddressSanitizer/UndefinedBehaviorSanitizer in Ubuntu CI; push run `39917633486` and PR run `39917639870` passed all six jobs.
 
 - `02409cf` adds a reproducible 12,000-iteration malformed/near-valid IPv4/IPv6 length mutation stress loop to the WDK-independent packet validator fixtures, executed in the strict and ASan/UBSan passes. Push CI `39922008067` and PR CI `39922014929` passed all six jobs. This bounded test is not kernel fuzzing.
+
+- Relay handshake consistency hardening: `SecureRelay::handle_msg1` now requires the authenticated session payload to be exactly 8 bytes, matching the service's response validation. A regression exercises both short and trailing-byte payloads and asserts neither creates a session. Hardware acceptance is not implicated.

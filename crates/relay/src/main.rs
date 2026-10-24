@@ -338,7 +338,9 @@ impl SecureRelay {
             Some(&mut self.replay_cache),
             Some(now),
         )?;
-        if payload.len() < 8 { return Err(balancify_crypto::HandshakeError::Truncated); }
+        if payload.len() != std::mem::size_of::<u64>() {
+            return Err(balancify_crypto::HandshakeError::Truncated);
+        }
         let session_id = u64::from_be_bytes(payload[..8].try_into().unwrap());
         let peer_static = responder.peer_static().ok_or(balancify_crypto::HandshakeError::AuthFailed)?;
         if !self.is_peer_allowed(&peer_static) {
@@ -805,6 +807,34 @@ mod tests {
         assert_eq!(relay.sessions.len(), 1);
         let (payload, _keys) = initiator.read_message(&msg2).expect("msg2 ok");
         assert_eq!(payload, session_id.to_be_bytes());
+    }
+
+    #[test]
+    fn secure_relay_rejects_noncanonical_session_payload_length() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        let now = Instant::now();
+        let mut trailing = 42u64.to_be_bytes().to_vec();
+        trailing.push(0);
+
+        for (offset, payload) in [vec![0x2a], trailing].into_iter().enumerate() {
+            let mut initiator = balancify_crypto::Initiator::new(
+                client_kp.secret_bytes(),
+                relay_kp.public_bytes(),
+                PROLOGUE,
+            );
+            let eph = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
+            let msg1 = initiator.write_message(eph, &payload);
+            assert!(
+                relay.handle_msg1(&msg1, peer, now + Duration::from_secs(offset as u64)).is_err(),
+                "noncanonical session payload length {} must be rejected",
+                payload.len()
+            );
+        }
+        assert!(relay.sessions.is_empty(), "malformed payloads must not create sessions");
+        assert_eq!(relay.total_handshakes, 0);
     }
 
     #[test]
