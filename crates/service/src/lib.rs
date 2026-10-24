@@ -176,7 +176,7 @@ pub struct Service<C: Crypto> {
     relay_primary: Option<SocketAddr>,
     relay_secondary: Option<SocketAddr>,
     relay_current: Option<SocketAddr>,
-    relay_last_ack: Option<Instant>,
+    relay_timeout_since: Option<Instant>,
     relay_failover_timeout: Duration,
     relay_failover_count: u64,
     relay_failover_start: Option<Instant>,
@@ -251,7 +251,7 @@ impl<C: Crypto + Clone> Service<C> {
             relay_primary: None,
             relay_secondary: None,
             relay_current: None,
-            relay_last_ack: None,
+            relay_timeout_since: None,
             relay_failover_timeout: Duration::from_secs(10),
             relay_failover_count: 0,
             relay_failover_start: None,
@@ -818,9 +818,10 @@ impl<C: Crypto + Clone> Service<C> {
             );
         }
 
-        // Sec.4.5 relay failover: if no ACK from current relay within timeout,
-        // switch to secondary (or back to primary). The caller must re-handshake
-        // if using secure mode; we just report the new relay via counter.
+        // Sec.4.5 relay failover: if no authenticated relay activity arrives
+        // within the timeout (including initial handshake silence), switch to
+        // the alternate endpoint. The socket adapter detects the switch and
+        // initiates a fresh secure handshake for that relay.
         if self.relay_primary.is_some() {
             if let Some(new_relay) = self.check_relay_failover(now) {
                 self.etw.warn(
@@ -859,8 +860,14 @@ impl<C: Crypto + Clone> Service<C> {
         self.rekey_due
     }
 
+    /// Start or preserve the failure-detection clock for an outbound relay handshake.
+    /// Retries must not postpone failover indefinitely when a relay never replies.
+    pub fn note_relay_attempt(&mut self, now: Instant) {
+        self.relay_timeout_since.get_or_insert(now);
+    }
+
     pub fn on_relay_ack(&mut self, now: Instant) {
-        self.relay_last_ack = Some(now);
+        self.relay_timeout_since = Some(now);
         // If we were in failover, measure convergence time (first ACK after failover)
         if let Some(start) = self.relay_failover_start.take() {
             let convergence = now.duration_since(start);
@@ -875,7 +882,7 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     pub fn check_relay_failover(&mut self, now: Instant) -> Option<SocketAddr> {
-        let last = match self.relay_last_ack {
+        let last = match self.relay_timeout_since {
             Some(t) => t,
             None => return None,
         };
@@ -891,7 +898,7 @@ impl<C: Crypto + Clone> Service<C> {
         if let Some(next_addr) = next {
             if next_addr != current {
                 self.relay_current = Some(next_addr);
-                self.relay_last_ack = Some(now);
+                self.relay_timeout_since = Some(now);
                 self.relay_failover_count += 1;
                 self.relay_failover_start = Some(now);
                 self.relay_failover_convergence = None;
@@ -906,7 +913,7 @@ impl<C: Crypto + Clone> Service<C> {
         self.relay_primary = Some(primary);
         self.relay_secondary = secondary;
         self.relay_current = Some(primary);
-        self.relay_last_ack = None;
+        self.relay_timeout_since = None;
     }
 
     pub fn relay_current(&self) -> Option<SocketAddr> {
@@ -1390,6 +1397,7 @@ impl Service<balancify_crypto::TunnelCipher> {
 
         self.apply_transport_keys(&keys, now);
         self.handshake_initiator = None;
+        self.on_relay_ack(now);
         Ok(())
     }
 
@@ -1931,7 +1939,7 @@ mod tests {
 
         let later = now + Duration::from_secs(9);
         assert!(svc.ingest_path(UplinkId(0), &forged, later).is_empty());
-        assert_eq!(svc.relay_last_ack, Some(now), "unauthenticated ACK cannot keep a relay alive");
+        assert_eq!(svc.relay_timeout_since, Some(now), "unauthenticated ACK cannot keep a relay alive");
         assert_eq!(svc.counters().auth_failed, 1);
     }
 
@@ -2403,6 +2411,23 @@ mod tests {
         let switched_back = svc.check_relay_failover(now + Duration::from_secs(12));
         assert_eq!(switched_back, Some(primary));
         assert_eq!(svc.relay_failover_count(), 2);
+    }
+
+    #[test]
+    fn relay_failover_timeout_starts_with_handshake_attempt_without_ack() {
+        let mut svc = new_service();
+        let primary = "192.0.2.1:4430".parse().unwrap();
+        let secondary = "192.0.2.2:4430".parse().unwrap();
+        let now = Instant::now();
+        svc.set_relays(primary, Some(secondary));
+        svc.set_relay_failover_timeout(Duration::from_secs(5));
+        svc.note_relay_attempt(now);
+        svc.note_relay_attempt(now + Duration::from_secs(3)); // retries must not restart the clock
+
+        assert!(svc.check_relay_failover(now + Duration::from_secs(4)).is_none());
+        assert_eq!(svc.check_relay_failover(now + Duration::from_secs(6)), Some(secondary));
+        assert_eq!(svc.relay_current(), Some(secondary));
+        assert_eq!(svc.relay_failover_count(), 1);
     }
 
     #[test]

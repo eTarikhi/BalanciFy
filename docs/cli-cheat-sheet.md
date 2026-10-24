@@ -68,7 +68,9 @@ Use a private absolute state directory and do not share development keys:
 ```powershell
 $env:BALANCIFY_STATE_DIR = "$env:LOCALAPPDATA\BalanciFy\dev"
 $env:BALANCIFY_IPC_PORT = '5000'                       # loopback-only local IPC
-$env:BALANCIFY_RELAY_PUBLIC_KEY = '<64 hex characters>' # pinned relay public identity
+$env:BALANCIFY_RELAY_PUBLIC_KEY = '<64 hex characters>' # pinned primary relay public identity
+# Optional with a secondary relay address; defaults to the primary identity for shared-key clusters:
+$env:BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY = '<64 hex characters>'
 $env:BALANCIFY_FORWARD_ADDR = '127.0.0.1:8080'         # optional relay UDP forwarding
 $env:BALANCIFY_PER_FLOW = '1'                           # optional client lab toggle
 $env:BALANCIFY_SIMULATE_ECN = '1'                       # optional relay ECN simulation

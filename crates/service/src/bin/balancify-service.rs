@@ -98,6 +98,17 @@ fn parse_relay_public_key(encoded: &str) -> std::io::Result<[u8; 32]> {
     Ok(public)
 }
 
+fn configured_relay_public_key(name: &str) -> std::io::Result<Option<[u8; 32]>> {
+    match std::env::var(name) {
+        Ok(encoded) => parse_relay_public_key(&encoded).map(Some),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must contain a hexadecimal relay identity"),
+        )),
+    }
+}
+
 fn resolve_relay_public(
     configured: Option<[u8; 32]>,
     pinned: &PinnedKeys,
@@ -121,6 +132,38 @@ fn resolve_relay_public(
             None => Ok(None),
         },
     }
+}
+
+fn relay_identity_for_address(
+    address: SocketAddr,
+    primary: SocketAddr,
+    primary_identity: Option<[u8; 32]>,
+    secondary: Option<SocketAddr>,
+    secondary_identity: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    if address == primary {
+        primary_identity
+    } else if secondary == Some(address) {
+        secondary_identity
+    } else {
+        None
+    }
+}
+
+fn initiate_and_send_handshake(
+    service: &mut Service<TunnelCipher>,
+    relay_identity: [u8; 32],
+    socket: &UdpSocket,
+    relay_address: SocketAddr,
+    now: Instant,
+) -> std::io::Result<()> {
+    let msg1 = service.initiate_handshake(relay_identity, b"balancify handshake v1")
+        .map_err(|error| std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("handshake initialization failed: {error:?}"),
+        ))?;
+    service.note_relay_attempt(now);
+    send_datagram(socket, &msg1, relay_address)
 }
 
 fn is_expected_relay_source(source: SocketAddr, expected_relay: SocketAddr) -> bool {
@@ -284,6 +327,7 @@ fn main() -> std::io::Result<()> {
             "--help" | "-h" => {
                 println!("Usage: balancify-service [--insecure-lab] [--simulate-app-traffic] [--driver-device] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
                 println!("Without a relay identity, the service fails closed. Insecure lab mode is debug-only and loopback-only.");
+                println!("For a secondary relay with a distinct identity, set BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY; otherwise it uses the primary identity.");
                 println!("Synthetic app traffic is opt-in and restricted to --insecure-lab mode.");
                 println!("--driver-device opens the Windows control device, injects received tunnel packets, and polls outbound raw-IP packets; it requires the driver and appropriate access.");
                 return Ok(());
@@ -299,11 +343,14 @@ fn main() -> std::io::Result<()> {
         positional.first().map(String::as_str),
         positional.get(1).map(String::as_str),
     )?;
-    let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
-        Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
-    };
+    let configured_relay = configured_relay_public_key("BALANCIFY_RELAY_PUBLIC_KEY")?;
+    let configured_secondary_relay = configured_relay_public_key("BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY")?;
+    if relay_secondary.is_none() && configured_secondary_relay.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY requires a secondary relay address",
+        ));
+    }
 
     let state_dir = default_state_dir()?;
     let secret_path = state_dir.join("client_secret.key");
@@ -311,7 +358,23 @@ fn main() -> std::io::Result<()> {
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
     let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
+    // By default both endpoints may share a relay identity (for a replicated
+    // cluster). Set the secondary key explicitly when it has a distinct pin.
+    let secondary_relay_public = if relay_secondary.is_some() {
+        match configured_secondary_relay {
+            Some(public) => resolve_relay_public(Some(public), &pinned_relays)?,
+            None => relay_public,
+        }
+    } else {
+        None
+    };
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
+    if mode != ConnectionMode::Secure && configured_secondary_relay.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a secondary relay identity requires secure mode with a primary relay identity",
+        ));
+    }
     validate_lab_target(mode, relay_primary, relay_secondary)?;
     validate_simulated_traffic(mode, simulate_app_traffic_requested)?;
     let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
@@ -376,15 +439,12 @@ fn main() -> std::io::Result<()> {
     println!("  IPC v1 loopback listener: {}", ipc_addr);
 
     // Handshake
+    let handshake_started_at = Instant::now();
     match mode {
         ConnectionMode::Secure => {
             let relay_identity = relay_public.expect("secure mode requires a relay identity");
             println!("  initiating authenticated handshake to primary...");
-            let prologue = b"balancify handshake v1";
-            let msg1 = svc.initiate_handshake(relay_identity, prologue)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("handshake initialization failed: {error:?}")))?;
-            send_datagram(&sock0, &msg1, relay_primary)?;
-            println!("  sent msg1 {} bytes", msg1.len());
+            initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_primary, handshake_started_at)?;
         }
         ConnectionMode::InsecureLab => {
             eprintln!("  WARNING: explicitly enabled INSECURE lab mode; loopback only, zero-key test cipher");
@@ -392,6 +452,8 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    let mut handshake_pending = mode == ConnectionMode::Secure;
+    let mut last_handshake_attempt = (mode == ConnectionMode::Secure).then_some(handshake_started_at);
     let mut dg = [0u8; 65535];
     let mut flow_counter = 0u64;
     let started_at = Instant::now();
@@ -422,8 +484,30 @@ fn main() -> std::io::Result<()> {
 
         // Tick every 100ms
         if now.duration_since(last_tick) >= Duration::from_millis(100) {
+            let relay_before_tick = svc.relay_current();
             let actions = svc.tick(now);
+            let relay_after_tick = svc.relay_current();
+            if mode == ConnectionMode::Secure && relay_after_tick != relay_before_tick {
+                if let Some(relay_address) = relay_after_tick {
+                    let relay_identity = relay_identity_for_address(
+                        relay_address,
+                        relay_primary,
+                        relay_public,
+                        relay_secondary,
+                        secondary_relay_public,
+                    ).ok_or_else(|| std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "failed over to a relay without a configured identity",
+                    ))?;
+                    initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_address, now)?;
+                    handshake_pending = true;
+                    last_handshake_attempt = Some(now);
+                }
+            }
             for act in actions {
+                if mode == ConnectionMode::Secure && handshake_pending {
+                    continue;
+                }
                 if let Action::Send { uplink, bytes } = act {
                     let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
                     let relay = svc.relay_current().unwrap_or(relay_primary);
@@ -450,12 +534,25 @@ fn main() -> std::io::Result<()> {
                         eprintln!("ignoring datagram from an unexpected relay endpoint");
                         continue;
                     }
+                    if mode == ConnectionMode::Secure
+                        && handshake_pending
+                        && !(n >= 2 && dg[0] == 0xFF && dg[1] == 0x02)
+                    {
+                        continue;
+                    }
                     // Record local endpoint for NAT rebinding detection
                     if let Ok(local) = sock.local_addr() {
                         svc.note_local_endpoint(uplink_id, local, now);
                     }
                     match svc.handle_path_datagram(uplink_id, &dg[..n], now) {
                         Ok(actions) => {
+                            if mode == ConnectionMode::Secure
+                                && n >= 2
+                                && dg[0] == 0xFF
+                                && dg[1] == 0x02
+                            {
+                                handshake_pending = false;
+                            }
                             for act in actions {
                                 match act {
                                     Action::Deliver { data } => {
@@ -477,19 +574,36 @@ fn main() -> std::io::Result<()> {
                         }
                         Err(e) => {
                             eprintln!("Handshake error from {}: {:?}", from, e);
-                            // On handshake failure, try secondary if available
-                            if let Some(sec) = relay_secondary {
-                                if svc.relay_current() == Some(relay_primary) {
-                                    println!("Trying secondary relay {}", sec);
-                                    svc.set_relays(sec, Some(relay_primary));
-                                }
-                            }
+                            handshake_pending = mode == ConnectionMode::Secure;
+                            // The initiator is single-use; the bounded retry timer below
+                            // starts a fresh flight, while relay timeout controls failover.
                         }
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => return Err(e),
             }
+        }
+
+        // Retransmit a fresh single-use handshake flight while no receiver session
+        // exists. Retries do not reset the failure-detection clock, so a silent
+        // primary still fails over after the configured timeout.
+        if handshake_pending
+            && last_handshake_attempt.is_some_and(|last| now.duration_since(last) >= Duration::from_secs(1))
+        {
+            let relay_address = svc.relay_current().unwrap_or(relay_primary);
+            let relay_identity = relay_identity_for_address(
+                relay_address,
+                relay_primary,
+                relay_public,
+                relay_secondary,
+                secondary_relay_public,
+            ).ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "current relay has no configured identity",
+            ))?;
+            initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_address, now)?;
+            last_handshake_attempt = Some(now);
         }
 
         // Poll a bounded batch from the miniport's driver-owned TX queue only
@@ -502,6 +616,7 @@ fn main() -> std::io::Result<()> {
         // one packet while the kernel queue supplies backpressure.
         if let Some(device) = &driver_device {
             if svc.sessions() > 0
+                && !handshake_pending
                 && now.duration_since(last_driver_poll) >= Duration::from_millis(10)
             {
                 last_driver_poll = now;
@@ -742,6 +857,25 @@ mod ipc_capacity_tests {
         assert!(parse_relay_addresses(Some("0.0.0.0:4430"), None).is_err());
         assert!(parse_relay_addresses(None, Some("[::]:4431")).is_err());
         assert!(parse_relay_addresses(Some("127.0.0.1:4430"), Some("127.0.0.1:4430")).is_err());
+    }
+
+    #[test]
+    fn failover_uses_the_identity_configured_for_the_selected_endpoint() {
+        let primary: SocketAddr = "192.0.2.1:4430".parse().unwrap();
+        let secondary: SocketAddr = "192.0.2.2:4430".parse().unwrap();
+        let unknown: SocketAddr = "192.0.2.3:4430".parse().unwrap();
+        assert_eq!(
+            relay_identity_for_address(primary, primary, Some([1; 32]), Some(secondary), Some([2; 32])),
+            Some([1; 32]),
+        );
+        assert_eq!(
+            relay_identity_for_address(secondary, primary, Some([1; 32]), Some(secondary), Some([2; 32])),
+            Some([2; 32]),
+        );
+        assert_eq!(
+            relay_identity_for_address(unknown, primary, Some([1; 32]), Some(secondary), Some([2; 32])),
+            None,
+        );
     }
 
     #[test]
