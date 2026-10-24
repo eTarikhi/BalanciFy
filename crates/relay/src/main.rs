@@ -486,6 +486,7 @@ impl SecureRelay {
         self.handshake_attempts.insert(ip, (1, now));
     }
 
+    #[cfg(test)]
     fn check_rate_limit_handshake(&mut self, peer: std::net::SocketAddr, now: Instant) -> bool {
         match self.check_tracked_handshake_ip(peer.ip(), now) {
             Some(allowed) => allowed,

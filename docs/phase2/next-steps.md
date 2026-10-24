@@ -47,5 +47,5 @@ Current validation: the full local profile at `d630d5d` passed all twelve stages
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0041
-- Latest full local CI evidence: `target/local-ci/logs/20261024T204831Z/summary.txt` at `d630d5d`; latest pushed source head is `aa9a63a` (this push added the new-source limiter-state admission gate and its regression).
+- Latest full local CI evidence: `target/local-ci/logs/20261024T204831Z/summary.txt` at `d630d5d`; limiter-state admission gate and its regression are in `aa9a63a`, followed by the validation-status documentation refresh in `44a929f`.
 - ADR-0038 through ADR-0043 cover secure service startup, bounded raw-IP ingress, miniport TX queue/retry, kernel packet-boundary validation, and coordinated key-update safety
