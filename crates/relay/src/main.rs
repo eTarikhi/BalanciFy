@@ -347,6 +347,10 @@ impl SecureRelay {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
+        if self.sessions.contains_key(&session_id) {
+            self.total_rejected += 1;
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
         let eph = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
         let resp_payload = session_id.to_be_bytes().to_vec();
         let (msg2, transport_keys) = responder.write_message(eph, &resp_payload)?;
@@ -807,6 +811,46 @@ mod tests {
         assert_eq!(relay.sessions.len(), 1);
         let (payload, _keys) = initiator.read_message(&msg2).expect("msg2 ok");
         assert_eq!(payload, session_id.to_be_bytes());
+    }
+
+    #[test]
+    fn secure_relay_rejects_duplicate_session_id_without_replacing_session() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        let session_id = 42u64;
+        let now = Instant::now();
+
+        let mut first = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let first_msg = first.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &session_id.to_be_bytes(),
+        );
+        relay.handle_msg1(&first_msg, peer, now).expect("first handshake succeeds");
+
+        let mut second = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let second_msg = second.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &session_id.to_be_bytes(),
+        );
+        assert!(
+            relay.handle_msg1(&second_msg, peer, now + Duration::from_secs(1)).is_err(),
+            "a fresh handshake must not reuse an active session id"
+        );
+
+        assert_eq!(relay.sessions.len(), 1);
+        assert_eq!(relay.sessions[&session_id].created_at, now, "the original session must remain intact");
+        assert_eq!(relay.total_handshakes, 1);
+        assert_eq!(relay.total_rejected, 1);
     }
 
     #[test]
