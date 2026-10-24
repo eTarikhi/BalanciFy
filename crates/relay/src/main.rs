@@ -161,6 +161,14 @@ fn sweep_due(last_sweep: &mut Instant, now: Instant, interval: Duration) -> bool
     true
 }
 
+fn failure_log_due(last_failure_log: &mut Option<Instant>, now: Instant, interval: Duration) -> bool {
+    if last_failure_log.is_some_and(|last| now.duration_since(last) < interval) {
+        return false;
+    }
+    *last_failure_log = Some(now);
+    true
+}
+
 fn parse_listen_ports(value: Option<&str>) -> std::io::Result<Vec<u16>> {
     let Some(value) = value else { return Ok(vec![4430, 4431]); };
     if value.trim().is_empty() {
@@ -650,6 +658,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     let mut forward_socks: BTreeMap<u64, UdpSocket> = BTreeMap::new();
     let mut forward_buf = [0u8; 65535];
     let mut last_sweep = Instant::now();
+    let mut last_handshake_failure_log = None;
 
     loop {
         for (_idx, s) in sockets.iter().enumerate() {
@@ -697,10 +706,14 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                         }
                                     }
                                 }
-                                Err(e) => { eprintln!("Handshake msg1 from {} failed: {:?}", peer, e); }
+                                Err(e) => {
+                                    if failure_log_due(&mut last_handshake_failure_log, now, Duration::from_secs(1)) {
+                                        eprintln!("Handshake msg1 from {} failed: {:?} (further errors are rate-limited)", peer, e);
+                                    }
+                                }
                             }
-                        } else {
-                            eprintln!("Unknown handshake kind {} from {}", dg[1], peer);
+                        } else if failure_log_due(&mut last_handshake_failure_log, now, Duration::from_secs(1)) {
+                            eprintln!("Unknown handshake kind {} from {} (further errors are rate-limited)", dg[1], peer);
                         }
                     } else if n >= 20 && dg[0] == balancify_tunnel::WIRE_VERSION {
                         // Decode session id for forwarding mapping
@@ -799,6 +812,17 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
+
+    #[test]
+    fn relay_handshake_failure_logs_are_rate_limited() {
+        let start = Instant::now();
+        let mut last_log = None;
+        let interval = Duration::from_secs(1);
+
+        assert!(failure_log_due(&mut last_log, start, interval));
+        assert!(!failure_log_due(&mut last_log, start + Duration::from_millis(500), interval));
+        assert!(failure_log_due(&mut last_log, start + interval, interval));
+    }
 
     #[test]
     fn relay_sweep_scheduler_uses_elapsed_time_not_fresh_instant_age() {

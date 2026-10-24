@@ -163,3 +163,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay handshake response handling: the relay now installs peer/forwarding mappings only after the full Noise response datagram is sent. A socket send error or short send removes the just-created session so a client that never received msg2 cannot leave a slot allocated; added idempotent session-removal coverage.
 
 - Forwarding-socket admission: per-session upstream sockets (including their required read timeout) are now prepared before sending handshake msg2. If socket setup fails, the session is removed and no success response or peer mapping is emitted.
+
+- Relay error-log abuse control: malformed/unknown handshake traffic now shares a one-line-per-second failure-log throttle, keeping unauthenticated packet floods from turning stderr into an unbounded per-datagram workload. Added a monotonic throttle regression.
