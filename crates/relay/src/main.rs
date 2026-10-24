@@ -140,6 +140,12 @@ fn load_pinned_clients(
     })
 }
 
+fn create_forward_socket() -> std::io::Result<UdpSocket> {
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.set_read_timeout(Some(Duration::from_millis(10)))?;
+    Ok(socket)
+}
+
 fn forward_socket_for_session(
     forward_socks: &BTreeMap<u64, UdpSocket>,
     session_id: u64,
@@ -422,6 +428,14 @@ impl SecureRelay {
     fn sessions_for_ip(&self, ip: std::net::IpAddr) -> usize {
         self.sessions.values().filter(|s| s.peer_addr.ip() == ip).count()
     }
+    fn remove_session(&mut self, id: u64) -> bool {
+        if let Some(session) = self.sessions.remove(&id) {
+            self.total_ecn_echoed += session.ecn_echoed;
+            true
+        } else {
+            false
+        }
+    }
     fn handle_msg1(
         &mut self,
         msg1: &[u8],
@@ -515,9 +529,7 @@ impl SecureRelay {
             .filter(|(_, s)| now.duration_since(s.last_activity) >= idle_timeout)
             .map(|(id, _)| *id).collect();
         for id in &stale {
-            if let Some(sess) = self.sessions.remove(id) {
-                self.total_ecn_echoed += sess.ecn_echoed;
-            }
+            self.remove_session(*id);
         }
         // Sweep old handshake attempt entries
         let window = Duration::from_secs(60);
@@ -653,18 +665,37 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                     out.push(HANDSHAKE_VERSION);
                                     out.push(HANDSHAKE_MSG2);
                                     out.extend_from_slice(&msg2);
-                                    let _ = s.send_to(&out, peer);
-                                    peers.insert(session_id, peer);
-                                    if forward_addr.is_some() {
-                                        match UdpSocket::bind("0.0.0.0:0") {
-                                            Ok(fs) => {
-                                                let _ = fs.set_read_timeout(Some(Duration::from_millis(10)));
-                                                forward_socks.insert(session_id, fs);
+                                    let forward_socket = if forward_addr.is_some() {
+                                        match create_forward_socket() {
+                                            Ok(socket) => Some(socket),
+                                            Err(error) => {
+                                                relay.remove_session(session_id);
+                                                eprintln!("Failed to create forward socket for session {}: {}; handshake response not sent", session_id, error);
+                                                None
                                             }
-                                            Err(e) => eprintln!("Failed to create forward socket for session {}: {}", session_id, e),
+                                        }
+                                    } else {
+                                        None
+                                    };
+                                    if forward_addr.is_none() || forward_socket.is_some() {
+                                        match s.send_to(&out, peer) {
+                                            Ok(sent) if sent == out.len() => {
+                                                peers.insert(session_id, peer);
+                                                if let Some(socket) = forward_socket {
+                                                    forward_socks.insert(session_id, socket);
+                                                }
+                                                eprintln!("Handshake: new session {} from {} (total sessions {})", session_id, peer, relay.sessions.len());
+                                            }
+                                            Ok(sent) => {
+                                                relay.remove_session(session_id);
+                                                eprintln!("Handshake response to {} sent only {}/{} bytes; session {} removed", peer, sent, out.len(), session_id);
+                                            }
+                                            Err(error) => {
+                                                relay.remove_session(session_id);
+                                                eprintln!("Handshake response to {} failed: {}; session {} removed", peer, error, session_id);
+                                            }
                                         }
                                     }
-                                    eprintln!("Handshake: new session {} from {} (total sessions {})", session_id, peer, relay.sessions.len());
                                 }
                                 Err(e) => { eprintln!("Handshake msg1 from {} failed: {:?}", peer, e); }
                             }
@@ -1007,6 +1038,29 @@ mod tests {
         assert_eq!(relay.sessions.len(), 1);
         let (payload, _keys) = initiator.read_message(&msg2).expect("msg2 ok");
         assert_eq!(payload, session_id.to_be_bytes());
+    }
+
+    #[test]
+    fn failed_handshake_response_can_remove_the_unreachable_session() {
+        let relay_kp = balancify_crypto::StaticKeypair::generate();
+        let client_kp = balancify_crypto::StaticKeypair::generate();
+        let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
+        let mut initiator = balancify_crypto::Initiator::new(
+            client_kp.secret_bytes(),
+            relay_kp.public_bytes(),
+            PROLOGUE,
+        );
+        let session_id = 779u64;
+        let msg1 = initiator.write_message(
+            balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
+            &session_id.to_be_bytes(),
+        );
+        let peer = "127.0.0.1:1234".parse().unwrap();
+        relay.handle_msg1(&msg1, peer, Instant::now()).expect("handshake establishes session");
+
+        assert!(relay.remove_session(session_id));
+        assert!(relay.sessions.is_empty());
+        assert!(!relay.remove_session(session_id), "removal is idempotent");
     }
 
     #[test]

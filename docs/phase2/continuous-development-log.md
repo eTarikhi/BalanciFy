@@ -159,3 +159,7 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay maintenance scheduling: replaced `now.elapsed() % 10` (which measured age from a freshly captured instant, causing per-datagram sweeps/logging) with a monotonic 10-second deadline. Maintenance now runs after both packet handling and socket timeouts, allowing idle sessions and their forwarding sockets to be reclaimed without requiring fresh traffic; added deterministic scheduler regression.
 
 - Secure relay NAT rebinding: peer routing now follows a session only after a fresh authenticated, non-replayed tunnel frame; invalid/spoofed datagrams cannot redirect deferred ACKs or upstream replies. Added an end-to-end relay regression that verifies spoof rejection and valid rebinding.
+
+- Relay handshake response handling: the relay now installs peer/forwarding mappings only after the full Noise response datagram is sent. A socket send error or short send removes the just-created session so a client that never received msg2 cannot leave a slot allocated; added idempotent session-removal coverage.
+
+- Forwarding-socket admission: per-session upstream sockets (including their required read timeout) are now prepared before sending handshake msg2. If socket setup fails, the session is removed and no success response or peer mapping is emitted.
