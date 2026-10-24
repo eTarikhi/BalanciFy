@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
-Date: 2026-10-24
-Status: continuous on `arena/3f48d354-balancify`; its PR remains open. Full local profile at `d630d5d` passed all twelve stages, including 331 Linux Rust tests, release build, SPDX 2.3/3.0.1 validation, Windows/WSL workflow contracts, and portable driver tests (logs: `target/local-ci/logs/20261024T204831Z/`). The latest unsupported-datagram accounting regression and handshake-response rejection telemetry were added afterward; include the new test in the next consolidated Rust validation. Hardware/product acceptance remains tracked in the gated plan below.
+Date: 2026-10-25
+Status: continuous on `arena/3f48d354-balancify`; its PR remains open. Full local profile at `d630d5d` passed all twelve stages, including 331 Linux Rust tests, release build, SPDX 2.3/3.0.1 validation, Windows/WSL workflow contracts, and portable driver tests (logs: `target/local-ci/logs/20261024T204831Z/`). Relay regressions added afterward bring the current Rust source inventory to 332 tests; the latest quick profile passed at `target/local-ci/logs/20261024T211009Z/`, but it skips Rust, release, and SPDX stages. Include the newer relay tests in the next consolidated full run. Hardware/product acceptance remains tracked in the gated plan below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -23,7 +23,7 @@ User instruction: "continue the development process without stopping to report" 
 - PR #9/#10 and ADR-0037 established NdisMediumIP/raw-IP handling, OID and MTU parameter support, paused-injection rejection, owned NBL buffers, and a portable-tested pause drain state machine. PR #19 adds the bounded reverse TX queue and service polling (ADR-0040); `SET_QUANTA` remains unsupported until a driver scheduler consumes it. Current x64/ARM64 WDK builds and unsigned PE/INF checks pass in CI. This does not establish installation or runtime behavior.
 - ETW uplink-up/down and bond-revert events were already implemented (ADR-0027 / commit 655d91d). Commit `7bb90d7` adds the real Windows EventRegister/EventWrite sink and event-payload tests; CI `39602034920` passed on Windows and Ubuntu, including relay-endpoint redaction. A live trace session and useful decoding remain unverified; no manifest is installed.
 
-Current validation: the full local profile at `d630d5d` passed all twelve stages: 331 Linux Rust tests, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency audit, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. Subsequent quick profiles passed after the unsupported-datagram accounting and handshake-response telemetry changes. Include the new Rust regression in the next consolidated run. These source/build checks do not establish hardware/runtime acceptance.
+Current validation: the full local profile at `d630d5d` passed all twelve stages: 331 Linux Rust tests, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency audit, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. The quick profile passed again at `target/local-ci/logs/20261024T211009Z/` after the latest relay admission regression; it ran 5 lab tests, 49 CI Python tests, and 12 portable driver tests, but skipped Rust, release, and SPDX checks. Include the current relay tests in the next consolidated full run. These source/build checks do not establish hardware/runtime acceptance.
 
 ## What remains (ordered, still without stopping)
 
@@ -37,7 +37,7 @@ Current validation: the full local profile at `d630d5d` passed all twelve stages
 
 ## Process
 
-- Keep CI green at all times: use the full profile for Ubuntu Rust/release, Windows workflow contract, lab, dependency audit, and SPDX validation; the latest completed full profile is logged at `7ae0033`, and `b56bcbc` adds one Rust regression for the next consolidated run.
+- Keep CI green at all times: use the full profile for Ubuntu Rust/release, Windows workflow contract, lab, dependency audit, and SPDX validation; the latest completed full profile is logged at `target/local-ci/logs/20261024T204831Z/summary.txt` (`d630d5d`). The current branch includes later Rust changes and needs a new consolidated full-profile run.
 - Use `gh run list --limit 1 --branch arena/3f48d354-balancify --json databaseId,conclusion` + commit check-runs to verify CI.
 - Fix bugs using web resources (RFC 8684 Sec.3.3, RFC 6356 LIA, DRR, RFC 6928) + deep thinking, deep learning, repeating, then continue developing app based on criteria (blueprint)
 - No third-party kernel component in data path (C2), only vetted/pinned crates, PassThrough test-only must never ship (Phase-4 audit)
@@ -47,5 +47,5 @@ Current validation: the full local profile at `d630d5d` passed all twelve stages
 
 - Blueprint Sec.4.5 failover, Sec.4.7.4 per-flow sessions, Sec.4.8 dependency policy, Sec.6.1 TAP-like adapter, Sec.6.2 WRH + flow classes, Sec.6.3 capacity, Sec.6.4 DRR + pacing + CC, Sec.6.5 health hysteresis, Sec.6.6 NAT keepalive, Sec.8.2 Diagnostics, Sec.8.3 installer, Sec.9.2 IPC + handshake, Sec.9.3 signing, Sec.9.5 HVCI, Sec.10.1 Rig A/B, Sec.10.3 acceptance rows, Sec.11.2 Wintun exception, S13 SBOM/VEX, S15 HVCI trio
 - ADRs 0003-0041
-- Latest full local CI evidence: `target/local-ci/logs/20261024T201038Z/summary.txt` at `7ae0033`; latest pushed source head is `b56bcbc`.
+- Latest full local CI evidence: `target/local-ci/logs/20261024T204831Z/summary.txt` at `d630d5d`; latest pushed source head is `aa9a63a` (this push added the new-source limiter-state admission gate and its regression).
 - ADR-0038 through ADR-0043 cover secure service startup, bounded raw-IP ingress, miniport TX queue/retry, kernel packet-boundary validation, and coordinated key-update safety
