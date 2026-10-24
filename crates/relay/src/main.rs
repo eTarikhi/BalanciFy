@@ -144,8 +144,10 @@ fn load_pinned_clients(
 
 fn create_forward_socket(upstream: std::net::SocketAddr) -> std::io::Result<UdpSocket> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.set_read_timeout(Some(Duration::from_millis(10)))?;
     socket.connect(upstream)?;
+    // The relay polls all session sockets on its event loop. A per-socket read
+    // timeout would serialize up to 10 ms of idle wait per session.
+    socket.set_nonblocking(true)?;
     Ok(socket)
 }
 
@@ -985,12 +987,32 @@ mod tests {
         rogue.send_to(b"forged upstream", forward_addr).unwrap();
 
         let mut buf = [0u8; 64];
-        let error = forward.recv(&mut buf).expect_err("connected UDP socket must filter other sources");
-        assert!(matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut));
+        let rogue_deadline = Instant::now() + Duration::from_millis(25);
+        while Instant::now() < rogue_deadline {
+            match forward.recv(&mut buf) {
+                Ok(n) => panic!("connected UDP socket accepted rogue payload: {:?}", &buf[..n]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("unexpected connected UDP receive error: {error}"),
+            }
+        }
 
         upstream.send_to(b"expected upstream", forward_addr).unwrap();
-        let n = forward.recv(&mut buf).unwrap();
-        assert_eq!(&buf[..n], b"expected upstream");
+        let expected_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match forward.recv(&mut buf) {
+                Ok(n) => {
+                    assert_eq!(&buf[..n], b"expected upstream");
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < expected_deadline, "expected upstream datagram was not received");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("unexpected connected UDP receive error: {error}"),
+            }
+        }
     }
 
     #[test]
