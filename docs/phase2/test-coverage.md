@@ -26,7 +26,7 @@ Status: continuous; push run 39799406998 and PR run 39799412825 passed all six j
   - replay.rs: 5 tests (new ephemeral not replay, same within window is replay, expired not replay, capacity evicts oldest, different ephemerals not replay)
   - lib.rs rekey: 3 tests (rekey changes key but keeps salt, rekey deterministic and one-way, transport keys rekey both directions)
 - ipc: 17 tests (wire contract, message round-trips, truncation/partial-frame handling, strict decoding, stable opcodes, loopback-only binding, fragmented/pipelined transport, event push, malformed-frame rejection, and 60-second timeout for idle unsubscribed clients)
-- relay: 16 tests
+- relay: 17 tests
   - Endpoint: two_paths_with_delay_gap_reassemble_in_order, ignores_garbage, deduplicates_duplicate_mode_copy, answers_probes, drains_gap_after_hold_cap, ordered_stream_survives_a_real_udp_socket
   - SecureRelay: secure_handshake_creates_session, secure_relay_rejects_duplicate_session_id_without_replacing_session, secure_relay_rejects_noncanonical_session_payload_length, rejects_unpinned_client, rejects_replay, secure_tunnel_after_handshake, enforces_rate_limit_and_session_cap, handshake_rate_limit_tracking_is_bounded_under_source_churn, rate_limits_handshakes_per_ip, relay_session_idle_timer_ignores_unauthenticated_datagrams
 - service: 40+ tests

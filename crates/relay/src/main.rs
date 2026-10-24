@@ -105,6 +105,14 @@ const HANDSHAKE_MSG2: u8 = 0x02;
 const PROLOGUE: &[u8] = b"balancify handshake v1";
 const MAX_TRACKED_HANDSHAKE_IPS: usize = 4096;
 
+fn load_pinned_clients(
+    store: &impl balancify_crypto::KeyStore,
+) -> std::io::Result<balancify_crypto::PinnedKeys> {
+    store.load_pinned().map_err(|error| {
+        std::io::Error::other(format!("failed to load pinned client identities: {error}"))
+    })
+}
+
 struct RateLimiter {
     /// Token bucket: tokens in bytes, refill rate bytes/sec
     tokens: u64,
@@ -512,7 +520,10 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)));
         }
     };
-    let pinned = store.load_pinned().unwrap_or_else(|_| PinnedKeys::new());
+    let pinned = load_pinned_clients(&store).map_err(|error| {
+        eprintln!("Failed to load pinned client identities from {:?}: {}", pinned_path, error);
+        error
+    })?;
     eprintln!("balancify-relay (secure mode): listening on UDP {:?}, state_dir={}, pinned_clients={}", ports, state_dir, pinned.len());
     eprintln!("  relay public key: {:02x?}...", &keypair.public_bytes()[..8]);
     let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
@@ -663,6 +674,25 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use balancify_tunnel::{FrameKind, Header, PassThrough, Sender, Sent};
+
+    #[test]
+    fn relay_refuses_a_corrupt_pinned_client_store() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("balancify-relay-pins-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        let store = balancify_crypto::FileKeyStore::new(&secret_path, &pinned_path);
+
+        assert!(load_pinned_clients(&store).unwrap().is_empty(), "a missing pin file remains an empty pin set");
+        std::fs::write(&pinned_path, [0xff]).unwrap();
+        assert!(load_pinned_clients(&store).is_err(), "corrupt pin state must not become an empty allow-all set");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn two_paths_with_delay_gap_reassemble_in_order() {
