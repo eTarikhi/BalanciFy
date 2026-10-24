@@ -151,3 +151,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay forwarding isolation: when a session-specific upstream socket is unavailable, the relay no longer falls back to another session sharing the same peer address. This prevents one session's plaintext from being sent through another session's egress mapping and ensures upstream replies cannot be attributed to the wrong tunnel keys; exact-session socket lookup is covered by a regression.
 
 - Relay forwarding configuration: an absent `BALANCIFY_FORWARD_ADDR` still selects documented lab echo mode, but a present malformed or non-Unicode setting now fails startup rather than silently disabling upstream forwarding. Added parser regressions for absent, valid, and invalid values.
+
+- Relay listen-port parsing: secure and lab modes now share strict comma-list parsing, rejecting malformed, empty, or duplicate ports instead of dropping invalid entries or starting with no listeners. Added coverage for defaults, valid lists, partial failures, empty fields, and duplicates.

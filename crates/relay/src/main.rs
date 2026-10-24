@@ -120,6 +120,28 @@ fn forward_socket_for_session(
     forward_socks.get(&session_id)
 }
 
+fn parse_listen_ports(value: Option<&str>) -> std::io::Result<Vec<u16>> {
+    let Some(value) = value else { return Ok(vec![4430, 4431]); };
+    if value.trim().is_empty() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "listen port list must not be empty"));
+    }
+    let mut ports = Vec::new();
+    for raw_port in value.split(',') {
+        let raw_port = raw_port.trim();
+        if raw_port.is_empty() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "listen port list contains an empty entry"));
+        }
+        let port = raw_port.parse::<u16>().map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("invalid listen port '{raw_port}': {error}"))
+        })?;
+        if ports.contains(&port) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("duplicate listen port: {port}")));
+        }
+        ports.push(port);
+    }
+    Ok(ports)
+}
+
 fn parse_forward_addr(
     setting: Result<String, std::env::VarError>,
 ) -> std::io::Result<Option<std::net::SocketAddr>> {
@@ -467,9 +489,7 @@ fn run() -> std::io::Result<()> {
     if args.first().map(|s| s == "secure").unwrap_or(false) {
         return run_secure(args.into_iter().skip(1).collect());
     }
-    let ports: Vec<u16> = args.first()
-        .map(|s| s.split(',').filter_map(|p| p.trim().parse().ok()).collect())
-        .unwrap_or_else(|| vec![4430, 4431]);
+    let ports = parse_listen_ports(args.first().map(String::as_str))?;
     let sockets: Vec<UdpSocket> = ports.iter().map(|p| UdpSocket::bind(("0.0.0.0", *p))).collect::<Result<_, _>>()?;
     for s in &sockets { s.set_read_timeout(Some(Duration::from_millis(100)))?; }
     eprintln!("balancify-relay (lab form; lab-crypto = NO CONFIDENTIALITY): listening on UDP {:?}", ports);
@@ -523,9 +543,7 @@ fn run() -> std::io::Result<()> {
 
 fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
-    let ports: Vec<u16> = args.first()
-        .map(|s| s.split(',').filter_map(|p| p.trim().parse().ok()).collect())
-        .unwrap_or_else(|| vec![4430, 4431]);
+    let ports = parse_listen_ports(args.first().map(String::as_str))?;
     let state_dir = std::env::var("BALANCIFY_STATE_DIR").unwrap_or_else(|_| {
         #[cfg(windows)]
         { std::env::var("ProgramData").map(|pd| format!("{}\\Balancify", pd)).unwrap_or_else(|_| "/tmp/balancify".to_string()) }
@@ -710,6 +728,16 @@ mod tests {
         assert!(load_pinned_clients(&store).is_err(), "corrupt pin state must not become an empty allow-all set");
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn listen_port_configuration_rejects_partial_or_empty_lists() {
+        assert_eq!(parse_listen_ports(None).unwrap(), vec![4430, 4431]);
+        assert_eq!(parse_listen_ports(Some("4430, 4431")).unwrap(), vec![4430, 4431]);
+        assert!(parse_listen_ports(Some("4430,not-a-port")).is_err());
+        assert!(parse_listen_ports(Some("4430,")).is_err());
+        assert!(parse_listen_ports(Some("")).is_err());
+        assert!(parse_listen_ports(Some("4430,4430")).is_err());
     }
 
     #[test]
