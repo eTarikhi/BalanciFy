@@ -458,13 +458,23 @@ impl SecureRelay {
     fn is_peer_allowed(&self, peer_static: &[u8; 32]) -> bool {
         if self.pinned_clients.is_empty() { true } else { self.pinned_clients.is_pinned(peer_static) }
     }
-    fn check_rate_limit_handshake(&mut self, peer: std::net::SocketAddr, now: Instant) -> bool {
-        let ip = peer.ip();
+    fn check_tracked_handshake_ip(&mut self, ip: std::net::IpAddr, now: Instant) -> Option<bool> {
+        let entry = self.handshake_attempts.get_mut(&ip)?;
         let window = Duration::from_secs(60);
         let max_per_window = 10; // 10 handshakes per minute per IP
-        if !self.handshake_attempts.contains_key(&ip)
-            && self.handshake_attempts.len() >= MAX_TRACKED_HANDSHAKE_IPS
-        {
+        if now.saturating_duration_since(entry.1) >= window {
+            *entry = (1, now);
+            Some(true)
+        } else if entry.0 >= max_per_window {
+            Some(false)
+        } else {
+            entry.0 += 1;
+            Some(true)
+        }
+    }
+
+    fn track_new_handshake_ip(&mut self, ip: std::net::IpAddr, now: Instant) {
+        if self.handshake_attempts.len() >= MAX_TRACKED_HANDSHAKE_IPS {
             // Bound state under source-address churn; evict the oldest window entry.
             if let Some(oldest_ip) = self.handshake_attempts.iter()
                 .min_by_key(|(_, (_, window_start))| *window_start)
@@ -473,15 +483,16 @@ impl SecureRelay {
                 self.handshake_attempts.remove(&oldest_ip);
             }
         }
-        let entry = self.handshake_attempts.entry(ip).or_insert((0, now));
-        if now.duration_since(entry.1) >= window {
-            *entry = (1, now);
-            true
-        } else if entry.0 >= max_per_window {
-            false
-        } else {
-            entry.0 += 1;
-            true
+        self.handshake_attempts.insert(ip, (1, now));
+    }
+
+    fn check_rate_limit_handshake(&mut self, peer: std::net::SocketAddr, now: Instant) -> bool {
+        match self.check_tracked_handshake_ip(peer.ip(), now) {
+            Some(allowed) => allowed,
+            None => {
+                self.track_new_handshake_ip(peer.ip(), now);
+                true
+            }
         }
     }
     fn sessions_for_ip(&self, ip: std::net::IpAddr) -> usize {
@@ -514,15 +525,19 @@ impl SecureRelay {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
-        // Cheap per-IP admission first so one over-quota source cannot drain the global bucket.
-        if !self.check_rate_limit_handshake(peer, now) {
+        // Check already-tracked IPs cheaply, but gate new-IP state churn (including the
+        // bounded-map eviction scan) and all later work with the aggregate limiter.
+        let tracked_ip_limit = self.check_tracked_handshake_ip(peer.ip(), now);
+        if tracked_ip_limit == Some(false) {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
-        // Bound aggregate unauthenticated work before the O(session-cap) IP scan or crypto.
         if !self.global_handshake_limiter.try_consume(now) {
             self.total_rejected += 1;
             return Err(balancify_crypto::HandshakeError::AuthFailed);
+        }
+        if tracked_ip_limit.is_none() {
+            self.track_new_handshake_ip(peer.ip(), now);
         }
         // Abuse: per-IP session cap; scan only after the aggregate admission gate.
         if self.sessions_for_ip(peer.ip()) >= self.max_sessions_per_ip {
@@ -1574,19 +1589,31 @@ mod tests {
     }
 
     #[test]
-    fn global_handshake_limit_rejects_before_parsing_or_allocating_session() {
+    fn global_handshake_limit_rejects_before_parsing_or_source_state_eviction() {
         let relay_kp = balancify_crypto::StaticKeypair::generate();
         let mut relay = SecureRelay::new(relay_kp, balancify_crypto::PinnedKeys::new());
         let now = Instant::now();
+        for address in 1..=MAX_TRACKED_HANDSHAKE_IPS as u32 {
+            relay.handshake_attempts.insert(
+                std::net::Ipv4Addr::from(address).into(),
+                (1, now),
+            );
+        }
         relay.global_handshake_limiter.tokens = 0.0;
         relay.global_handshake_limiter.last_refill = now;
-        let peer: std::net::SocketAddr = "192.0.2.10:1234".parse().unwrap();
+        let peer: std::net::SocketAddr = "203.0.113.10:1234".parse().unwrap();
+        let oldest_tracked_ip: std::net::IpAddr = std::net::Ipv4Addr::from(1u32).into();
 
         assert!(relay.handle_msg1(&[0], peer, now).is_err());
         let (sessions, handshakes, rejected, _, _, _) = relay.stats();
         assert_eq!(sessions, 0);
         assert_eq!(handshakes, 0);
         assert_eq!(rejected, 1);
+        assert_eq!(relay.handshake_attempts.len(), MAX_TRACKED_HANDSHAKE_IPS);
+        assert!(relay.handshake_attempts.contains_key(&oldest_tracked_ip),
+            "aggregate rejection must happen before source-map eviction");
+        assert!(!relay.handshake_attempts.contains_key(&peer.ip()),
+            "aggregate rejection must not allocate a new source-map entry");
     }
 
     #[test]
