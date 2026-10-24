@@ -16,6 +16,7 @@ const IOCTL_FUNCTION_DEQUEUE_TX: u32 = 0x804;
 const FILE_READ_ACCESS: u32 = 0x1;
 const TX_PACKET_HEADER_LEN: usize = 16;
 const TX_PACKET_VERSION: u32 = 1;
+#[cfg(windows)]
 const TX_PACKET_OUTPUT_LEN: usize = TX_PACKET_HEADER_LEN + MAX_INNER_PACKET_LEN;
 
 /// A dequeued miniport packet must remain in user mode while the service says

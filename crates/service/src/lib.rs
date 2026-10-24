@@ -2240,7 +2240,7 @@ mod tests {
 
     #[test]
     fn secure_handshake_establishes_transport_keys() {
-        use balancify_crypto::{EphemeralKeypair, Initiator, Responder, StaticKeypair, PinnedKeys};
+        use balancify_crypto::{EphemeralKeypair, PinnedKeys, Responder, StaticKeypair};
         let now = Instant::now();
         let relay_kp = StaticKeypair::generate();
         let client_kp = StaticKeypair::generate();

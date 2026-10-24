@@ -13,7 +13,6 @@ use balancify_service::driver_device::{should_retry_driver_tx, DriverDevice};
 use balancify_service::ipc::server::IpcServer;
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::{Service, ServiceConfig, Action};
-use std::collections::BTreeMap;
 use std::net::{UdpSocket, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};

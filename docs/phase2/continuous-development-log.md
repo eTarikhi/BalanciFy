@@ -5,6 +5,8 @@
 - The provided local full-profile logs show 306 Rust tests passing and a successful release build on `69b5804eda4fc9c6387732e3a2383dafb37ffac4`. The first run stopped at validator dependency installation due transient PyPI/network resolution; the later run completed all steps according to its summary.
 - A manual review of that later run found `validate-spdx-3.log` contained a JSON Schema error despite the validator process returning success: `software_sbomType` was a string, but SPDX 3.0.1 requires an array. Corrected the generated field to `["source"]` and added a regression assertion.
 - Added `tools/ci/validate_spdx3.py`, which uses the validator's documented library API and fails the CI step whenever its `ValidationResult` contains findings. Wired it into Linux, Windows, and GitHub validation so a nonzero CLI bug cannot hide schema errors.
+- The user reran the full profile on `e8dbc7ed919374feff94b26c078f39a6b8e8f22c`: 306 Rust tests, release build, SPDX 2.3, and fail-closed SPDX 3.0.1 validation all passed. This is local WSL evidence; it does not close WDK/hardware acceptance.
+- The full Rust log also exposed unused-import/assignment and target-specific dead-code warnings; safe warning cleanup is now in progress. The sandbox still has no Cargo toolchain, so the cleanup requires the user's next full run to confirm.
 - Validation in this sandbox: `bash tools/ci/local-ci.sh --quick` passes at branch head `b0b9a14`; Python CI suite 48/48, lab suite 5/5, portable driver suite 12/12 with strict C plus ASan/UBSan; dependency policy and shell syntax pass. Full Rust/SPDX validation was not rerun here because Cargo is unavailable. WDK installation/runtime, Driver Verifier/HVCI, and Rig B acceptance remain pending.
 
 Date: 2026-10-22

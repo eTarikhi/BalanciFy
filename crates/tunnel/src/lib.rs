@@ -227,7 +227,6 @@ struct RetxEntry {
     path: u8,
     sent_at: Instant,
     reinjections: u8,
-    session: u64,
 }
 
 struct FlowAckEntry {
@@ -655,7 +654,7 @@ impl<C: Crypto> Sender<C> {
         self.retx_bytes += plain.len();
         self.retx.insert(
             (session, seq),
-            RetxEntry { plain: plain.to_vec(), path, sent_at: now, reinjections: 0, session },
+            RetxEntry { plain: plain.to_vec(), path, sent_at: now, reinjections: 0 },
         );
         while self.retx_bytes > self.cfg.max_retx_bytes {
             let Some((_, oldest)) = self.retx.pop_first() else { break; };

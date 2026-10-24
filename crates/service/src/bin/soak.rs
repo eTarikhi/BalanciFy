@@ -58,7 +58,7 @@ fn main() {
     let mut total_packets = 0u64;
     let mut total_flaps = 0u64;
     let mut total_resumes = 0u64;
-    let mut start = Instant::now();
+    let start = Instant::now();
 
     // Simulate 72h as 7200 ticks (each tick 36s simulated, but we do fast loop)
     // For CI, we do 1000 iterations with random flaps and sleep/resume
