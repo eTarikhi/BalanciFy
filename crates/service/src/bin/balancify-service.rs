@@ -19,6 +19,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+const RELAY_FAILOVER_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectionMode {
     Secure,
@@ -414,7 +416,7 @@ fn main() -> std::io::Result<()> {
         svc.set_pinned_relays(pinned_relays);
     }
     svc.set_relays(relay_primary, relay_secondary);
-    svc.set_relay_failover_timeout(Duration::from_secs(10));
+    svc.set_relay_failover_timeout(RELAY_FAILOVER_TIMEOUT);
 
     // Simulate two uplinks with bound sockets
     let sock0 = UdpSocket::bind("0.0.0.0:0")?;
@@ -585,11 +587,11 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        // Retransmit a fresh single-use handshake flight while no receiver session
-        // exists. Retries do not reset the failure-detection clock, so a silent
-        // primary still fails over after the configured timeout.
+        // Retry only after the full failure-detection interval. This gives a
+        // delayed response time to match its single-use Noise initiator; a
+        // secondary switch sends a fresh flight immediately from the tick above.
         if handshake_pending
-            && last_handshake_attempt.is_some_and(|last| now.duration_since(last) >= Duration::from_secs(1))
+            && last_handshake_attempt.is_some_and(|last| now.duration_since(last) >= RELAY_FAILOVER_TIMEOUT)
         {
             let relay_address = svc.relay_current().unwrap_or(relay_primary);
             let relay_identity = relay_identity_for_address(

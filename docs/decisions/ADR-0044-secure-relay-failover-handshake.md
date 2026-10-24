@@ -10,7 +10,7 @@ The service could switch its selected relay after a liveness timeout, but the so
 
 ## Decision
 
-- Start relay failure detection when the first outbound handshake flight is sent. Retransmit fresh, single-use Noise initiators every second; retransmissions do not reset the failure timeout.
+- Start relay failure detection when the first outbound handshake flight is sent. Keep a single-use Noise initiator active for the full failure-detection interval; retry only after that interval if no secondary switch occurred. Retries do not reset the failure timeout, allowing delayed responses to match the active transcript.
 - On endpoint change, send a new handshake to that endpoint, using the primary or secondary identity explicitly associated with the selected address.
 - Validate an explicitly configured secondary identity against the pinned relay set before creating persistent service identity state. The secondary identity defaults to the primary identity to support replicated relays sharing a static key.
 - `BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY` is accepted only when a secondary endpoint is configured; it must be strict nonzero 32-byte hex and pinned whenever the pin store is nonempty.
