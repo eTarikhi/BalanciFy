@@ -495,6 +495,14 @@ impl SecureRelay {
             false
         }
     }
+    fn abort_handshake_session(&mut self, id: u64) -> bool {
+        if self.remove_session(id) {
+            self.total_rejected += 1;
+            true
+        } else {
+            false
+        }
+    }
     fn handle_msg1(
         &mut self,
         msg1: &[u8],
@@ -775,7 +783,7 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                         match create_forward_socket(upstream) {
                                             Ok(socket) => Some(socket),
                                             Err(error) => {
-                                                relay.remove_session(session_id);
+                                                relay.abort_handshake_session(session_id);
                                                 eprintln!("Failed to create forward socket for session {}: {}; handshake response not sent", session_id, error);
                                                 None
                                             }
@@ -793,11 +801,11 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                                                 eprintln!("Handshake: new session {} from {} (total sessions {})", session_id, peer, relay.sessions.len());
                                             }
                                             Ok(sent) => {
-                                                relay.remove_session(session_id);
+                                                relay.abort_handshake_session(session_id);
                                                 eprintln!("Handshake response to {} sent only {}/{} bytes; session {} removed", peer, sent, out.len(), session_id);
                                             }
                                             Err(error) => {
-                                                relay.remove_session(session_id);
+                                                relay.abort_handshake_session(session_id);
                                                 eprintln!("Handshake response to {} failed: {}; session {} removed", peer, error, session_id);
                                             }
                                         }
@@ -1227,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_handshake_response_can_remove_the_unreachable_session() {
+    fn failed_handshake_response_removes_session_and_counts_rejection() {
         let relay_kp = balancify_crypto::StaticKeypair::generate();
         let client_kp = balancify_crypto::StaticKeypair::generate();
         let mut relay = SecureRelay::new(relay_kp.clone(), balancify_crypto::PinnedKeys::new());
@@ -1244,9 +1252,11 @@ mod tests {
         let peer = "127.0.0.1:1234".parse().unwrap();
         relay.handle_msg1(&msg1, peer, Instant::now()).expect("handshake establishes session");
 
-        assert!(relay.remove_session(session_id));
+        assert!(relay.abort_handshake_session(session_id));
         assert!(relay.sessions.is_empty());
-        assert!(!relay.remove_session(session_id), "removal is idempotent");
+        assert_eq!(relay.total_rejected, 1, "a failed handshake response is included in rejection telemetry");
+        assert!(!relay.abort_handshake_session(session_id), "an already removed handshake cannot be counted twice");
+        assert_eq!(relay.total_rejected, 1);
     }
 
     #[test]
