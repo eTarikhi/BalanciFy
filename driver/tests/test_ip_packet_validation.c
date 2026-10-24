@@ -55,6 +55,16 @@ static void test_ipv4_tcp_udp_and_fragment_bounds(void) {
         first_fragment[6] = 0x20; /* More Fragments; transport header may be split */
         first_fragment[9] = 6;
         assert(BalancifyIsValidIpPacket(first_fragment, sizeof(first_fragment), 1500));
+        first_fragment[6] = 0x60; /* DF and fragmentation cannot be combined */
+        assert(!BalancifyIsValidIpPacket(first_fragment, sizeof(first_fragment), 1500));
+    }
+    {
+        unsigned char empty_fragment[20] = { 0x45, 0, 0, 20 };
+        unsigned char unaligned_fragment[29] = { 0x45, 0, 0, 29 };
+        empty_fragment[6] = 0x20;
+        unaligned_fragment[6] = 0x20;
+        assert(!BalancifyIsValidIpPacket(empty_fragment, sizeof(empty_fragment), 1500));
+        assert(!BalancifyIsValidIpPacket(unaligned_fragment, sizeof(unaligned_fragment), 1500));
     }
 }
 
@@ -104,16 +114,29 @@ static void test_ipv6_extension_and_transport_bounds(void) {
     }
 
     {
-        unsigned char fragment[48] = { 0x60, 0, 0, 0, 0, 8 };
+        unsigned char fragment[56] = { 0x60, 0, 0, 0, 0, 16 };
         fragment[6] = 44;
         fragment[40] = 6;
-        fragment[43] = 1; /* More Fragments: transport header may be split */
+        fragment[43] = 1; /* More Fragments, with an aligned 8-byte payload */
         assert(BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
         fragment[41] = 1; /* Reserved byte must be zero */
         assert(!BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
         fragment[41] = 0;
         fragment[43] = 3; /* Reserved fragment-field bit must be zero */
         assert(!BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
+    }
+
+    {
+        unsigned char empty_fragment[48] = { 0x60, 0, 0, 0, 0, 8 };
+        unsigned char unaligned_fragment[55] = { 0x60, 0, 0, 0, 0, 15 };
+        empty_fragment[6] = 44;
+        unaligned_fragment[6] = 44;
+        empty_fragment[40] = 17;
+        unaligned_fragment[40] = 17;
+        empty_fragment[43] = 1; /* More Fragments without payload */
+        unaligned_fragment[43] = 1; /* More Fragments with a 7-byte payload */
+        assert(!BalancifyIsValidIpPacket(empty_fragment, sizeof(empty_fragment), 1500));
+        assert(!BalancifyIsValidIpPacket(unaligned_fragment, sizeof(unaligned_fragment), 1500));
     }
 }
 

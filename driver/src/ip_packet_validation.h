@@ -50,11 +50,19 @@ static int BalancifyIsValidIpv4Packet(
     size_t headerLength = (size_t)(packet[0] & 0x0Fu) * 4u;
     size_t totalLength = (size_t)BalancifyReadNetworkU16(packet + 2u);
     unsigned int fragment = BalancifyReadNetworkU16(packet + 6u);
+    size_t fragmentPayloadLength;
     int fragmented = (fragment & 0x3FFFu) != 0u;
 
     if (headerLength < 20u || headerLength > packetLength ||
         totalLength < headerLength || totalLength != packetLength ||
         (fragment & 0x8000u) != 0u) {
+        return 0;
+    }
+    fragmentPayloadLength = totalLength - headerLength;
+    if (fragmented && (
+            (fragment & 0x4000u) != 0u ||
+            fragmentPayloadLength == 0u ||
+            ((fragment & 0x2000u) != 0u && (fragmentPayloadLength % 8u) != 0u))) {
         return 0;
     }
     return BalancifyIsValidTransport(
@@ -88,6 +96,11 @@ static int BalancifyIsValidIpv6Packet(
             fragmentField = BalancifyReadNetworkU16(packet + offset + 2u);
             if ((fragmentField & 0x0006u) != 0u) return 0;
             if ((fragmentField & 0xFFF9u) != 0u) {
+                size_t fragmentPayloadLength = totalLength - offset - 8u;
+                if (fragmentPayloadLength == 0u ||
+                    ((fragmentField & 0x0001u) != 0u && (fragmentPayloadLength % 8u) != 0u)) {
+                    return 0;
+                }
                 // Non-atomic fragments do not need a transport header here.
                 // The service's bounded parser applies the same rule.
                 return 1;

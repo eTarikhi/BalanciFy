@@ -87,6 +87,14 @@ fn parse_ipv4(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
         return Err(PacketFlowError::InvalidIpv4Header);
     }
     let fragmented = fragment & 0x3fff != 0;
+    let fragment_payload_len = total_len - header_len;
+    if fragmented
+        && ((fragment & 0x4000 != 0)
+            || fragment_payload_len == 0
+            || (fragment & 0x2000 != 0 && fragment_payload_len % 8 != 0))
+    {
+        return Err(PacketFlowError::InvalidIpv4Header);
+    }
     let protocol = packet[9];
     let source = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
     let destination = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
@@ -154,6 +162,12 @@ fn parse_ipv6(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
             }
             let is_fragmented = fragment_field & 0xfff9 != 0;
             if is_fragmented {
+                let fragment_payload_len = total_len - end;
+                if fragment_payload_len == 0
+                    || (fragment_field & 0x0001 != 0 && fragment_payload_len % 8 != 0)
+                {
+                    return Err(PacketFlowError::InvalidIpv6Extension);
+                }
                 // All fragments carry the same immediate post-fragment
                 // protocol value, even when an extension header follows it.
                 return Ok(FlowKey::new(
@@ -311,13 +325,32 @@ mod tests {
 
     #[test]
     fn fragments_share_a_portless_ipv4_flow_key() {
-        let first = ipv4(6, &tcp_header(1234, 443), 0x2000, false);
+        let mut first_payload = tcp_header(1234, 443).to_vec();
+        first_payload.extend_from_slice(&[0; 4]); // 24-byte non-final fragment payload
+        let first = ipv4(6, &first_payload, 0x2000, false);
         let later = ipv4(6, &[0xaa; 8], 1, false);
         let first_key = flow_key_from_packet(&first).unwrap();
         let later_key = flow_key_from_packet(&later).unwrap();
         assert_eq!(first_key, later_key);
         assert_eq!(first_key.src.port(), 0);
         assert_eq!(first_key.dst.port(), 0);
+    }
+
+    #[test]
+    fn rejects_invalid_ipv4_fragment_payload_lengths_and_df() {
+        assert_eq!(
+            flow_key_from_packet(&ipv4(17, &[], 0x2000, false)),
+            Err(PacketFlowError::InvalidIpv4Header),
+        );
+        assert_eq!(
+            flow_key_from_packet(&ipv4(17, &[0; 9], 0x2000, false)),
+            Err(PacketFlowError::InvalidIpv4Header),
+        );
+        assert_eq!(
+            flow_key_from_packet(&ipv4(17, &[0; 8], 0x6000, false)),
+            Err(PacketFlowError::InvalidIpv4Header),
+        );
+        assert!(flow_key_from_packet(&ipv4(17, &[0xaa], 1, false)).is_ok());
     }
 
     #[test]
@@ -355,6 +388,7 @@ mod tests {
     fn ipv6_fragmented_packets_use_a_consistent_portless_key() {
         let mut first_fragment = vec![6, 0, 0, 1, 0, 0, 0, 1]; // M bit set
         first_fragment.extend_from_slice(&tcp_header(1234, 443));
+        first_fragment.extend_from_slice(&[0; 4]); // 24-byte non-final fragment payload
         let later_fragment = vec![6, 0, 0, 8, 0, 0, 0, 1, 0xaa, 0xbb];
         let first = flow_key_from_packet(&ipv6(44, &first_fragment)).unwrap();
         let later = flow_key_from_packet(&ipv6(44, &later_fragment)).unwrap();
@@ -380,6 +414,26 @@ mod tests {
             flow_key_from_packet(&ipv6(44, &reserved_bits)),
             Err(PacketFlowError::InvalidIpv6Extension),
         );
+    }
+
+    #[test]
+    fn rejects_invalid_ipv6_nonfinal_fragment_payload_lengths() {
+        let empty_nonfinal_fragment = [17, 0, 0, 1, 0, 0, 0, 0];
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &empty_nonfinal_fragment)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+
+        let mut short_nonfinal_fragment = empty_nonfinal_fragment.to_vec();
+        short_nonfinal_fragment.extend_from_slice(&[0xaa; 7]);
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &short_nonfinal_fragment)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+
+        let mut aligned_nonfinal_fragment = empty_nonfinal_fragment.to_vec();
+        aligned_nonfinal_fragment.extend_from_slice(&[0xaa; 8]);
+        assert!(flow_key_from_packet(&ipv6(44, &aligned_nonfinal_fragment)).is_ok());
     }
 
     #[test]
