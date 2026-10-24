@@ -1,0 +1,32 @@
+   Compiling balancify-service v0.1.0 (/mnt/c/Users/Administrator/Desktop/Git-Clones/BalanciFy/crates/service)
+   Compiling balancify-relay v0.1.0 (/mnt/c/Users/Administrator/Desktop/Git-Clones/BalanciFy/crates/relay)
+warning: unused import: `PinnedKeys`
+   --> crates/relay/src/main.rs:743:52
+    |
+743 |     use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
+    |                                                    ^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0425]: cannot find function `new_service` in this scope
+    --> crates/service/src/lib.rs:2423:23
+     |
+2423 |         let mut svc = new_service();
+     |                       ^^^^^^^^^^^ not found in this scope
+
+warning: fields `id` and `peer_static` are never read
+   --> crates/relay/src/main.rs:291:5
+    |
+290 | struct RelaySession {
+    |        ------------ fields in this struct
+291 |     id: u64,
+    |     ^^
+292 |     peer_static: [u8; 32],
+    |     ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `balancify-service` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+warning: `balancify-relay` (bin "balancify-relay" test) generated 2 warnings (run `cargo fix --bin "balancify-relay" -p balancify-relay --tests` to apply 1 suggestion)
