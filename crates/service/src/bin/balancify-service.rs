@@ -574,9 +574,9 @@ fn main() -> std::io::Result<()> {
                         }
                         Err(e) => {
                             eprintln!("Handshake error from {}: {:?}", from, e);
-                            handshake_pending = mode == ConnectionMode::Secure;
-                            // The initiator is single-use; the bounded retry timer below
-                            // starts a fresh flight, while relay timeout controls failover.
+                            // If a handshake was pending, keep it pending for the bounded
+                            // fresh-flight retry. An unsolicited/duplicate response must
+                            // not suspend an already-established secure session.
                         }
                     }
                 }
