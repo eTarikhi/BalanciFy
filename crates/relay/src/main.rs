@@ -113,6 +113,13 @@ fn load_pinned_clients(
     })
 }
 
+fn forward_socket_for_session(
+    forward_socks: &BTreeMap<u64, UdpSocket>,
+    session_id: u64,
+) -> Option<&UdpSocket> {
+    forward_socks.get(&session_id)
+}
+
 struct RateLimiter {
     /// Token bucket: tokens in bytes, refill rate bytes/sec
     tokens: u64,
@@ -588,12 +595,10 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
                             for payload in payloads {
                                 if let Some(fa) = forward_addr {
                                     if let Some(sid) = session_id_opt {
-                                        if let Some(fs) = forward_socks.get(&sid) {
+                                        // Never borrow another session's egress socket: its replies
+                                        // are routed back through a different tunnel key.
+                                        if let Some(fs) = forward_socket_for_session(&forward_socks, sid) {
                                             let _ = fs.send_to(&payload, fa);
-                                        } else if let Some((found_sid, _)) = peers.iter().find(|(_, p)| **p == peer) {
-                                            if let Some(fs) = forward_socks.get(found_sid) {
-                                                let _ = fs.send_to(&payload, fa);
-                                            }
                                         }
                                     }
                                 } else {
@@ -692,6 +697,19 @@ mod tests {
         assert!(load_pinned_clients(&store).is_err(), "corrupt pin state must not become an empty allow-all set");
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn forwarding_socket_lookup_does_not_cross_sessions() {
+        let socket_a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let socket_b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr_a = socket_a.local_addr().unwrap();
+        let addr_b = socket_b.local_addr().unwrap();
+        let forward_socks = BTreeMap::from([(10, socket_a), (20, socket_b)]);
+
+        assert_eq!(forward_socket_for_session(&forward_socks, 10).unwrap().local_addr().unwrap(), addr_a);
+        assert_eq!(forward_socket_for_session(&forward_socks, 20).unwrap().local_addr().unwrap(), addr_b);
+        assert!(forward_socket_for_session(&forward_socks, 30).is_none());
     }
 
     #[test]

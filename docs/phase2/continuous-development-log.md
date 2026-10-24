@@ -147,3 +147,5 @@ This log records what was done while continuing without stopping, after ADR-0015
 - Relay source-churn hardening: per-IP handshake-rate state is capped at 4096 entries; when full, a new source replaces the oldest window entry. A focused regression fills the table, adds a new IP, and verifies the bound and deterministic oldest-entry eviction.
 
 - Relay pin-store fail-closed hardening: secure startup now propagates pinned-client storage errors rather than replacing corrupt/unreadable state with an empty (allow-all) pin set. A regression confirms a missing file retains the documented empty-set behavior while malformed stored data is rejected.
+
+- Relay forwarding isolation: when a session-specific upstream socket is unavailable, the relay no longer falls back to another session sharing the same peer address. This prevents one session's plaintext from being sent through another session's egress mapping and ensures upstream replies cannot be attributed to the wrong tunnel keys; exact-session socket lookup is covered by a regression.
