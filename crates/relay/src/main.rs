@@ -710,6 +710,7 @@ fn run() -> std::io::Result<()> {
 fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys};
     let ports = parse_listen_args(&args)?;
+    let forward_addr = parse_forward_addr(std::env::var("BALANCIFY_FORWARD_ADDR"))?;
     let state_dir = resolve_state_dir(std::env::var_os("BALANCIFY_STATE_DIR"), default_state_dir())?;
     let secret_path = state_dir.join("relay_secret.key");
     let pinned_path = state_dir.join("pinned_clients.keys");
@@ -736,7 +737,6 @@ fn run_secure(args: Vec<String>) -> std::io::Result<()> {
     // If BALANCIFY_FORWARD_ADDR is set (e.g. 127.0.0.1:8080), decrypted payloads are forwarded via UDP
     // to that address, and replies are re-encrypted back to the client session.
     // If not set, we echo payloads (lab mode).
-    let forward_addr = parse_forward_addr(std::env::var("BALANCIFY_FORWARD_ADDR"))?;
     if let Some(fa) = forward_addr {
         eprintln!("Forwarding enabled: decrypted payloads -> {} (stable egress)", fa);
     } else {
