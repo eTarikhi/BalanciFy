@@ -62,6 +62,7 @@ class WindowsWorkflowTests(unittest.TestCase):
         self.assertIn(r"$devicePath = '\\.\Balancify'", DRIVER_PREFLIGHT)
         self.assertIn("[uint32]0x80000000, # GENERIC_READ", DRIVER_PREFLIGHT)
         self.assertIn("$statsSize = 48", DRIVER_PREFLIGHT)
+        self.assertIn("[DllImport(\"kernel32.dll\", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]", DRIVER_PREFLIGHT)
         self.assertIn("[Out] byte[] outputBuffer", DRIVER_PREFLIGHT)
         self.assertIn("GET_STATS (read-only)", DRIVER_PREFLIGHT)
         self.assertIn("no packet was injected or dequeued", DRIVER_PREFLIGHT)

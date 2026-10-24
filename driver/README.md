@@ -48,7 +48,7 @@ strings x64\Release\balancify.sys | findstr BlaB
 ```
 
 **Test (real VM required):**
-- After test-signing and installing the driver, run `powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\inspect-driver-device.ps1` from an elevated PowerShell. This read-only preflight opens the privileged control device, calls `GET_STATS`, and writes OS/device counters to ignored `target/local-wdk/runtime-checks/`; stop the service first because its control-device handle is exclusive. It does not inject or dequeue packets and is not a packet-path acceptance test.
+- After test-signing and installing the driver, run `powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\inspect-driver-device.ps1` from the repository root in an elevated PowerShell. This read-only preflight opens the privileged control device, calls `GET_STATS`, and writes OS/device counters to ignored `target/local-wdk/runtime-checks/`; stop the service first because its control-device handle is exclusive. It does not inject or dequeue packets and is not a packet-path acceptance test.
 - Hyper-V VM Gen2 Secure Boot on vTPM VBS on, Memory Integrity on/off
 - Enable test-signing: `bcdedit /set testsigning on`, reboot
 - Install: `pnputil /add-driver driver\balancify.inf /install`

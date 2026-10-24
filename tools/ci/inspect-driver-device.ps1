@@ -17,7 +17,7 @@ using Microsoft.Win32.SafeHandles;
 
 public static class BalanciFyDriverNative
 {
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     public static extern SafeFileHandle CreateFileW(
         string fileName,
         uint desiredAccess,
