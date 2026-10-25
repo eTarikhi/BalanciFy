@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 
 namespace BalanciFy.App;
 
@@ -409,9 +410,11 @@ public sealed partial class MainWindow : Window
             if (rule.Id >= 1_000)
             {
                 var editButton = new Button { Content = "Edit", Tag = rule.Id };
+                AutomationProperties.SetName(editButton, $"Edit rule {rule.Name}");
                 editButton.Click += EditRuleButton_Click;
                 row.Children.Add(editButton);
                 var removeButton = new Button { Content = "Remove", Tag = rule.Id };
+                AutomationProperties.SetName(removeButton, $"Remove rule {rule.Name}");
                 removeButton.Click += RemoveRuleButton_Click;
                 row.Children.Add(removeButton);
             }

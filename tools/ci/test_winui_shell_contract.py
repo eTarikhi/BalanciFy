@@ -91,6 +91,9 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("TimeoutException", WINDOW)
         self.assertIn("Windows 11 x64 or ARM64", GUIDE)
         self.assertIn("WSL is not a local prerequisite", GUIDE)
+        self.assertIn("AutomationProperties.SetName(editButton", WINDOW)
+        self.assertIn("AutomationProperties.SetName(removeButton", WINDOW)
+        self.assertIn('AutomationProperties.LiveSetting="Polite"', (APP_DIR / "MainWindow.xaml").read_text(encoding="utf-8"))
 
     def test_user_preferences_are_bounded_atomic_and_reapplied(self):
         self.assertIn("Environment.SpecialFolder.LocalApplicationData", PREFERENCES)

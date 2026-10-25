@@ -129,7 +129,10 @@
                                 Click="ExportSupportBundleButton_Click" />
                     </StackPanel>
                     <TextBlock x:Name="DiagnosticsStatsText" Visibility="Collapsed" TextWrapping="Wrap" />
-                    <TextBlock x:Name="SelfTestResultText" Visibility="Collapsed" TextWrapping="Wrap" />
+                    <TextBlock x:Name="SelfTestResultText"
+                               Visibility="Collapsed"
+                               TextWrapping="Wrap"
+                               AutomationProperties.LiveSetting="Polite" />
                     <TextBlock x:Name="PageMessage" Text="" TextWrapping="Wrap" Opacity="0.8" />
                 </StackPanel>
             </ScrollViewer>
