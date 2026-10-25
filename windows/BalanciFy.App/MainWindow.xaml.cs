@@ -434,7 +434,7 @@ public sealed partial class MainWindow : Window
         PageMessage.Text = page switch
         {
             "rules" => "Built-in rules are read-only. Add, edit, or remove custom rules below; changes remain in memory and reset when the service restarts.",
-            "diagnostics" => "The status below is read directly from the local BalanciFy service. Detailed diagnostics and support-bundle export are under development.",
+            "diagnostics" => "Service counters and the capacity self-test are read from the local service. Export creates a redacted JSON bundle you can review or share from the save location you choose.",
             "about" => "BalanciFy is a Windows-first multi-WAN bonding project. This WinUI shell talks only to the local service over its ACL-protected named pipe.",
             _ => string.Empty,
         };
