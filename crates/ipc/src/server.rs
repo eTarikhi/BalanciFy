@@ -109,7 +109,6 @@ impl NamedPipeServer {
                 return Err(error);
             }
         }
-        validate_client_session(handle)?;
 
         // Nonblocking reads let the shared stream loop deliver subscribed
         // events and enforce idle-client limits without a second pipe thread.
@@ -227,12 +226,16 @@ fn create_named_pipe_instance(name: &[u16], first_instance: bool) -> io::Result<
     if handle == INVALID_HANDLE_VALUE {
         return Err(last_os_error());
     }
-    Ok(NamedPipeStream { handle })
+    Ok(NamedPipeStream {
+        handle,
+        peer_auth_pending: true,
+    })
 }
 
 #[cfg(windows)]
 pub struct NamedPipeStream {
     handle: *mut std::ffi::c_void,
+    peer_auth_pending: bool,
 }
 
 #[cfg(windows)]
@@ -272,7 +275,10 @@ impl NamedPipeStream {
             unsafe { WaitNamedPipeW(name.as_ptr(), 100); }
             std::thread::sleep(Duration::from_millis(10));
         };
-        let stream = Self { handle };
+        let stream = Self {
+            handle,
+            peer_auth_pending: false,
+        };
         let mut mode = PIPE_NOWAIT;
         if unsafe { SetNamedPipeHandleState(handle, &mut mode, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
             return Err(last_os_error());
@@ -308,6 +314,10 @@ impl Read for NamedPipeStream {
             )
         } != 0
         {
+            if read > 0 && self.peer_auth_pending {
+                validate_client_session(self.handle)?;
+                self.peer_auth_pending = false;
+            }
             return Ok(read as usize);
         }
         let error = last_os_error();
