@@ -14,6 +14,7 @@ public sealed partial class MainWindow : Window
     private bool _hasPreferencesToRestore;
     private bool _preferencesSynchronized;
     private bool _serviceDisconnected;
+    private string? _preferencesLoadWarning;
     private bool _loadingSettings;
     private bool _settingsDirty;
     private bool _rulesLoaded;
@@ -57,9 +58,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             _preferencesSynchronized = true;
-            ConnectionInfo.Severity = InfoBarSeverity.Warning;
-            ConnectionInfo.Title = "Saved preferences could not be loaded";
-            ConnectionInfo.Message = $"Saved local preferences were ignored: {error.Message}";
+            _preferencesLoadWarning = $"Saved local preferences were ignored: {error.Message}";
         }
     }
 
@@ -185,6 +184,7 @@ public sealed partial class MainWindow : Window
                 Array.Empty<FlowRuleSnapshot>());
             _hasPreferencesToRestore = false;
             _preferencesSynchronized = true;
+            _preferencesLoadWarning = null;
             _settingsDirty = false;
             ApplySettingsButton.IsEnabled = false;
             DiscardSettingsButton.IsEnabled = false;
@@ -249,6 +249,7 @@ public sealed partial class MainWindow : Window
                 _preferences = savedPreferences;
                 _hasPreferencesToRestore = true;
                 _preferencesSynchronized = true;
+                _preferencesLoadWarning = null;
                 ConnectionInfo.Severity = InfoBarSeverity.Success;
                 ConnectionInfo.Title = "Settings applied and saved";
                 ConnectionInfo.Message = "The service accepted the policy settings, which are also saved for this Windows user.";
@@ -460,6 +461,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
+                _preferencesLoadWarning = null;
                 ConnectionInfo.Message = $"{successMessage} This shell's custom rules are saved for this Windows user.";
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -690,9 +692,18 @@ public sealed partial class MainWindow : Window
                 snapshot = await IpcClient.GetStatusAsync(timeout.Token);
             }
             _serviceDisconnected = false;
-            ConnectionInfo.Severity = InfoBarSeverity.Success;
-            ConnectionInfo.Title = "Connected to the BalanciFy service";
-            ConnectionInfo.Message = $"Local named pipe · refreshed {DateTime.Now:T}";
+            if (_preferencesLoadWarning is { } preferencesWarning)
+            {
+                ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                ConnectionInfo.Title = "Saved preferences were ignored";
+                ConnectionInfo.Message = preferencesWarning;
+            }
+            else
+            {
+                ConnectionInfo.Severity = InfoBarSeverity.Success;
+                ConnectionInfo.Title = "Connected to the BalanciFy service";
+                ConnectionInfo.Message = $"Local named pipe · refreshed {DateTime.Now:T}";
+            }
             ServiceVersionText.Text = snapshot.ServiceVersion;
             SchemaText.Text = $"IPC schema {snapshot.SchemaVersion} · active flows {snapshot.ActiveFlows}";
             _preferences ??= new UiPreferences(
