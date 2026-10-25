@@ -423,8 +423,6 @@ extern "system" {
         security_attributes: *mut SecurityAttributes) -> *mut std::ffi::c_void;
     fn ConnectNamedPipe(pipe: *mut std::ffi::c_void, overlapped: *mut std::ffi::c_void) -> i32;
     fn GetNamedPipeClientSessionId(pipe: *mut std::ffi::c_void, session_id: *mut u32) -> i32;
-    fn ImpersonateNamedPipeClient(pipe: *mut std::ffi::c_void) -> i32;
-    fn RevertToSelf() -> i32;
     fn SetNamedPipeHandleState(pipe: *mut std::ffi::c_void, mode: *mut u32,
         max_collection_count: *mut u32, collect_data_timeout: *mut u32) -> i32;
     fn ReadFile(handle: *mut std::ffi::c_void, buffer: *mut std::ffi::c_void, bytes_to_read: u32,
@@ -439,6 +437,8 @@ extern "system" {
 #[cfg(windows)]
 #[link(name = "advapi32")]
 extern "system" {
+    fn ImpersonateNamedPipeClient(pipe: *mut std::ffi::c_void) -> i32;
+    fn RevertToSelf() -> i32;
     fn ConvertStringSecurityDescriptorToSecurityDescriptorW(string: *const u16, revision: u32,
         descriptor: *mut *mut std::ffi::c_void, size: *mut u32) -> i32;
     fn CreateWellKnownSid(sid_type: u32, domain_sid: *mut std::ffi::c_void,
