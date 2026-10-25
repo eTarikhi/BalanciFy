@@ -15,6 +15,3 @@ target/.rustc_info.json
 .vs/
 **/bin/
 **/obj/
-/target/local-ci/
-/target/local-ci-windows/
-/target/local-wdk/
