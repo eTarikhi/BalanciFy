@@ -67,8 +67,9 @@ Use a private absolute state directory and do not share development keys:
 
 ```powershell
 $env:BALANCIFY_STATE_DIR = "$env:LOCALAPPDATA\BalanciFy\dev"
-$env:BALANCIFY_IPC_PORT = '5000'                       # loopback-only developer IPC
-$env:BALANCIFY_IPC_TRANSPORT = 'loopback-tcp'          # debug builds only; omit for named-pipe default
+# Windows defaults to the local named pipe; set these only for an explicit debug TCP lab:
+# $env:BALANCIFY_IPC_PORT = '5000'
+# $env:BALANCIFY_IPC_TRANSPORT = 'loopback-tcp'
 $env:BALANCIFY_RELAY_PUBLIC_KEY = '<64 hex characters>' # pinned primary relay public identity
 # Optional with a secondary relay address; defaults to the primary identity for shared-key clusters:
 $env:BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY = '<64 hex characters>'
@@ -83,8 +84,8 @@ $env:BALANCIFY_SIMULATE_ECN = '1'                       # optional relay ECN sim
 cargo run -p balancify-service -- --help
 cargo run -p balancify-client -- --help
 cargo run -p balancify-installer -- --help
-cargo run -p balancify-app -- 127.0.0.1:5000 home
-cargo run -p balancify-app -- 127.0.0.1:5000 diagnostics
+cargo run -p balancify-app -- home
+cargo run -p balancify-app -- diagnostics
 ```
 
 For a disposable local lab, use separate PowerShell windows. **The `lab-crypto` relay has no confidentiality and binds UDP on `0.0.0.0`; isolate/firewall it and never use it for sensitive/production traffic.** `--insecure-lab` is debug-only and loopback-only.
@@ -98,11 +99,11 @@ $env:BALANCIFY_STATE_DIR = "$env:LOCALAPPDATA\BalanciFy\lab"
 New-Item -ItemType Directory -Force $env:BALANCIFY_STATE_DIR | Out-Null
 cargo run -p balancify-service -- --insecure-lab --simulate-app-traffic 127.0.0.1:4430
 
-# Window 3: lab shell CLI over loopback IPC
-cargo run -p balancify-app -- 127.0.0.1:5000 home
+# Window 3: lab shell CLI over the default Windows named pipe
+cargo run -p balancify-app -- home
 ```
 
-The app is a lab TCP IPC client, not the planned production GUI. Non-Windows service runs use loopback TCP. Windows defaults to the ACL-protected named pipe; set `BALANCIFY_IPC_TRANSPORT=loopback-tcp` only in debug builds when using this TCP CLI workflow. Per-caller identity/session authorization and Windows named-pipe runtime validation remain pending.
+The app is a lab IPC client, not the planned production GUI. It now connects to the Windows service named pipe by default and to loopback TCP on non-Windows. Set `BALANCIFY_IPC_TRANSPORT=loopback-tcp` on both service and CLI only for an explicit debug TCP lab. Per-caller identity/session authorization and Windows named-pipe runtime validation remain pending.
 
 ## 2. Build processes
 

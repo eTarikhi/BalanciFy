@@ -65,6 +65,21 @@ impl IpcServer {
 #[cfg(windows)]
 pub struct NamedPipeServer {
     name: Vec<u16>,
+    pending_instance: Option<NamedPipeStream>,
+}
+
+#[cfg(windows)]
+pub const WINDOWS_SERVICE_PIPE_NAME: &str = r"\\.\pipe\BalanciFy.Service.v1";
+
+#[cfg(windows)]
+fn validate_pipe_name(name: &str) -> io::Result<Vec<u16>> {
+    if !name.starts_with(r"\\.\pipe\") || name[9..].is_empty() || name.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "named pipe path must use the canonical Windows named-pipe prefix",
+        ));
+    }
+    Ok(name.encode_utf16().chain(std::iter::once(0)).collect())
 }
 
 #[cfg(windows)]
@@ -72,62 +87,22 @@ impl NamedPipeServer {
     /// Bind `\\.\pipe\<name>` with an explicit DACL for SYSTEM, Administrators,
     /// and interactive users; no network or anonymous principals are granted access.
     pub fn bind(name: &str) -> io::Result<Self> {
-        if !name.starts_with(r"\\.\pipe\") || name[9..].is_empty() || name.contains('\0') {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "named pipe path must use the canonical Windows named-pipe prefix",
-            ));
-        }
-        Ok(Self { name: name.encode_utf16().chain(std::iter::once(0)).collect() })
+        let name = validate_pipe_name(name)?;
+        // Create the first instance synchronously so ACL/name errors fail service
+        // startup instead of leaving a background accept loop permanently broken.
+        let pending_instance = Some(create_named_pipe_instance(&name, true)?);
+        Ok(Self { name, pending_instance })
     }
 
     /// Wait for one client and return a nonblocking byte-stream handle.
-    pub fn accept(&self) -> io::Result<NamedPipeStream> {
-        use std::ffi::c_void;
+    pub fn accept(&mut self) -> io::Result<NamedPipeStream> {
         use std::ptr;
 
-        const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
-        const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
-        const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
-        const PIPE_WAIT: u32 = 0x0000_0000;
-        const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
-        const PIPE_UNLIMITED_INSTANCES: u32 = 255;
-        const MAX_PIPE_BUFFER: u32 = 65_536;
-        const SDDL_REVISION_1: u32 = 1;
-
-        let sddl: Vec<u16> = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
-            .encode_utf16().chain(std::iter::once(0)).collect();
-        let mut descriptor: *mut c_void = ptr::null_mut();
-        let mut descriptor_size = 0u32;
-        if unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, &mut descriptor_size,
-            )
-        } == 0 {
-            return Err(last_os_error());
-        }
-        let _descriptor = LocalSecurityDescriptor(descriptor);
-        let mut attributes = SecurityAttributes {
-            length: std::mem::size_of::<SecurityAttributes>() as u32,
-            security_descriptor: descriptor,
-            inherit_handle: 0,
+        let pipe = match self.pending_instance.take() {
+            Some(pipe) => pipe,
+            None => create_named_pipe_instance(&self.name, false)?,
         };
-        let handle = unsafe {
-            CreateNamedPipeW(
-                self.name.as_ptr(),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                PIPE_UNLIMITED_INSTANCES,
-                MAX_PIPE_BUFFER,
-                MAX_PIPE_BUFFER,
-                0,
-                &mut attributes,
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(last_os_error());
-        }
-        let pipe = NamedPipeStream { handle };
+        let handle = pipe.handle;
         if unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } == 0 {
             let error = last_os_error();
             if error.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
@@ -146,8 +121,104 @@ impl NamedPipeServer {
 }
 
 #[cfg(windows)]
+fn create_named_pipe_instance(name: &[u16], first_instance: bool) -> io::Result<NamedPipeStream> {
+    use std::ffi::c_void;
+    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+    const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
+    const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
+    const PIPE_WAIT: u32 = 0x0000_0000;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
+    const PIPE_UNLIMITED_INSTANCES: u32 = 255;
+    const MAX_PIPE_BUFFER: u32 = 65_536;
+    const SDDL_REVISION_1: u32 = 1;
+
+    let sddl: Vec<u16> = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
+        .encode_utf16().chain(std::iter::once(0)).collect();
+    let mut descriptor: *mut c_void = std::ptr::null_mut();
+    let mut descriptor_size = 0u32;
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, &mut descriptor_size,
+        )
+    } == 0 {
+        return Err(last_os_error());
+    }
+    let _descriptor = LocalSecurityDescriptor(descriptor);
+    let mut attributes = SecurityAttributes {
+        length: std::mem::size_of::<SecurityAttributes>() as u32,
+        security_descriptor: descriptor,
+        inherit_handle: 0,
+    };
+    let open_mode = PIPE_ACCESS_DUPLEX
+        | if first_instance { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
+    let handle = unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            open_mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            MAX_PIPE_BUFFER,
+            MAX_PIPE_BUFFER,
+            0,
+            &mut attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(last_os_error());
+    }
+    Ok(NamedPipeStream { handle })
+}
+
+#[cfg(windows)]
 pub struct NamedPipeStream {
     handle: *mut std::ffi::c_void,
+}
+
+#[cfg(windows)]
+impl NamedPipeStream {
+    /// Connect to a local named pipe using nonblocking byte-mode reads.
+    pub fn connect(name: &str) -> io::Result<Self> {
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const GENERIC_WRITE: u32 = 0x4000_0000;
+        const OPEN_EXISTING: u32 = 3;
+        const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+
+        let name = validate_pipe_name(name)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let handle = loop {
+            let handle = unsafe {
+                CreateFileW(
+                    name.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle != INVALID_HANDLE_VALUE {
+                break handle;
+            }
+            let error = last_os_error();
+            if !matches!(
+                error.raw_os_error(),
+                Some(ERROR_FILE_NOT_FOUND | ERROR_PIPE_BUSY | ERROR_SEM_TIMEOUT)
+            ) || Instant::now() >= deadline
+            {
+                return Err(error);
+            }
+            unsafe { WaitNamedPipeW(name.as_ptr(), 100); }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stream = Self { handle };
+        let mut mode = PIPE_NOWAIT;
+        if unsafe { SetNamedPipeHandleState(handle, &mut mode, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
+            return Err(last_os_error());
+        }
+        Ok(stream)
+    }
 }
 
 #[cfg(windows)]
@@ -241,6 +312,12 @@ const ERROR_PIPE_CONNECTED: u32 = 535;
 #[cfg(windows)]
 const ERROR_PIPE_LISTENING: u32 = 536;
 #[cfg(windows)]
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+#[cfg(windows)]
+const ERROR_PIPE_BUSY: i32 = 231;
+#[cfg(windows)]
+const ERROR_SEM_TIMEOUT: i32 = 121;
+#[cfg(windows)]
 const ERROR_NO_DATA: u32 = 232;
 #[cfg(windows)]
 const ERROR_BROKEN_PIPE: u32 = 109;
@@ -271,6 +348,16 @@ fn last_os_error() -> io::Error {
 #[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
+    fn CreateFileW(
+        name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *mut std::ffi::c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32;
     fn CreateNamedPipeW(name: *const u16, open_mode: u32, pipe_mode: u32, max_instances: u32,
         out_buffer_size: u32, in_buffer_size: u32, default_timeout: u32,
         security_attributes: *mut SecurityAttributes) -> *mut std::ffi::c_void;

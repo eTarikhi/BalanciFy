@@ -1,7 +1,7 @@
 # Next steps — continuous development without stopping
 
 Date: 2026-10-25
-Status: continuous on `arena/3f48d354-balancify`; its PR remains open. Full local profile at `d630d5d` passed all twelve stages, including 331 Linux Rust tests, release build, SPDX 2.3/3.0.1 validation, Windows/WSL workflow contracts, and portable driver tests (logs: `target/local-ci/logs/20261024T204831Z/`). Current Rust source inventory is 334 tests. The latest quick profile passed at `target/local-ci/logs/20261024T233441Z/`; a later full-profile attempt passed non-Rust stages but exposed one compile error in the new relay timeout regression, now corrected in the working tree. Include the current Rust changes in the next consolidated full run. Hardware/product acceptance remains tracked in the gated plan below.
+Status: continuous on `arena/3f48d354-balancify`; its PR remains open. Full local profile at `d630d5d` passed all twelve stages, including 331 Linux Rust tests, release build, SPDX 2.3/3.0.1 validation, Windows/WSL workflow contracts, and portable driver tests (logs: `target/local-ci/logs/20261024T204831Z/`). Current Rust source inventory is 334 tests. The latest quick profile passed at `target/local-ci/logs/20261025T002424Z/`; a later full-profile attempt passed non-Rust stages but exposed one compile error in the new relay timeout regression, now corrected in the working tree. Include the current Rust changes in the next consolidated full run. Hardware/product acceptance remains tracked in the gated plan below.
 
 User instruction: "continue the development process without stopping to report" — keep building features, fixing bugs, pushing CI, not stopping after each small change.
 
@@ -33,7 +33,7 @@ Current validation: the full local profile at `d630d5d` passed all twelve stages
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
 5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
 6. **SBOM/VEX S13**: CI generates SPDX 2.3 and SPDX 3.0.1 JSON-LD inventories from the locked production graph, validates SPDX 3.0.1 with official JSON Schema + SHACL, and publishes both as run artifacts. Still required: reviewed VEX statements from current advisory data and clean-machine installer sidecar verification.
-7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; Windows source defaults to ACL-protected named-pipe IPC, with a debug-only TCP override for the lab CLI; non-Windows lab hosts retain loopback TCP. Complete caller identity/session authorization and Windows runtime validation, then move from the protocol/lab CLI to the WinUI 3 shell.
+7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; Windows service and lab CLI now use ACL-protected named-pipe IPC by default, with a debug-only TCP override for transport tests; non-Windows lab hosts retain loopback TCP. Complete caller identity/session authorization and Windows runtime validation, then move from the protocol/lab CLI to the WinUI 3 shell.
 
 ## Process
 

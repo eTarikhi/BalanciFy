@@ -831,8 +831,9 @@ fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, String)> {
             }
         }
 
-        const PIPE_NAME: &str = r"\\.\pipe\BalanciFy.Service.v1";
-        let server = balancify_service::ipc::server::NamedPipeServer::bind(PIPE_NAME)?;
+        let mut server = balancify_service::ipc::server::NamedPipeServer::bind(
+            balancify_service::ipc::server::WINDOWS_SERVICE_PIPE_NAME,
+        )?;
         std::thread::Builder::new()
             .name("balancify-ipc-accept".to_string())
             .spawn(move || loop {
@@ -848,7 +849,10 @@ fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, String)> {
                     }
                 }
             })?;
-        Ok((request_rx, PIPE_NAME.to_string()))
+        Ok((
+            request_rx,
+            balancify_service::ipc::server::WINDOWS_SERVICE_PIPE_NAME.to_string(),
+        ))
     }
 
     #[cfg(not(windows))]
