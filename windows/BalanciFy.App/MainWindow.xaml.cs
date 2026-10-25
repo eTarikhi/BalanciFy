@@ -7,7 +7,12 @@ public sealed partial class MainWindow : Window
 {
     private readonly DispatcherTimer _refreshTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly Task _preferencesLoadTask;
     private IReadOnlyList<FlowRuleSnapshot> _rules = Array.Empty<FlowRuleSnapshot>();
+    private UiPreferences? _preferences;
+    private bool _hasPreferencesToRestore;
+    private bool _preferencesSynchronized;
+    private bool _serviceDisconnected;
     private bool _loadingSettings;
     private bool _settingsDirty;
     private bool _rulesLoaded;
@@ -17,6 +22,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _preferencesLoadTask = LoadPreferencesAsync();
         RuleClassBox.SelectionChanged += RuleClassBox_SelectionChanged;
         UpdatePinnedRuleInput();
         RootNavigation.SelectedItem = RootNavigation.MenuItems[0];
@@ -39,6 +45,45 @@ public sealed partial class MainWindow : Window
                                         ruleClass == 2;
     }
 
+    private async Task LoadPreferencesAsync()
+    {
+        try
+        {
+            _preferences = await UiPreferencesStore.LoadAsync(CancellationToken.None);
+            _hasPreferencesToRestore = _preferences is not null;
+            _preferencesSynchronized = !_hasPreferencesToRestore;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            _preferencesSynchronized = true;
+            ConnectionInfo.Severity = InfoBarSeverity.Warning;
+            ConnectionInfo.Title = "Saved preferences could not be loaded";
+            ConnectionInfo.Message = $"Saved local preferences were ignored: {error.Message}";
+        }
+    }
+
+    private async Task SynchronizePreferencesAsync(UiPreferences preferences, CancellationToken cancellationToken)
+    {
+        await IpcClient.SetBondModeAsync(preferences.BondEnabled, cancellationToken);
+        await IpcClient.SetDuplicateModeAsync(preferences.DuplicateMode, cancellationToken);
+        await IpcClient.SetAllowMeteredAsync(preferences.AllowMetered, cancellationToken);
+        foreach (var rule in preferences.CustomRules)
+        {
+            await IpcClient.SetFlowRuleAsync(rule, cancellationToken);
+        }
+    }
+
+    private UiPreferences BuildPreferences(IReadOnlyList<FlowRuleSnapshot> customRules)
+    {
+        var unchangedSettings = _settingsDirty ? _preferences : null;
+        return new UiPreferences(
+            1,
+            unchangedSettings?.BondEnabled ?? BondToggle.IsOn,
+            unchangedSettings?.DuplicateMode ?? DuplicateToggle.IsOn,
+            unchangedSettings?.AllowMetered ?? MeteredToggle.IsOn,
+            customRules.Where(rule => rule.Id >= 1_000).ToArray());
+    }
+
     private void Settings_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_loadingSettings)
@@ -59,6 +104,7 @@ public sealed partial class MainWindow : Window
 
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
     {
+        await _preferencesLoadTask;
         if (!await _refreshGate.WaitAsync(0))
         {
             return;
@@ -80,9 +126,34 @@ public sealed partial class MainWindow : Window
             await IpcClient.SetAllowMeteredAsync(MeteredToggle.IsOn, timeout.Token);
             _settingsDirty = false;
             applied = true;
-            ConnectionInfo.Severity = InfoBarSeverity.Success;
-            ConnectionInfo.Title = "Settings applied";
-            ConnectionInfo.Message = "The service accepted the bonding and uplink policy settings.";
+            var customRules = _rulesLoaded
+                ? _rules.Where(rule => rule.Id >= 1_000).ToArray()
+                : _preferences?.CustomRules ?? Array.Empty<FlowRuleSnapshot>();
+            var savedPreferences = new UiPreferences(
+                1,
+                BondToggle.IsOn,
+                DuplicateToggle.IsOn,
+                MeteredToggle.IsOn,
+                customRules);
+            try
+            {
+                await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
+                _preferences = savedPreferences;
+                _hasPreferencesToRestore = true;
+                _preferencesSynchronized = true;
+                ConnectionInfo.Severity = InfoBarSeverity.Success;
+                ConnectionInfo.Title = "Settings applied and saved";
+                ConnectionInfo.Message = "The service accepted the policy settings, which are also saved for this Windows user.";
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                _preferences = savedPreferences;
+                _hasPreferencesToRestore = true;
+                _preferencesSynchronized = true;
+                ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                ConnectionInfo.Title = "Settings applied but not saved";
+                ConnectionInfo.Message = $"The service accepted the settings, but local persistence failed: {error.Message}";
+            }
         }
         catch (OperationCanceledException)
         {
@@ -143,6 +214,12 @@ public sealed partial class MainWindow : Window
             ShowRuleValidationError("Pinned uplink ID must be an integer from 0 to 255.");
             return;
         }
+        if (!_editingRuleId.HasValue && _rules.Count(existing => existing.Id >= 1_000) >= UiPreferencesStore.MaxCustomRules)
+        {
+            ShowRuleValidationError($"A maximum of {UiPreferencesStore.MaxCustomRules} custom rules can be saved for this Windows user.");
+            return;
+        }
+
         var rule = new FlowRuleSnapshot(
             _editingRuleId ?? NextCustomRuleId(),
             name,
@@ -157,7 +234,7 @@ public sealed partial class MainWindow : Window
         var action = wasEditing ? "Updated" : "Added";
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.SetFlowRuleAsync(rule, cancellationToken),
-            $"{action} rule '{name}'. Changes are in memory until the service restarts."))
+            $"{action} rule '{name}'. The service accepted the change."))
         {
             ResetRuleEditor();
         }
@@ -227,7 +304,7 @@ public sealed partial class MainWindow : Window
         var rule = _rules.FirstOrDefault(candidate => candidate.Id == id);
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.RemoveFlowRuleAsync(id, cancellationToken),
-            $"Removed rule '{rule?.Name ?? id.ToString()}'. Changes are in memory until the service restarts.") &&
+            $"Removed rule '{rule?.Name ?? id.ToString()}'. The service accepted the change.") &&
             _editingRuleId == id)
         {
             ResetRuleEditor();
@@ -236,6 +313,7 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> RunRuleMutationAsync(Func<CancellationToken, Task> mutation, string successMessage)
     {
+        await _preferencesLoadTask;
         if (!await _refreshGate.WaitAsync(0))
         {
             return false;
@@ -254,6 +332,35 @@ public sealed partial class MainWindow : Window
             ConnectionInfo.Severity = InfoBarSeverity.Success;
             ConnectionInfo.Title = "Traffic rule updated";
             ConnectionInfo.Message = successMessage;
+            if (_page == "rules")
+            {
+                try
+                {
+                    _rules = await IpcClient.GetFlowRulesAsync(timeout.Token);
+                    RenderRules();
+                    var savedPreferences = BuildPreferences(_rules);
+                    try
+                    {
+                        await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
+                        ConnectionInfo.Message = $"{successMessage} Custom rules are also saved for this Windows user.";
+                    }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                        ConnectionInfo.Title = "Rule applied but not saved";
+                        ConnectionInfo.Message = $"The service accepted the rule, but local persistence failed: {error.Message}";
+                    }
+                    _preferences = savedPreferences;
+                    _hasPreferencesToRestore = true;
+                    _preferencesSynchronized = true;
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException)
+                {
+                    ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                    ConnectionInfo.Title = "Rule applied but not saved";
+                    ConnectionInfo.Message = $"The service accepted the rule, but local persistence failed: {error.Message}";
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -433,7 +540,7 @@ public sealed partial class MainWindow : Window
         };
         PageMessage.Text = page switch
         {
-            "rules" => "Built-in rules are read-only. Add, edit, or remove custom rules below; changes remain in memory and reset when the service restarts.",
+            "rules" => "Built-in rules are read-only. Custom rules are saved in this Windows user's local preferences and re-applied when the shell reconnects; the service itself keeps policy in memory.",
             "diagnostics" => "Service counters and the capacity self-test are read from the local service. Export creates a redacted JSON bundle you can review or share from the save location you choose.",
             "about" => "BalanciFy is a Windows-first multi-WAN bonding project. This WinUI shell talks only to the local service over its ACL-protected named pipe.",
             _ => string.Empty,
@@ -450,6 +557,7 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshStatusAsync()
     {
+        await _preferencesLoadTask;
         if (!await _refreshGate.WaitAsync(0))
         {
             return;
@@ -458,13 +566,35 @@ public sealed partial class MainWindow : Window
         RefreshButton.IsEnabled = false;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(
+                _hasPreferencesToRestore && _preferences is not null && (!_preferencesSynchronized || _serviceDisconnected) ? 30 : 5));
             var snapshot = await IpcClient.GetStatusAsync(timeout.Token);
+            if (_hasPreferencesToRestore && _preferences is not null && !_settingsDirty &&
+                (_serviceDisconnected ||
+                 snapshot.BondEnabled != _preferences.BondEnabled ||
+                 snapshot.DuplicateMode != _preferences.DuplicateMode ||
+                 snapshot.AllowMetered != _preferences.AllowMetered))
+            {
+                _preferencesSynchronized = false;
+            }
+            if (_hasPreferencesToRestore && _preferences is not null && !_settingsDirty && !_preferencesSynchronized)
+            {
+                await SynchronizePreferencesAsync(_preferences, timeout.Token);
+                _preferencesSynchronized = true;
+                snapshot = await IpcClient.GetStatusAsync(timeout.Token);
+            }
+            _serviceDisconnected = false;
             ConnectionInfo.Severity = InfoBarSeverity.Success;
             ConnectionInfo.Title = "Connected to the BalanciFy service";
             ConnectionInfo.Message = $"Local named pipe · refreshed {DateTime.Now:T}";
             ServiceVersionText.Text = snapshot.ServiceVersion;
             SchemaText.Text = $"IPC schema {snapshot.SchemaVersion} · active flows {snapshot.ActiveFlows}";
+            _preferences ??= new UiPreferences(
+                1,
+                snapshot.BondEnabled,
+                snapshot.DuplicateMode,
+                snapshot.AllowMetered,
+                Array.Empty<FlowRuleSnapshot>());
             if (!_settingsDirty)
             {
                 _loadingSettings = true;
@@ -512,6 +642,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowDisconnected(string message)
     {
+        _serviceDisconnected = true;
         ConnectionInfo.Severity = InfoBarSeverity.Warning;
         ConnectionInfo.Title = "Service unavailable";
         ConnectionInfo.Message = message;

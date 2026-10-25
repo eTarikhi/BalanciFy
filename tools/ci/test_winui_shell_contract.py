@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT / "windows" / "BalanciFy.App"
 PROJECT = (APP_DIR / "BalanciFy.App.csproj").read_text(encoding="utf-8")
 CLIENT = (APP_DIR / "IpcClient.cs").read_text(encoding="utf-8")
+PREFERENCES = (APP_DIR / "UiPreferencesStore.cs").read_text(encoding="utf-8")
 WINDOW = (APP_DIR / "MainWindow.xaml.cs").read_text(encoding="utf-8")
 GUIDE = (APP_DIR / "README.md").read_text(encoding="utf-8")
 IPC_PROTOCOL = (ROOT / "crates" / "ipc" / "src" / "lib.rs").read_text(encoding="utf-8")
@@ -90,6 +91,21 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("TimeoutException", WINDOW)
         self.assertIn("Windows 11 x64 or ARM64", GUIDE)
         self.assertIn("WSL is not a local prerequisite", GUIDE)
+
+    def test_user_preferences_are_bounded_atomic_and_reapplied(self):
+        self.assertIn("Environment.SpecialFolder.LocalApplicationData", PREFERENCES)
+        self.assertIn('"BalanciFy",', PREFERENCES)
+        self.assertIn('"ui-preferences.json"', PREFERENCES)
+        self.assertIn("MaxFileBytes = 256 * 1024", PREFERENCES)
+        self.assertIn("MaxCustomRules = 128", PREFERENCES)
+        self.assertIn("preferences.Version != 1", PREFERENCES)
+        self.assertIn("FileMode.CreateNew", PREFERENCES)
+        self.assertIn("stream.Flush(flushToDisk: true)", PREFERENCES)
+        self.assertIn("File.Move(temporaryPath, path, overwrite: true)", PREFERENCES)
+        self.assertIn("SynchronizePreferencesAsync", WINDOW)
+        self.assertIn("UiPreferencesStore.SaveAsync", WINDOW)
+        self.assertIn("_serviceDisconnected", WINDOW)
+        self.assertIn("%LOCALAPPDATA%", GUIDE)
 
     def test_native_full_profile_builds_winui_shell(self):
         runner = (ROOT / "tools" / "ci" / "local-ci-windows.ps1").read_text(encoding="utf-8")
