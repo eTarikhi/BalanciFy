@@ -69,6 +69,7 @@
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <Button x:Name="ApplySettingsButton" Content="Apply settings" IsEnabled="False" Click="ApplySettingsButton_Click" />
                                     <Button x:Name="DiscardSettingsButton" Content="Discard changes" IsEnabled="False" Click="DiscardSettingsButton_Click" />
+                                    <Button x:Name="ResetPreferencesButton" Content="Reset saved preferences…" Click="ResetPreferencesButton_Click" />
                                 </StackPanel>
                             </StackPanel>
                         </Border>

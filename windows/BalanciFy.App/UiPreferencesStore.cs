@@ -114,6 +114,15 @@ internal static class UiPreferencesStore
         }
     }
 
+    public static void Delete()
+    {
+        var path = PreferencesPath;
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
     private static bool IsValidRule(FlowRuleSnapshot? rule) =>
         rule is not null &&
         rule.Id >= 1_000 &&

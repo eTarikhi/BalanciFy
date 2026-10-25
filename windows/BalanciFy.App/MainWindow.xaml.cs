@@ -149,6 +149,69 @@ public sealed partial class MainWindow : Window
         await RefreshStatusAsync();
     }
 
+    private async void ResetPreferencesButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _preferencesLoadTask;
+        if (!await _refreshGate.WaitAsync(0))
+        {
+            return;
+        }
+
+        RefreshButton.IsEnabled = false;
+        ResetPreferencesButton.IsEnabled = false;
+        var reset = false;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = RootNavigation.XamlRoot,
+                Title = "Reset saved preferences?",
+                Content = "This removes this Windows user's saved policy and custom-rule snapshot. Current service settings remain active until the service restarts; this shell will not restore the deleted snapshot.",
+                PrimaryButtonText = "Reset saved preferences",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            UiPreferencesStore.Delete();
+            _preferences = new UiPreferences(
+                1,
+                BondToggle.IsOn,
+                DuplicateToggle.IsOn,
+                MeteredToggle.IsOn,
+                Array.Empty<FlowRuleSnapshot>());
+            _hasPreferencesToRestore = false;
+            _preferencesSynchronized = true;
+            _settingsDirty = false;
+            ApplySettingsButton.IsEnabled = false;
+            DiscardSettingsButton.IsEnabled = false;
+            ConnectionInfo.Severity = InfoBarSeverity.Success;
+            ConnectionInfo.Title = "Saved preferences removed";
+            ConnectionInfo.Message = "The current service policy was not changed.";
+            reset = true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+        {
+            ConnectionInfo.Severity = InfoBarSeverity.Warning;
+            ConnectionInfo.Title = "Could not reset saved preferences";
+            ConnectionInfo.Message = error.Message;
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+            ResetPreferencesButton.IsEnabled = true;
+            _refreshGate.Release();
+        }
+
+        if (reset)
+        {
+            await RefreshStatusAsync();
+        }
+    }
+
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
     {
         await _preferencesLoadTask;

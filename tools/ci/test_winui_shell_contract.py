@@ -11,6 +11,7 @@ PREFERENCES = (APP_DIR / "UiPreferencesStore.cs").read_text(encoding="utf-8")
 WINDOW = (APP_DIR / "MainWindow.xaml.cs").read_text(encoding="utf-8")
 GUIDE = (APP_DIR / "README.md").read_text(encoding="utf-8")
 IPC_PROTOCOL = (ROOT / "crates" / "ipc" / "src" / "lib.rs").read_text(encoding="utf-8")
+SUPPORT_BUNDLE = (ROOT / "crates" / "service" / "src" / "support" / "mod.rs").read_text(encoding="utf-8")
 CORE_RULES = (ROOT / "crates" / "core" / "src" / "rules.rs").read_text(encoding="utf-8")
 
 
@@ -106,6 +107,9 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn('"relay_failover_count"', CLIENT)
         self.assertIn('"relay_failover_convergence_ms"', CLIENT)
         self.assertIn('"update_required"', CLIENT)
+        for field in ("relay_configured", "relay_failover_count", "relay_failover_convergence_ms", "update_required"):
+            with self.subTest(field=field):
+                self.assertIn(f'\\"{field}\\"', SUPPORT_BUNDLE)
         self.assertIn("relay endpoints and identities", WINDOW.lower())
 
     def test_user_preferences_are_bounded_atomic_and_reapplied(self):
@@ -123,6 +127,9 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("NextCustomRuleId(usedIds)", WINDOW)
         self.assertIn("SynchronizePreferencesAsync", WINDOW)
         self.assertIn("UiPreferencesStore.SaveAsync", WINDOW)
+        self.assertIn("UiPreferencesStore.Delete()", WINDOW)
+        self.assertIn("ContentDialogResult.Primary", WINDOW)
+        self.assertIn('x:Name="ResetPreferencesButton"', (APP_DIR / "MainWindow.xaml").read_text(encoding="utf-8"))
         self.assertIn("_serviceDisconnected", WINDOW)
         self.assertIn("%LOCALAPPDATA%", GUIDE)
 
