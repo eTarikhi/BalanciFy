@@ -133,7 +133,51 @@ fn validate_client_session(handle: *mut std::ffi::c_void) -> io::Result<()> {
             "named-pipe IPC is restricted to interactive user sessions",
         ));
     }
-    Ok(())
+    if unsafe { ImpersonateNamedPipeClient(handle) } == 0 {
+        return Err(last_os_error());
+    }
+
+    // Verify the connected token itself is an interactive-user token in
+    // addition to relying on the pipe DACL and nonzero Terminal Services ID.
+    let membership = (|| {
+        const WIN_INTERACTIVE_SID: u32 = 11;
+        let mut sid_buffer = [0usize; 9];
+        let mut sid_size = std::mem::size_of_val(&sid_buffer) as u32;
+        if unsafe {
+            CreateWellKnownSid(
+                WIN_INTERACTIVE_SID,
+                std::ptr::null_mut(),
+                sid_buffer.as_mut_ptr().cast(),
+                &mut sid_size,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        let mut is_member = 0i32;
+        if unsafe {
+            CheckTokenMembership(
+                std::ptr::null_mut(),
+                sid_buffer.as_mut_ptr().cast(),
+                &mut is_member,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        if is_member == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "named-pipe IPC requires an Interactive Users token",
+            ));
+        }
+        Ok(())
+    })();
+
+    if unsafe { RevertToSelf() } == 0 {
+        return Err(last_os_error());
+    }
+    membership
 }
 
 #[cfg(windows)]
@@ -379,6 +423,8 @@ extern "system" {
         security_attributes: *mut SecurityAttributes) -> *mut std::ffi::c_void;
     fn ConnectNamedPipe(pipe: *mut std::ffi::c_void, overlapped: *mut std::ffi::c_void) -> i32;
     fn GetNamedPipeClientSessionId(pipe: *mut std::ffi::c_void, session_id: *mut u32) -> i32;
+    fn ImpersonateNamedPipeClient(pipe: *mut std::ffi::c_void) -> i32;
+    fn RevertToSelf() -> i32;
     fn SetNamedPipeHandleState(pipe: *mut std::ffi::c_void, mode: *mut u32,
         max_collection_count: *mut u32, collect_data_timeout: *mut u32) -> i32;
     fn ReadFile(handle: *mut std::ffi::c_void, buffer: *mut std::ffi::c_void, bytes_to_read: u32,
@@ -395,6 +441,10 @@ extern "system" {
 extern "system" {
     fn ConvertStringSecurityDescriptorToSecurityDescriptorW(string: *const u16, revision: u32,
         descriptor: *mut *mut std::ffi::c_void, size: *mut u32) -> i32;
+    fn CreateWellKnownSid(sid_type: u32, domain_sid: *mut std::ffi::c_void,
+        sid: *mut std::ffi::c_void, sid_size: *mut u32) -> i32;
+    fn CheckTokenMembership(token: *mut std::ffi::c_void, sid: *mut std::ffi::c_void,
+        is_member: *mut i32) -> i32;
 }
 
 /// Serve request/response frames until the peer closes the stream. Framing is
