@@ -196,4 +196,4 @@ dotnet build -c Debug -r win-x64
 dotnet run -c Debug -r win-x64
 ```
 
-Use `win-arm64` for ARM64. The preview reads the service status over the ACL-protected local named pipe; Rules/Diagnostics detail, accessibility review, packaging, and clean-machine validation remain in progress.
+Use `win-arm64` for ARM64. The preview reads and updates service state over the ACL-protected local named pipe; complete rule editing, advanced Diagnostics, accessibility review, packaging, and clean-machine validation remain in progress.

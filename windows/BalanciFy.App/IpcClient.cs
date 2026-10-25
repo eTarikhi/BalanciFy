@@ -15,6 +15,12 @@ internal static class IpcClient
     private const byte GetStatusOpcode = 1;
     private const byte ListFlowRulesOpcode = 3;
     private const byte RunSelfTestOpcode = 9;
+    private const byte SetFlowRuleOpcode = 4;
+    private const byte RemoveFlowRuleOpcode = 5;
+    private const byte SetBondModeOpcode = 6;
+    private const byte SetDuplicateModeOpcode = 7;
+    private const byte SetAllowMeteredOpcode = 8;
+    private const byte AckResponseTag = 5;
     private const byte StatusResponseTag = 2;
     private const byte FlowRulesResponseTag = 4;
     private const byte SelfTestResponseTag = 6;
@@ -69,8 +75,81 @@ internal static class IpcClient
         return result;
     }
 
-    private static async Task<byte[]> SendRequestAsync(byte opcode, CancellationToken cancellationToken)
+    public static Task SetBondModeAsync(bool enabled, CancellationToken cancellationToken) =>
+        SendAckRequestAsync(new[] { SetBondModeOpcode, enabled ? (byte)1 : (byte)0 }, cancellationToken);
+
+    public static Task SetDuplicateModeAsync(bool enabled, CancellationToken cancellationToken) =>
+        SendAckRequestAsync(new[] { SetDuplicateModeOpcode, enabled ? (byte)1 : (byte)0 }, cancellationToken);
+
+    public static Task SetAllowMeteredAsync(bool allowed, CancellationToken cancellationToken) =>
+        SendAckRequestAsync(new[] { SetAllowMeteredOpcode, allowed ? (byte)1 : (byte)0 }, cancellationToken);
+
+    public static Task RemoveFlowRuleAsync(uint id, CancellationToken cancellationToken)
     {
+        var payload = new byte[5];
+        payload[0] = RemoveFlowRuleOpcode;
+        BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(1), id);
+        return SendAckRequestAsync(payload, cancellationToken);
+    }
+
+    public static Task SetFlowRuleAsync(FlowRuleSnapshot rule, CancellationToken cancellationToken)
+    {
+        var name = StrictUtf8.GetBytes(rule.Name);
+        if (name.Length is 0 or > byte.MaxValue)
+        {
+            throw new ArgumentException("Rule names must contain 1 to 255 UTF-8 bytes.", nameof(rule));
+        }
+
+        var payload = new List<byte>(18 + name.Length) { SetFlowRuleOpcode };
+        AppendUInt32(payload, rule.Id);
+        payload.Add((byte)name.Length);
+        payload.AddRange(name);
+        payload.Add(rule.Class);
+        payload.Add(rule.PinnedUplink);
+        AppendUInt32(payload, rule.Priority);
+        payload.Add(rule.Protocol);
+        AppendUInt16(payload, rule.PortStart);
+        AppendUInt16(payload, rule.PortEnd);
+        payload.Add(rule.DuplicateEligible ? (byte)1 : (byte)0);
+        return SendAckRequestAsync(payload.ToArray(), cancellationToken);
+    }
+
+    private static async Task SendAckRequestAsync(byte[] requestPayload, CancellationToken cancellationToken)
+    {
+        var response = await SendRequestAsync(requestPayload, cancellationToken).ConfigureAwait(false);
+        var reader = new PayloadReader(response);
+        var responseTag = reader.ReadByte();
+        ThrowServiceError(ref reader, responseTag);
+        if (responseTag != AckResponseTag)
+        {
+            throw new InvalidDataException($"Expected an acknowledgement, received tag {responseTag}.");
+        }
+        reader.RequireEnd();
+    }
+
+    private static void AppendUInt16(List<byte> buffer, ushort value)
+    {
+        Span<byte> encoded = stackalloc byte[sizeof(ushort)];
+        BinaryPrimitives.WriteUInt16BigEndian(encoded, value);
+        buffer.AddRange(encoded.ToArray());
+    }
+
+    private static void AppendUInt32(List<byte> buffer, uint value)
+    {
+        Span<byte> encoded = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32BigEndian(encoded, value);
+        buffer.AddRange(encoded.ToArray());
+    }
+
+    private static Task<byte[]> SendRequestAsync(byte opcode, CancellationToken cancellationToken) =>
+        SendRequestAsync(new[] { opcode }, cancellationToken);
+
+    private static async Task<byte[]> SendRequestAsync(byte[] requestPayload, CancellationToken cancellationToken)
+    {
+        if (requestPayload.Length == 0 || requestPayload.Length > MaxPayload)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestPayload));
+        }
         await using var pipe = new NamedPipeClientStream(
             ".",
             PipeName,
@@ -79,12 +158,12 @@ internal static class IpcClient
             TokenImpersonationLevel.Impersonation);
         await pipe.ConnectAsync(5_000, cancellationToken).ConfigureAwait(false);
 
-        // IPC v1: version byte, kind byte, big-endian payload length, opcode.
-        var request = new byte[7];
+        // IPC v1: version byte, kind byte, big-endian payload length, request payload.
+        var request = new byte[6 + requestPayload.Length];
         request[0] = SchemaVersion;
         request[1] = RequestKind;
-        BinaryPrimitives.WriteUInt32BigEndian(request.AsSpan(2, 4), 1);
-        request[6] = opcode;
+        BinaryPrimitives.WriteUInt32BigEndian(request.AsSpan(2, 4), (uint)requestPayload.Length);
+        requestPayload.CopyTo(request, 6);
         await pipe.WriteAsync(request, cancellationToken).ConfigureAwait(false);
         await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
 

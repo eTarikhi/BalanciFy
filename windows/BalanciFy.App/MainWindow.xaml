@@ -58,9 +58,15 @@
                         </Border>
                         <Border Grid.Row="0" Grid.Column="1" Padding="18" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                             <StackPanel Spacing="8">
-                                <TextBlock Text="Bonding" FontSize="20" FontWeight="SemiBold" />
-                                <TextBlock x:Name="BondText" Text="—" />
+                                <TextBlock Text="Bonding and policy" FontSize="20" FontWeight="SemiBold" />
+                                <ToggleSwitch x:Name="BondToggle" Header="Enable bonding" Toggled="Settings_Toggled" />
+                                <ToggleSwitch x:Name="DuplicateToggle" Header="Duplicate eligible traffic" Toggled="Settings_Toggled" />
+                                <ToggleSwitch x:Name="MeteredToggle" Header="Allow metered uplinks" Toggled="Settings_Toggled" />
                                 <TextBlock x:Name="PolicyText" Text="Policy — · MTU —" Opacity="0.75" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="ApplySettingsButton" Content="Apply settings" IsEnabled="False" Click="ApplySettingsButton_Click" />
+                                    <Button x:Name="DiscardSettingsButton" Content="Discard changes" IsEnabled="False" Click="DiscardSettingsButton_Click" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                         <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Padding="18" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
@@ -79,13 +85,30 @@
 
                     <StackPanel x:Name="RulesPanel" Visibility="Collapsed" Spacing="10">
                         <TextBlock Text="Configured traffic rules" FontSize="20" FontWeight="SemiBold" />
-                        <ItemsControl x:Name="RulesList">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" Margin="0,3" TextWrapping="Wrap" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel x:Name="RulesList" Spacing="4" />
+                        <Border Padding="16" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Add a custom rule" FontSize="18" FontWeight="SemiBold" />
+                                <TextBox x:Name="RuleNameBox" Header="Name" PlaceholderText="For example: video-call" MaxLength="255" />
+                                <ComboBox x:Name="RuleClassBox" Header="Traffic class" SelectedIndex="0">
+                                    <ComboBoxItem Content="Bulk" Tag="0" />
+                                    <ComboBoxItem Content="Latency-sensitive" Tag="1" />
+                                </ComboBox>
+                                <ComboBox x:Name="RuleProtocolBox" Header="Protocol" SelectedIndex="0">
+                                    <ComboBoxItem Content="Any" Tag="0" />
+                                    <ComboBoxItem Content="ICMP" Tag="1" />
+                                    <ComboBoxItem Content="TCP" Tag="6" />
+                                    <ComboBoxItem Content="UDP" Tag="17" />
+                                </ComboBox>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBox x:Name="RulePortStartBox" Header="First destination port" Text="0" MaxLength="5" Width="180" />
+                                    <TextBox x:Name="RulePortEndBox" Header="Last destination port" Text="0" MaxLength="5" Width="180" />
+                                </StackPanel>
+                                <TextBox x:Name="RulePriorityBox" Header="Priority" Text="100" MaxLength="10" />
+                                <CheckBox x:Name="RuleDuplicateCheckBox" Content="Eligible for packet duplication" />
+                                <Button x:Name="AddRuleButton" Content="Add rule" IsEnabled="False" HorizontalAlignment="Left" Click="AddRuleButton_Click" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <Button x:Name="SelfTestButton"
@@ -93,6 +116,8 @@
                             Visibility="Collapsed"
                             HorizontalAlignment="Left"
                             Click="SelfTestButton_Click" />
+                    <TextBlock x:Name="DiagnosticsStatsText" Visibility="Collapsed" TextWrapping="Wrap" />
+                    <TextBlock x:Name="SelfTestResultText" Visibility="Collapsed" TextWrapping="Wrap" />
                     <TextBlock x:Name="PageMessage" Text="" TextWrapping="Wrap" Opacity="0.8" />
                 </StackPanel>
             </ScrollViewer>

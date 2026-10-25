@@ -7,6 +7,10 @@ public sealed partial class MainWindow : Window
 {
     private readonly DispatcherTimer _refreshTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private IReadOnlyList<FlowRuleSnapshot> _rules = Array.Empty<FlowRuleSnapshot>();
+    private bool _loadingSettings;
+    private bool _settingsDirty;
+    private bool _rulesLoaded;
     private string _page = "home";
 
     public MainWindow()
@@ -23,6 +27,229 @@ public sealed partial class MainWindow : Window
         await RefreshStatusAsync();
     }
 
+    private void Settings_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loadingSettings)
+        {
+            _settingsDirty = true;
+            ApplySettingsButton.IsEnabled = true;
+            DiscardSettingsButton.IsEnabled = true;
+        }
+    }
+
+    private async void DiscardSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        _settingsDirty = false;
+        ApplySettingsButton.IsEnabled = false;
+        DiscardSettingsButton.IsEnabled = false;
+        await RefreshStatusAsync();
+    }
+
+    private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await _refreshGate.WaitAsync(0))
+        {
+            return;
+        }
+
+        RefreshButton.IsEnabled = false;
+        ApplySettingsButton.IsEnabled = false;
+        DiscardSettingsButton.IsEnabled = false;
+        SelfTestButton.IsEnabled = false;
+        BondToggle.IsEnabled = false;
+        DuplicateToggle.IsEnabled = false;
+        MeteredToggle.IsEnabled = false;
+        var applied = false;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await IpcClient.SetBondModeAsync(BondToggle.IsOn, timeout.Token);
+            await IpcClient.SetDuplicateModeAsync(DuplicateToggle.IsOn, timeout.Token);
+            await IpcClient.SetAllowMeteredAsync(MeteredToggle.IsOn, timeout.Token);
+            _settingsDirty = false;
+            applied = true;
+            ConnectionInfo.Severity = InfoBarSeverity.Success;
+            ConnectionInfo.Title = "Settings applied";
+            ConnectionInfo.Message = "The service accepted the bonding and uplink policy settings.";
+        }
+        catch (OperationCanceledException)
+        {
+            ShowDisconnected("Settings update timed out; earlier values may have applied. Your selections are retained—retry Apply or discard the changes.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException)
+        {
+            ShowDisconnected($"Settings update failed; earlier values may have applied. Your selections are retained—retry Apply or discard the changes. {error.Message}");
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+            SelfTestButton.IsEnabled = true;
+            BondToggle.IsEnabled = true;
+            DuplicateToggle.IsEnabled = true;
+            MeteredToggle.IsEnabled = true;
+            ApplySettingsButton.IsEnabled = _settingsDirty;
+            DiscardSettingsButton.IsEnabled = _settingsDirty;
+            _refreshGate.Release();
+        }
+        if (applied)
+        {
+            await RefreshStatusAsync();
+        }
+    }
+
+    private async void AddRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        var name = RuleNameBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ShowRuleValidationError("Enter a name for the rule.");
+            return;
+        }
+        if (RuleClassBox.SelectedItem is not ComboBoxItem classItem ||
+            !byte.TryParse(classItem.Tag?.ToString(), out var ruleClass) ||
+            RuleProtocolBox.SelectedItem is not ComboBoxItem protocolItem ||
+            !byte.TryParse(protocolItem.Tag?.ToString(), out var protocol))
+        {
+            ShowRuleValidationError("Choose a valid traffic class and protocol.");
+            return;
+        }
+        if (!ushort.TryParse(RulePortStartBox.Text, out var portStart) ||
+            !ushort.TryParse(RulePortEndBox.Text, out var portEnd) ||
+            portStart > portEnd)
+        {
+            ShowRuleValidationError("Destination ports must be integers from 0 to 65535, with the first no greater than the last.");
+            return;
+        }
+        if (!uint.TryParse(RulePriorityBox.Text, out var priority))
+        {
+            ShowRuleValidationError("Priority must be an unsigned 32-bit integer.");
+            return;
+        }
+        var rule = new FlowRuleSnapshot(
+            NextCustomRuleId(),
+            name,
+            ruleClass,
+            0,
+            priority,
+            protocol,
+            portStart,
+            portEnd,
+            RuleDuplicateCheckBox.IsChecked == true);
+        if (await RunRuleMutationAsync(
+            cancellationToken => IpcClient.SetFlowRuleAsync(rule, cancellationToken),
+            $"Added rule '{name}'. Changes are in memory until the service restarts."))
+        {
+            RuleNameBox.Text = string.Empty;
+        }
+    }
+
+    private async void RemoveRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: uint id } || id < 1_000)
+        {
+            return;
+        }
+        var rule = _rules.FirstOrDefault(candidate => candidate.Id == id);
+        await RunRuleMutationAsync(
+            cancellationToken => IpcClient.RemoveFlowRuleAsync(id, cancellationToken),
+            $"Removed rule '{rule?.Name ?? id.ToString()}'. Changes are in memory until the service restarts.");
+    }
+
+    private async Task<bool> RunRuleMutationAsync(Func<CancellationToken, Task> mutation, string successMessage)
+    {
+        if (!await _refreshGate.WaitAsync(0))
+        {
+            return false;
+        }
+
+        RefreshButton.IsEnabled = false;
+        ApplySettingsButton.IsEnabled = false;
+        SelfTestButton.IsEnabled = false;
+        AddRuleButton.IsEnabled = false;
+        var applied = false;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await mutation(timeout.Token);
+            applied = true;
+            ConnectionInfo.Severity = InfoBarSeverity.Success;
+            ConnectionInfo.Title = "Traffic rule updated";
+            ConnectionInfo.Message = successMessage;
+        }
+        catch (OperationCanceledException)
+        {
+            ShowDisconnected("Rule update timed out. Refresh the rules before retrying.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException or ArgumentException)
+        {
+            ShowDisconnected($"Rule update failed: {error.Message}");
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+            ApplySettingsButton.IsEnabled = _settingsDirty;
+            SelfTestButton.IsEnabled = true;
+            AddRuleButton.IsEnabled = _rulesLoaded;
+            _refreshGate.Release();
+        }
+        if (applied)
+        {
+            await RefreshStatusAsync();
+        }
+        return applied;
+    }
+
+    private void RenderRules()
+    {
+        _rulesLoaded = true;
+        AddRuleButton.IsEnabled = true;
+        RulesList.Children.Clear();
+        if (_rules.Count == 0)
+        {
+            RulesList.Children.Add(new TextBlock { Text = "No traffic rules are configured." });
+            return;
+        }
+
+        foreach (var rule in _rules)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            row.Children.Add(new TextBlock
+            {
+                Text = FormatRule(rule),
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+                MaxWidth = 700,
+            });
+            if (rule.Id >= 1_000)
+            {
+                var removeButton = new Button { Content = "Remove", Tag = rule.Id };
+                removeButton.Click += RemoveRuleButton_Click;
+                row.Children.Add(removeButton);
+            }
+            RulesList.Children.Add(row);
+        }
+    }
+
+    private uint NextCustomRuleId()
+    {
+        var used = _rules.Select(rule => rule.Id).ToHashSet();
+        for (uint id = 1_000; id < uint.MaxValue; id++)
+        {
+            if (!used.Contains(id))
+            {
+                return id;
+            }
+        }
+        throw new InvalidOperationException("No custom rule identifiers are available.");
+    }
+
+    private void ShowRuleValidationError(string message)
+    {
+        ConnectionInfo.Severity = InfoBarSeverity.Warning;
+        ConnectionInfo.Title = "Check the rule details";
+        ConnectionInfo.Message = message;
+    }
+
     private async void SelfTestButton_Click(object sender, RoutedEventArgs e)
     {
         if (!await _refreshGate.WaitAsync(0))
@@ -36,7 +263,8 @@ public sealed partial class MainWindow : Window
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var result = await IpcClient.RunSelfTestAsync(timeout.Token);
-            PageMessage.Text = result.Detail;
+            SelfTestResultText.Text = result.Detail;
+            SelfTestResultText.Visibility = Visibility.Visible;
             ConnectionInfo.Severity = result.Passed ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
             ConnectionInfo.Title = result.Passed ? "Service self-test passed" : "Service self-test needs attention";
             ConnectionInfo.Message = result.Detail;
@@ -76,13 +304,17 @@ public sealed partial class MainWindow : Window
         };
         PageMessage.Text = page switch
         {
-            "rules" => "Read-only service rules are shown below. Creating and editing rules are not available in this preview.",
+            "rules" => "Built-in rules are read-only. Add/remove custom rules below; changes remain in memory and reset when the service restarts.",
             "diagnostics" => "The status below is read directly from the local BalanciFy service. Detailed diagnostics and support-bundle export are under development.",
             "about" => "BalanciFy is a Windows-first multi-WAN bonding project. This WinUI shell talks only to the local service over its ACL-protected named pipe.",
             _ => string.Empty,
         };
         RulesPanel.Visibility = page == "rules" ? Visibility.Visible : Visibility.Collapsed;
         SelfTestButton.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
+        DiagnosticsStatsText.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
+        SelfTestResultText.Visibility = page == "diagnostics" && !string.IsNullOrEmpty(SelfTestResultText.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         await RefreshStatusAsync();
     }
 
@@ -103,23 +335,34 @@ public sealed partial class MainWindow : Window
             ConnectionInfo.Message = $"Local named pipe · refreshed {DateTime.Now:T}";
             ServiceVersionText.Text = snapshot.ServiceVersion;
             SchemaText.Text = $"IPC schema {snapshot.SchemaVersion} · active flows {snapshot.ActiveFlows}";
-            BondText.Text = snapshot.BondEnabled ? "Enabled" : "Disabled";
-            if (snapshot.DuplicateMode)
+            if (!_settingsDirty)
             {
-                BondText.Text += " · duplicate mode";
+                _loadingSettings = true;
+                try
+                {
+                    BondToggle.IsOn = snapshot.BondEnabled;
+                    DuplicateToggle.IsOn = snapshot.DuplicateMode;
+                    MeteredToggle.IsOn = snapshot.AllowMetered;
+                }
+                finally
+                {
+                    _loadingSettings = false;
+                }
+                ApplySettingsButton.IsEnabled = false;
+                DiscardSettingsButton.IsEnabled = false;
             }
-            PolicyText.Text = $"Policy {snapshot.PolicyRevision} · MTU {snapshot.AdapterMtu} · metered links {(snapshot.AllowMetered ? "allowed" : "blocked")}";
+            PolicyText.Text = $"Policy {snapshot.PolicyRevision} · MTU {snapshot.AdapterMtu}";
             UplinkList.ItemsSource = snapshot.Uplinks
                 .Select(uplink => $"Uplink {uplink.Id}: {StateName(uplink.State)} · RTT {uplink.RttMs} ms · loss {uplink.LossPermille}‰ · capacity {FormatBitsPerSecond(uplink.CapacityBps)} · {(uplink.Eligible ? "eligible" : "ineligible")}{(uplink.Metered ? " · metered" : string.Empty)}")
                 .ToArray();
             if (_page == "rules")
             {
-                var rules = await IpcClient.GetFlowRulesAsync(timeout.Token);
-                RulesList.ItemsSource = rules.Select(FormatRule).ToArray();
+                _rules = await IpcClient.GetFlowRulesAsync(timeout.Token);
+                RenderRules();
             }
             if (_page == "diagnostics")
             {
-                PageMessage.Text = $"Forwarded {snapshot.PacketsForwarded:N0} packets · refused {snapshot.Refused:N0} · authentication failures {snapshot.AuthenticationFailures:N0} · ECN CE {snapshot.EcnCe:N0} · delay signals {snapshot.DelayEvents:N0}";
+                DiagnosticsStatsText.Text = $"Forwarded {snapshot.PacketsForwarded:N0} packets · refused {snapshot.Refused:N0} · authentication failures {snapshot.AuthenticationFailures:N0} · ECN CE {snapshot.EcnCe:N0} · delay signals {snapshot.DelayEvents:N0}";
             }
         }
         catch (OperationCanceledException)

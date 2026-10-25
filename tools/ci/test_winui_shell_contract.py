@@ -9,6 +9,8 @@ PROJECT = (APP_DIR / "BalanciFy.App.csproj").read_text(encoding="utf-8")
 CLIENT = (APP_DIR / "IpcClient.cs").read_text(encoding="utf-8")
 WINDOW = (APP_DIR / "MainWindow.xaml.cs").read_text(encoding="utf-8")
 GUIDE = (APP_DIR / "README.md").read_text(encoding="utf-8")
+IPC_PROTOCOL = (ROOT / "crates" / "ipc" / "src" / "lib.rs").read_text(encoding="utf-8")
+CORE_RULES = (ROOT / "crates" / "core" / "src" / "rules.rs").read_text(encoding="utf-8")
 
 
 class WinUiShellContractTests(unittest.TestCase):
@@ -36,7 +38,31 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("GetStatusOpcode = 1", CLIENT)
         self.assertIn("ListFlowRulesOpcode = 3", CLIENT)
         self.assertIn("RunSelfTestOpcode = 9", CLIENT)
-        self.assertNotIn("SetBondModeOpcode", CLIENT)
+        self.assertIn("SetFlowRuleOpcode = 4", CLIENT)
+        self.assertIn("RemoveFlowRuleOpcode = 5", CLIENT)
+        self.assertIn("SetBondModeOpcode = 6", CLIENT)
+        self.assertIn("SetDuplicateModeOpcode = 7", CLIENT)
+        self.assertIn("SetAllowMeteredOpcode = 8", CLIENT)
+        self.assertIn("SetFlowRuleAsync", WINDOW)
+        self.assertIn("RemoveRuleButton_Click", WINDOW)
+        self.assertIn("ApplySettingsButton_Click", WINDOW)
+
+    def test_client_request_codes_match_rust_ipc_contract(self):
+        opcodes = {
+            "GetStatus": 1,
+            "ListFlowRules": 3,
+            "SetFlowRule": 4,
+            "RemoveFlowRule": 5,
+            "SetBondMode": 6,
+            "SetDuplicateMode": 7,
+            "SetAllowMetered": 8,
+            "RunSelfTest": 9,
+        }
+        for opcode, value in opcodes.items():
+            with self.subTest(opcode=opcode):
+                self.assertIn(f"Opcode::{opcode} => {value}", IPC_PROTOCOL)
+        self.assertIn("FIRST_CUSTOM_RULE_ID: u32 = 1_000", CORE_RULES)
+        self.assertIn("id = 1_000", WINDOW)
 
     def test_ipc_decoder_is_bounded_and_big_endian(self):
         self.assertIn("private const int MaxPayload = 1 << 20", CLIENT)
@@ -44,11 +70,14 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("ReadUInt64BigEndian", CLIENT)
         self.assertIn("UTF8Encoding StrictUtf8 = new(false, true)", CLIENT)
         self.assertIn("reader.RequireEnd()", CLIENT)
+        self.assertIn("requestPayload.CopyTo(request, 6)", CLIENT)
+        self.assertIn("AppendUInt32(payload, rule.Id)", CLIENT)
+        self.assertIn("WriteUInt32BigEndian(encoded, value)", CLIENT)
 
     def test_home_surface_and_native_workflow_are_documented(self):
         self.assertIn("RefreshStatusAsync", WINDOW)
         self.assertIn("UplinkList.ItemsSource", WINDOW)
-        self.assertIn("RulesList.ItemsSource", WINDOW)
+        self.assertIn("RulesList.Children.Add", WINDOW)
         self.assertIn("RunSelfTestAsync", WINDOW)
         self.assertIn("TimeoutException", WINDOW)
         self.assertIn("Windows 11 x64 or ARM64", GUIDE)
