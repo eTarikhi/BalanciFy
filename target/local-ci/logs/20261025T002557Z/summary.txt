@@ -1,0 +1,7 @@
+BalanciFy local CI · profile=quick · branch=arena/3f48d354-balancify · HEAD=1032b56ec4688f5d828b8dc775e6d1da62fc9d41
+PASS  dependency-policy
+PASS  lab-python-tests
+PASS  ci-python-tests
+PASS  netem-syntax-and-safety
+PASS  portable-driver-tests
+SKIP  Rust, release build, and SPDX validation (quick profile)

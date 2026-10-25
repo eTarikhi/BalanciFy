@@ -20,7 +20,7 @@ The service binary is a lab adapter, not the production Windows service. It prev
 
 - Positive: release/default startup cannot silently downgrade to the zero-key lab cipher; relay pins and identity-storage errors are enforced.
 - Negative: developers running the service adapter without configured relay keys must explicitly opt into debug-only loopback lab mode.
-- Scope: this does not turn the binary into a production service. Its non-Windows loopback TCP adapter, simulated uplinks, and missing NDIS packet integration remain lab scaffolding. Windows now defaults to a local-only ACL-protected named-pipe transport (SYSTEM, Administrators, and Interactive Users, with remote clients rejected); per-caller identity/session authorization and Windows runtime validation remain required before production sign-off.
+- Scope: this does not turn the binary into a production service. Its non-Windows loopback TCP adapter, simulated uplinks, and missing NDIS packet integration remain lab scaffolding. Windows now defaults to a local-only ACL-protected named-pipe transport (SYSTEM, Administrators, and Interactive Users, with remote clients rejected); interactive-session validation is enforced, while per-user identity authorization and Windows runtime validation remain required before production sign-off.
 
 ## Validation
 

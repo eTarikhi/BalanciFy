@@ -2,8 +2,8 @@
 //!
 //! Windows uses an ACL-protected named pipe; the loopback TCP adapter is for
 //! non-Windows lab and CI. Both transports carry the same binary framing and
-//! message encoding. Per-caller identity/session authorization remains a
-//! production hardening requirement beyond the pipe ACL.
+//! message encoding. The server enforces a nonzero client session ID; per-user
+//! identity authorization remains a production hardening requirement beyond the ACL.
 
 use crate::{
     decode_frame, encode_frame, frame_event, Event, FrameError, FrameKind, Request, Response, Status,
@@ -109,6 +109,7 @@ impl NamedPipeServer {
                 return Err(error);
             }
         }
+        validate_client_session(handle)?;
 
         // Nonblocking reads let the shared stream loop deliver subscribed
         // events and enforce idle-client limits without a second pipe thread.
@@ -118,6 +119,21 @@ impl NamedPipeServer {
         }
         Ok(pipe)
     }
+}
+
+#[cfg(windows)]
+fn validate_client_session(handle: *mut std::ffi::c_void) -> io::Result<()> {
+    let mut session_id = 0u32;
+    if unsafe { GetNamedPipeClientSessionId(handle, &mut session_id) } == 0 {
+        return Err(last_os_error());
+    }
+    if session_id == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "named-pipe IPC is restricted to interactive user sessions",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -362,6 +378,7 @@ extern "system" {
         out_buffer_size: u32, in_buffer_size: u32, default_timeout: u32,
         security_attributes: *mut SecurityAttributes) -> *mut std::ffi::c_void;
     fn ConnectNamedPipe(pipe: *mut std::ffi::c_void, overlapped: *mut std::ffi::c_void) -> i32;
+    fn GetNamedPipeClientSessionId(pipe: *mut std::ffi::c_void, session_id: *mut u32) -> i32;
     fn SetNamedPipeHandleState(pipe: *mut std::ffi::c_void, mode: *mut u32,
         max_collection_count: *mut u32, collect_data_timeout: *mut u32) -> i32;
     fn ReadFile(handle: *mut std::ffi::c_void, buffer: *mut std::ffi::c_void, bytes_to_read: u32,
