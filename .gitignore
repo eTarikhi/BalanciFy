@@ -10,3 +10,11 @@ sbom.vex.json
 /target/debug
 /target/release
 target/.rustc_info.json
+
+# Native Windows UI build output
+.vs/
+**/bin/
+**/obj/
+/target/local-ci/
+/target/local-ci-windows/
+/target/local-wdk/

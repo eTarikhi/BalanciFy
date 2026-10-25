@@ -104,7 +104,12 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 if (-not $Quick) {
     Require-Command 'cargo'
     Require-Command 'rustc'
+    Require-Command 'dotnet'
     if (-not $SkipWdk) { Require-Command 'msbuild' }
+    $dotnetSdks = Get-NativeText 'dotnet' @('--list-sdks')
+    if ($dotnetSdks -notmatch '(?m)^10\.\d+\.\d+') {
+        throw "The .NET 10 SDK is required for the WinUI shell build; installed SDKs:`n$dotnetSdks"
+    }
 }
 
 $bashCommand = Get-Command bash.exe -ErrorAction SilentlyContinue
@@ -193,6 +198,9 @@ try {
     }
 
     if (-not $Quick) {
+        Invoke-Step 'winui-shell-build' {
+            Invoke-NativeChecked 'dotnet' @('build', 'windows/BalanciFy.App/BalanciFy.App.csproj', '--configuration', 'Release', '--runtime', 'win-x64')
+        }
         Invoke-Step 'rust-workspace-tests' {
             Invoke-NativeChecked 'cargo' @('test', '--workspace', '--all-targets', '--no-fail-fast')
         }

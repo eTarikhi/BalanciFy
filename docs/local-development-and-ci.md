@@ -7,10 +7,10 @@ This repository contains a Windows NDIS/WDF driver and Rust workspace. **Windows
 - Rust 2021 workspace: control plane, tunnel/crypto, IPC, service, relay, client, lab shell CLI, installer.
 - Windows driver: first-party C NDIS/WDF source in `driver/`, built using MSBuild and the WDK.
 - Tooling: Python test/SBOM helpers, POSIX shell policy and lab scripts, PowerShell WDK/native-Windows runner.
-- GitHub Actions (`.github/workflows/ci.yml`): dependency audit; Linux and Windows Rust tests; native x64 MSVC quick checks (including portable driver C/OID tests); WSL-compatible Ubuntu 24.04 quick validation; release build and SPDX validation; Windows x64 and ARM64 WDK builds and PE checks.
+- GitHub Actions (`.github/workflows/ci.yml`): dependency audit; Linux and Windows Rust tests; native x64 MSVC quick checks (including portable driver C/OID tests); a .NET 10 Release build of the WinUI shell; WSL-compatible Ubuntu 24.04 quick validation; release build and SPDX validation; Windows x64 and ARM64 WDK builds and PE checks.
 - The WSL parity job runs the same Bash quick-validation entrypoint and Ubuntu 24.04 userland used inside WSL2. GitHub-hosted Ubuntu is not itself a WSL VM, so this validates the Linux/WSL userland path rather than WSL-kernel integration.
 - The static Pages deploy workflow is separate and publishes from `main`.
-- No Docker/Compose workflow or ML training scripts are present. The app shell is a lab CLI, not the planned production WinUI GUI.
+- No Docker/Compose workflow or ML training scripts are present. `app/` remains a lab CLI; `windows/BalanciFy.App` is the initial WinUI Home-status preview, not the planned complete production GUI.
 
 The local Windows runner covers the Windows-native work, but it does not replicate Linux AddressSanitizer/UndefinedBehaviorSanitizer instrumentation. The remote Linux job still runs those instrumented portable C tests. No local or remote build proves driver signing, installation, runtime packet flow, HVCI, or hardware acceptance.
 
@@ -22,6 +22,7 @@ Use **Developer PowerShell for Visual Studio 2022** so `cl.exe` and `msbuild.exe
 - Visual Studio 2022 / Build Tools 17.x with the C++ build tools.
 - Windows SDK/WDK target 10.0.26100.0 and WDK 10.0.26100.6584 (the CI pin), including x64 and ARM64 libraries.
 - Python 3.10+ via the Windows `py -3` launcher (CI uses Python 3.12).
+- .NET 10 SDK and the Visual Studio 2022 WinUI 3 components for building/running `windows/BalanciFy.App`.
 - Git for Windows (provides `bash.exe`, `sh`, `sed`, `awk`, `grep`, and `find` for the POSIX policy and dry-run lab scripts).
 - GitHub CLI (`gh`) and a configured `origin` are needed only for push/PR automation; local-only validation does not require `gh` or GitHub authentication.
 - Network access on the first Cargo/Python dependency fetch and SPDX validator install.
@@ -96,16 +97,17 @@ Quick mode checks dependency policy, Python suites, netem script syntax/safety, 
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1
 ```
 
-The full profile performs:
+The full profile requires the .NET 10 SDK as well as the Rust toolchain and performs:
 
 1. Dependency/crypto policy audit using Git Bash.
 2. Python lab and CI unit tests.
 3. Netem dry-run/safety checks (no live traffic is generated).
 4. Portable packet/queue/OID C contract tests compiled and run natively with MSVC.
-5. `cargo test --workspace --all-targets --no-fail-fast` using native Windows Rust.
-6. `cargo build --release --workspace`.
-7. SPDX 2.3 and 3.0.1 generation and validation using an isolated Python venv under ignored `target/local-ci-windows/`. SPDX 3.0.1 checks use `tools/ci/validate_spdx3.py`, which inspects the validator result and fails closed even if the third-party CLI emits schema errors with a zero exit code.
-8. x64 and ARM64 WDK build and PE verification with `tools/ci/local-wdk-build.ps1`.
+5. WinUI 3/.NET 10 shell restore and Release build for `win-x64`.
+6. `cargo test --workspace --all-targets --no-fail-fast` using native Windows Rust.
+7. `cargo build --release --workspace`.
+8. SPDX 2.3 and 3.0.1 generation and validation using an isolated Python venv under ignored `target/local-ci-windows/`. SPDX 3.0.1 checks use `tools/ci/validate_spdx3.py`, which inspects the validator result and fails closed even if the third-party CLI emits schema errors with a zero exit code.
+9. x64 and ARM64 WDK build and PE verification with `tools/ci/local-wdk-build.ps1`.
 
 To skip the local WDK build temporarily (remote CI still runs it):
 
@@ -182,3 +184,16 @@ bash tools/ci/local-ci.sh --push
 ```
 
 The Windows-native runner is the recommended path for Windows 11 developers; GitHub Actions remains the cross-platform source of truth for required Linux and Windows jobs.
+
+### Native WinUI preview (Windows 11)
+
+The initial desktop shell is in `windows/BalanciFy.App` and is intentionally built on native Windows, not WSL. With the .NET 10 SDK and Visual Studio 2022 WinUI components installed, run from PowerShell:
+
+```powershell
+cd windows\BalanciFy.App
+dotnet restore
+dotnet build -c Debug -r win-x64
+dotnet run -c Debug -r win-x64
+```
+
+Use `win-arm64` for ARM64. The preview reads the service status over the ACL-protected local named pipe; Rules/Diagnostics detail, accessibility review, packaging, and clean-machine validation remain in progress.

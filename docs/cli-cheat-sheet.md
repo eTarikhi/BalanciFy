@@ -103,7 +103,7 @@ cargo run -p balancify-service -- --insecure-lab --simulate-app-traffic 127.0.0.
 cargo run -p balancify-app -- home
 ```
 
-The app is a lab IPC client, not the planned production GUI. It now connects to the Windows service named pipe by default and to loopback TCP on non-Windows. Set `BALANCIFY_IPC_TRANSPORT=loopback-tcp` on both service and CLI only for an explicit debug TCP lab. Per-user identity authorization and Windows named-pipe runtime validation remain pending.
+The `balancify-app` Rust binary remains a lab CLI. A first WinUI 3/.NET 10 Home status preview is in `windows/BalanciFy.App`; it uses the same Windows named pipe and is not release-ready. The CLI connects to the Windows service named pipe by default and to loopback TCP on non-Windows. Set `BALANCIFY_IPC_TRANSPORT=loopback-tcp` on both service and CLI only for an explicit debug TCP lab. Per-user identity authorization and Windows named-pipe runtime validation remain pending.
 
 ## 2. Build processes
 
