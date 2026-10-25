@@ -332,6 +332,53 @@ public sealed partial class MainWindow : Window
         ConnectionInfo.Message = message;
     }
 
+    private async void ExportSupportBundleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await _refreshGate.WaitAsync(0))
+        {
+            return;
+        }
+
+        RefreshButton.IsEnabled = false;
+        SelfTestButton.IsEnabled = false;
+        ExportSupportBundleButton.IsEnabled = false;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var bundle = await IpcClient.GetSupportBundleAsync(timeout.Token);
+            var picker = new Windows.Storage.Pickers.FileSavePicker();
+            picker.FileTypeChoices.Add("JSON document", new List<string> { ".json" });
+            picker.SuggestedFileName = $"BalanciFy-support-{DateTime.Now:yyyyMMdd-HHmmss}.json";
+            var windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
+            var file = await picker.PickSaveFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
+            await Windows.Storage.FileIO.WriteTextAsync(file, bundle);
+            ConnectionInfo.Severity = InfoBarSeverity.Success;
+            ConnectionInfo.Title = "Support bundle exported";
+            ConnectionInfo.Message = "The service-generated, redacted JSON bundle was saved to the location you selected.";
+        }
+        catch (OperationCanceledException)
+        {
+            ShowDisconnected("Support-bundle request timed out.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException or System.Runtime.InteropServices.COMException)
+        {
+            ShowDisconnected($"Could not export support bundle: {error.Message}");
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+            SelfTestButton.IsEnabled = true;
+            ExportSupportBundleButton.IsEnabled = true;
+            _refreshGate.Release();
+        }
+    }
+
     private async void SelfTestButton_Click(object sender, RoutedEventArgs e)
     {
         if (!await _refreshGate.WaitAsync(0))
@@ -393,6 +440,7 @@ public sealed partial class MainWindow : Window
         };
         RulesPanel.Visibility = page == "rules" ? Visibility.Visible : Visibility.Collapsed;
         SelfTestButton.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
+        ExportSupportBundleButton.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
         DiagnosticsStatsText.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
         SelfTestResultText.Visibility = page == "diagnostics" && !string.IsNullOrEmpty(SelfTestResultText.Text)
             ? Visibility.Visible

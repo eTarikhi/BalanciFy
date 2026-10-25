@@ -44,6 +44,8 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("SetDuplicateModeOpcode = 7", CLIENT)
         self.assertIn("SetAllowMeteredOpcode = 8", CLIENT)
         self.assertIn("SetFlowRuleAsync", WINDOW)
+        self.assertIn("GetSupportBundleAsync", WINDOW)
+        self.assertIn("ExportSupportBundleButton_Click", WINDOW)
         self.assertIn("EditRuleButton_Click", WINDOW)
         self.assertIn("RemoveRuleButton_Click", WINDOW)
         self.assertIn("RulePinnedUplinkBox", WINDOW)
@@ -59,11 +61,13 @@ class WinUiShellContractTests(unittest.TestCase):
             "SetDuplicateMode": 7,
             "SetAllowMetered": 8,
             "RunSelfTest": 9,
+            "GetSupportBundle": 11,
         }
         for opcode, value in opcodes.items():
             with self.subTest(opcode=opcode):
                 self.assertIn(f"Opcode::{opcode} => {value}", IPC_PROTOCOL)
         self.assertIn("FIRST_CUSTOM_RULE_ID: u32 = 1_000", CORE_RULES)
+        self.assertIn("const RESP_SUPPORT_BUNDLE: u8 = 8", IPC_PROTOCOL)
         self.assertIn("id = 1_000", WINDOW)
 
     def test_ipc_decoder_is_bounded_and_big_endian(self):
@@ -72,6 +76,8 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("ReadUInt64BigEndian", CLIENT)
         self.assertIn("UTF8Encoding StrictUtf8 = new(false, true)", CLIENT)
         self.assertIn("reader.RequireEnd()", CLIENT)
+        self.assertIn("SupportBundleResponseTag = 8", CLIENT)
+        self.assertIn("ReadString32()", CLIENT)
         self.assertIn("requestPayload.CopyTo(request, 6)", CLIENT)
         self.assertIn("AppendUInt32(payload, rule.Id)", CLIENT)
         self.assertIn("WriteUInt32BigEndian(encoded, value)", CLIENT)

@@ -15,6 +15,8 @@ internal static class IpcClient
     private const byte GetStatusOpcode = 1;
     private const byte ListFlowRulesOpcode = 3;
     private const byte RunSelfTestOpcode = 9;
+    private const byte GetSupportBundleOpcode = 11;
+    private const byte SupportBundleResponseTag = 8;
     private const byte SetFlowRuleOpcode = 4;
     private const byte RemoveFlowRuleOpcode = 5;
     private const byte SetBondModeOpcode = 6;
@@ -73,6 +75,20 @@ internal static class IpcClient
         var result = new SelfTestSnapshot(reader.ReadBoolean(), reader.ReadString8());
         reader.RequireEnd();
         return result;
+    }
+
+    public static async Task<string> GetSupportBundleAsync(CancellationToken cancellationToken)
+    {
+        var reader = new PayloadReader(await SendRequestAsync(GetSupportBundleOpcode, cancellationToken).ConfigureAwait(false));
+        var responseTag = reader.ReadByte();
+        ThrowServiceError(ref reader, responseTag);
+        if (responseTag != SupportBundleResponseTag)
+        {
+            throw new InvalidDataException($"Expected a support-bundle response, received tag {responseTag}.");
+        }
+        var bundle = reader.ReadString32();
+        reader.RequireEnd();
+        return bundle;
     }
 
     public static Task SetBondModeAsync(bool enabled, CancellationToken cancellationToken) =>
@@ -327,9 +343,22 @@ internal static class IpcClient
             return value;
         }
 
-        public string ReadString8()
+        public string ReadString8() => ReadUtf8(ReadByte());
+
+        public string ReadString32()
         {
-            var length = ReadByte();
+            var length = ReadUInt32();
+            if (length > (uint)MaxPayload)
+            {
+                throw new InvalidDataException("IPC string exceeds the payload limit.");
+            }
+            return ReadUtf8((int)length);
+        }
+
+        public int Remaining => _payload.Length - _offset;
+
+        private string ReadUtf8(int length)
+        {
             EnsureAvailable(length);
             string result;
             try
@@ -343,8 +372,6 @@ internal static class IpcClient
             _offset += length;
             return result;
         }
-
-        public int Remaining => _payload.Length - _offset;
 
         public void RequireEnd()
         {

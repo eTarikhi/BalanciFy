@@ -116,11 +116,18 @@
                         </Border>
                     </StackPanel>
 
-                    <Button x:Name="SelfTestButton"
-                            Content="Run service self-test"
-                            Visibility="Collapsed"
-                            HorizontalAlignment="Left"
-                            Click="SelfTestButton_Click" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="SelfTestButton"
+                                Content="Run service self-test"
+                                Visibility="Collapsed"
+                                HorizontalAlignment="Left"
+                                Click="SelfTestButton_Click" />
+                        <Button x:Name="ExportSupportBundleButton"
+                                Content="Export support bundle…"
+                                Visibility="Collapsed"
+                                HorizontalAlignment="Left"
+                                Click="ExportSupportBundleButton_Click" />
+                    </StackPanel>
                     <TextBlock x:Name="DiagnosticsStatsText" Visibility="Collapsed" TextWrapping="Wrap" />
                     <TextBlock x:Name="SelfTestResultText" Visibility="Collapsed" TextWrapping="Wrap" />
                     <TextBlock x:Name="PageMessage" Text="" TextWrapping="Wrap" Opacity="0.8" />
