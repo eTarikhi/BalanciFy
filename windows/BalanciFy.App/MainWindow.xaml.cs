@@ -11,11 +11,14 @@ public sealed partial class MainWindow : Window
     private bool _loadingSettings;
     private bool _settingsDirty;
     private bool _rulesLoaded;
+    private uint? _editingRuleId;
     private string _page = "home";
 
     public MainWindow()
     {
         InitializeComponent();
+        RuleClassBox.SelectionChanged += RuleClassBox_SelectionChanged;
+        UpdatePinnedRuleInput();
         RootNavigation.SelectedItem = RootNavigation.MenuItems[0];
         _refreshTimer.Tick += async (_, _) => await RefreshStatusAsync();
         _refreshTimer.Start();
@@ -25,6 +28,15 @@ public sealed partial class MainWindow : Window
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
         await RefreshStatusAsync();
+    }
+
+    private void RuleClassBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdatePinnedRuleInput();
+
+    private void UpdatePinnedRuleInput()
+    {
+        RulePinnedUplinkBox.IsEnabled = RuleClassBox.SelectedItem is ComboBoxItem item &&
+                                        byte.TryParse(item.Tag?.ToString(), out var ruleClass) &&
+                                        ruleClass == 2;
     }
 
     private void Settings_Toggled(object sender, RoutedEventArgs e)
@@ -125,22 +137,85 @@ public sealed partial class MainWindow : Window
             ShowRuleValidationError("Priority must be an unsigned 32-bit integer.");
             return;
         }
+        byte pinnedUplink = 0;
+        if (ruleClass == 2 && !byte.TryParse(RulePinnedUplinkBox.Text, out pinnedUplink))
+        {
+            ShowRuleValidationError("Pinned uplink ID must be an integer from 0 to 255.");
+            return;
+        }
         var rule = new FlowRuleSnapshot(
-            NextCustomRuleId(),
+            _editingRuleId ?? NextCustomRuleId(),
             name,
             ruleClass,
-            0,
+            pinnedUplink,
             priority,
             protocol,
             portStart,
             portEnd,
             RuleDuplicateCheckBox.IsChecked == true);
+        var wasEditing = _editingRuleId.HasValue;
+        var action = wasEditing ? "Updated" : "Added";
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.SetFlowRuleAsync(rule, cancellationToken),
-            $"Added rule '{name}'. Changes are in memory until the service restarts."))
+            $"{action} rule '{name}'. Changes are in memory until the service restarts."))
         {
-            RuleNameBox.Text = string.Empty;
+            ResetRuleEditor();
         }
+    }
+
+    private void EditRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: uint id } || id < 1_000)
+        {
+            return;
+        }
+        var rule = _rules.FirstOrDefault(candidate => candidate.Id == id);
+        if (rule is null || rule.Class > 2)
+        {
+            return;
+        }
+
+        _editingRuleId = rule.Id;
+        RuleNameBox.Text = rule.Name;
+        RuleClassBox.SelectedIndex = rule.Class;
+        RulePinnedUplinkBox.Text = rule.PinnedUplink.ToString();
+        RuleProtocolBox.SelectedItem = FindComboItem(RuleProtocolBox, rule.Protocol)
+            ?? AddProtocolItem(rule.Protocol);
+        RulePortStartBox.Text = rule.PortStart.ToString();
+        RulePortEndBox.Text = rule.PortEnd.ToString();
+        RulePriorityBox.Text = rule.Priority.ToString();
+        RuleDuplicateCheckBox.IsChecked = rule.DuplicateEligible;
+        AddRuleButton.Content = "Save rule";
+        CancelRuleEditButton.IsEnabled = true;
+        RuleNameBox.Focus(FocusState.Programmatic);
+    }
+
+    private void CancelRuleEditButton_Click(object sender, RoutedEventArgs e) => ResetRuleEditor();
+
+    private void ResetRuleEditor()
+    {
+        _editingRuleId = null;
+        RuleNameBox.Text = string.Empty;
+        RuleClassBox.SelectedIndex = 0;
+        RulePinnedUplinkBox.Text = "0";
+        RuleProtocolBox.SelectedIndex = 0;
+        RulePortStartBox.Text = "0";
+        RulePortEndBox.Text = "0";
+        RulePriorityBox.Text = "100";
+        RuleDuplicateCheckBox.IsChecked = false;
+        AddRuleButton.Content = "Add rule";
+        CancelRuleEditButton.IsEnabled = false;
+    }
+
+    private static ComboBoxItem? FindComboItem(ComboBox combo, byte value) =>
+        combo.Items.OfType<ComboBoxItem>().FirstOrDefault(item =>
+            byte.TryParse(item.Tag?.ToString(), out var tag) && tag == value);
+
+    private ComboBoxItem AddProtocolItem(byte protocol)
+    {
+        var item = new ComboBoxItem { Content = $"IP protocol {protocol}", Tag = protocol };
+        RuleProtocolBox.Items.Add(item);
+        return item;
     }
 
     private async void RemoveRuleButton_Click(object sender, RoutedEventArgs e)
@@ -150,9 +225,13 @@ public sealed partial class MainWindow : Window
             return;
         }
         var rule = _rules.FirstOrDefault(candidate => candidate.Id == id);
-        await RunRuleMutationAsync(
+        if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.RemoveFlowRuleAsync(id, cancellationToken),
-            $"Removed rule '{rule?.Name ?? id.ToString()}'. Changes are in memory until the service restarts.");
+            $"Removed rule '{rule?.Name ?? id.ToString()}'. Changes are in memory until the service restarts.") &&
+            _editingRuleId == id)
+        {
+            ResetRuleEditor();
+        }
     }
 
     private async Task<bool> RunRuleMutationAsync(Func<CancellationToken, Task> mutation, string successMessage)
@@ -222,6 +301,9 @@ public sealed partial class MainWindow : Window
             });
             if (rule.Id >= 1_000)
             {
+                var editButton = new Button { Content = "Edit", Tag = rule.Id };
+                editButton.Click += EditRuleButton_Click;
+                row.Children.Add(editButton);
                 var removeButton = new Button { Content = "Remove", Tag = rule.Id };
                 removeButton.Click += RemoveRuleButton_Click;
                 row.Children.Add(removeButton);
@@ -304,7 +386,7 @@ public sealed partial class MainWindow : Window
         };
         PageMessage.Text = page switch
         {
-            "rules" => "Built-in rules are read-only. Add/remove custom rules below; changes remain in memory and reset when the service restarts.",
+            "rules" => "Built-in rules are read-only. Add, edit, or remove custom rules below; changes remain in memory and reset when the service restarts.",
             "diagnostics" => "The status below is read directly from the local BalanciFy service. Detailed diagnostics and support-bundle export are under development.",
             "about" => "BalanciFy is a Windows-first multi-WAN bonding project. This WinUI shell talks only to the local service over its ACL-protected named pipe.",
             _ => string.Empty,

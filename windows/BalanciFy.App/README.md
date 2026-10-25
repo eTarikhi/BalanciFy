@@ -1,6 +1,6 @@
 # BalanciFy WinUI shell (preview)
 
-This is the first native WinUI 3 / .NET 10 desktop shell for BalanciFy. It is an unpackaged, self-contained Windows App SDK app and connects to `\\.\pipe\BalanciFy.Service.v1` as the signed-in interactive user. It requests IPC v1 `GetStatus` and renders service version, bond state, policy revision, MTU, active flows, uplink state/RTT/loss/capacity, and selected counters. The Home view applies bonding, duplication, and metered-link settings; Rules can add/remove custom rules while built-ins remain read-only; Diagnostics can invoke the service's capacity self-test. Home status refreshes every two seconds. Full rule editing, persistent settings, and richer Diagnostics/support-bundle workflows remain in progress.
+This is the first native WinUI 3 / .NET 10 desktop shell for BalanciFy. It is an unpackaged, self-contained Windows App SDK app and connects to `\\.\pipe\BalanciFy.Service.v1` as the signed-in interactive user. It requests IPC v1 `GetStatus` and renders service version, bond state, policy revision, MTU, active flows, uplink state/RTT/loss/capacity, and selected counters. The Home view applies bonding, duplication, and metered-link settings; Rules can add/edit/remove custom rules while built-ins remain read-only; Diagnostics can invoke the service's capacity self-test. Home status refreshes every two seconds. Full rule editing, persistent settings, and richer Diagnostics/support-bundle workflows remain in progress.
 
 ## Native Windows 11 development
 

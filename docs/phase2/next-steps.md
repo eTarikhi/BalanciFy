@@ -33,7 +33,7 @@ Current validation: the full local profile at `d630d5d` passed all twelve stages
 4. **Driver packaging and clean-machine validation**: package self-contained .NET 10 + WinAppSDK runtimes, verify installer rollback/offline provisioning and SBOM sidecar on a clean VM.
 5. **HVCI readiness trio**: Driver Verifier with code-integrity, HLK HVCI readiness test, and a VBS/Memory-Integrity-enabled machine (S15).
 6. **SBOM/VEX S13**: CI generates SPDX 2.3 and SPDX 3.0.1 JSON-LD inventories from the locked production graph, validates SPDX 3.0.1 with official JSON Schema + SHACL, and publishes both as run artifacts. Still required: reviewed VEX statements from current advisory data and clean-machine installer sidecar verification.
-7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; Windows service and lab CLI now use ACL-protected named-pipe IPC by default, with a debug-only TCP override for transport tests; non-Windows lab hosts retain loopback TCP. Complete per-user identity policy and Windows runtime validation; complete WinUI Rules editing beyond custom-rule add/remove, deepen Diagnostics, add Relay/tray UX, accessibility, and persistent configuration.
+7. **Client binary + GUI IPC**: client handshake now fails closed with pinned identities by default; Windows service and lab CLI now use ACL-protected named-pipe IPC by default, with a debug-only TCP override for transport tests; non-Windows lab hosts retain loopback TCP. Complete per-user identity policy and Windows runtime validation; finish rule management with persistence and broader validation, deepen Diagnostics, add Relay/tray UX, accessibility, and persistent policy configuration.
 
 ## Process
 

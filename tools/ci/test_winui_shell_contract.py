@@ -44,7 +44,9 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("SetDuplicateModeOpcode = 7", CLIENT)
         self.assertIn("SetAllowMeteredOpcode = 8", CLIENT)
         self.assertIn("SetFlowRuleAsync", WINDOW)
+        self.assertIn("EditRuleButton_Click", WINDOW)
         self.assertIn("RemoveRuleButton_Click", WINDOW)
+        self.assertIn("RulePinnedUplinkBox", WINDOW)
         self.assertIn("ApplySettingsButton_Click", WINDOW)
 
     def test_client_request_codes_match_rust_ipc_contract(self):

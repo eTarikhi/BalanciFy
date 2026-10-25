@@ -88,12 +88,14 @@
                         <StackPanel x:Name="RulesList" Spacing="4" />
                         <Border Padding="16" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                             <StackPanel Spacing="10">
-                                <TextBlock Text="Add a custom rule" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock Text="Custom rule editor" FontSize="18" FontWeight="SemiBold" />
                                 <TextBox x:Name="RuleNameBox" Header="Name" PlaceholderText="For example: video-call" MaxLength="255" />
                                 <ComboBox x:Name="RuleClassBox" Header="Traffic class" SelectedIndex="0">
                                     <ComboBoxItem Content="Bulk" Tag="0" />
                                     <ComboBoxItem Content="Latency-sensitive" Tag="1" />
+                                    <ComboBoxItem Content="Pinned to uplink" Tag="2" />
                                 </ComboBox>
+                                <TextBox x:Name="RulePinnedUplinkBox" Header="Pinned uplink ID" Text="0" MaxLength="3" IsEnabled="False" />
                                 <ComboBox x:Name="RuleProtocolBox" Header="Protocol" SelectedIndex="0">
                                     <ComboBoxItem Content="Any" Tag="0" />
                                     <ComboBoxItem Content="ICMP" Tag="1" />
@@ -106,7 +108,10 @@
                                 </StackPanel>
                                 <TextBox x:Name="RulePriorityBox" Header="Priority" Text="100" MaxLength="10" />
                                 <CheckBox x:Name="RuleDuplicateCheckBox" Content="Eligible for packet duplication" />
-                                <Button x:Name="AddRuleButton" Content="Add rule" IsEnabled="False" HorizontalAlignment="Left" Click="AddRuleButton_Click" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="AddRuleButton" Content="Add rule" IsEnabled="False" HorizontalAlignment="Left" Click="AddRuleButton_Click" />
+                                    <Button x:Name="CancelRuleEditButton" Content="Cancel edit" IsEnabled="False" HorizontalAlignment="Left" Click="CancelRuleEditButton_Click" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>
