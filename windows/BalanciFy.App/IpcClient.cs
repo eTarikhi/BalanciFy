@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 
 namespace BalanciFy.App;
 
@@ -89,6 +90,46 @@ internal static class IpcClient
         var bundle = reader.ReadString32();
         reader.RequireEnd();
         return bundle;
+    }
+
+    public static async Task<RelaySnapshot> GetRelaySnapshotAsync(CancellationToken cancellationToken)
+    {
+        var bundle = await GetSupportBundleAsync(cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(bundle, new JsonDocumentOptions { MaxDepth = 16 });
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("relay_configured", out var relayConfigured) ||
+            relayConfigured.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+            !root.TryGetProperty("relay_failover_count", out var failovers) ||
+            failovers.ValueKind != JsonValueKind.Number ||
+            !root.TryGetProperty("relay_failover_convergence_ms", out var convergence) ||
+            convergence.ValueKind is not (JsonValueKind.Null or JsonValueKind.Number) ||
+            !root.TryGetProperty("rekey", out var rekey) ||
+            rekey.ValueKind != JsonValueKind.Object ||
+            !rekey.TryGetProperty("update_required", out var updateRequired) ||
+            updateRequired.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new InvalidDataException("Support bundle is missing required relay-health fields.");
+        }
+
+        if (!failovers.TryGetUInt64(out var failoverCount))
+        {
+            throw new InvalidDataException("Support bundle relay-failover count is invalid.");
+        }
+        ulong? convergenceMs = null;
+        if (convergence.ValueKind == JsonValueKind.Number)
+        {
+            if (!convergence.TryGetUInt64(out var value))
+            {
+                throw new InvalidDataException("Support bundle relay convergence time is invalid.");
+            }
+            convergenceMs = value;
+        }
+        return new RelaySnapshot(
+            relayConfigured.GetBoolean(),
+            failoverCount,
+            convergenceMs,
+            updateRequired.GetBoolean());
     }
 
     public static Task SetBondModeAsync(bool enabled, CancellationToken cancellationToken) =>
@@ -430,3 +471,9 @@ internal sealed record FlowRuleSnapshot(
     bool DuplicateEligible);
 
 internal sealed record SelfTestSnapshot(bool Passed, string Detail);
+
+internal sealed record RelaySnapshot(
+    bool Configured,
+    ulong FailoverCount,
+    ulong? LastConvergenceMs,
+    bool RekeyUpdateRequired);

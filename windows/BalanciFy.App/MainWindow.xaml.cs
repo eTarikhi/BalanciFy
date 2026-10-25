@@ -63,6 +63,52 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task<UiPreferences> ReconcileSavedRulesAsync(UiPreferences preferences, CancellationToken cancellationToken)
+    {
+        var serviceRules = await IpcClient.GetFlowRulesAsync(cancellationToken);
+        var serviceRulesById = serviceRules.ToDictionary(rule => rule.Id);
+        var usedIds = serviceRulesById.Keys.ToHashSet();
+        var reconciledRules = new List<FlowRuleSnapshot>(preferences.CustomRules.Count);
+        var changed = false;
+        foreach (var savedRule in preferences.CustomRules)
+        {
+            var rule = savedRule;
+            if (serviceRulesById.TryGetValue(savedRule.Id, out var currentRule) && currentRule != savedRule)
+            {
+                rule = savedRule with { Id = NextCustomRuleId(usedIds) };
+                usedIds.Add(rule.Id);
+                changed = true;
+            }
+            else
+            {
+                usedIds.Add(rule.Id);
+            }
+            reconciledRules.Add(rule);
+        }
+
+        if (!changed)
+        {
+            return preferences;
+        }
+
+        var reconciled = preferences with { CustomRules = reconciledRules };
+        await UiPreferencesStore.SaveAsync(reconciled, CancellationToken.None);
+        return reconciled;
+    }
+
+    private static uint NextCustomRuleId(IEnumerable<uint> occupiedIds)
+    {
+        var used = occupiedIds.ToHashSet();
+        for (uint id = 1_000; id < uint.MaxValue; id++)
+        {
+            if (!used.Contains(id))
+            {
+                return id;
+            }
+        }
+        throw new InvalidOperationException("No custom rule identifiers are available.");
+    }
+
     private async Task SynchronizePreferencesAsync(UiPreferences preferences, CancellationToken cancellationToken)
     {
         await IpcClient.SetBondModeAsync(preferences.BondEnabled, cancellationToken);
@@ -127,9 +173,7 @@ public sealed partial class MainWindow : Window
             await IpcClient.SetAllowMeteredAsync(MeteredToggle.IsOn, timeout.Token);
             _settingsDirty = false;
             applied = true;
-            var customRules = _rulesLoaded
-                ? _rules.Where(rule => rule.Id >= 1_000).ToArray()
-                : _preferences?.CustomRules ?? Array.Empty<FlowRuleSnapshot>();
+            var customRules = _preferences?.CustomRules ?? Array.Empty<FlowRuleSnapshot>();
             var savedPreferences = new UiPreferences(
                 1,
                 BondToggle.IsOn,
@@ -235,7 +279,8 @@ public sealed partial class MainWindow : Window
         var action = wasEditing ? "Updated" : "Added";
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.SetFlowRuleAsync(rule, cancellationToken),
-            $"{action} rule '{name}'. The service accepted the change."))
+            $"{action} rule '{name}'. The service accepted the change.",
+            ruleToSave: rule))
         {
             ResetRuleEditor();
         }
@@ -305,14 +350,19 @@ public sealed partial class MainWindow : Window
         var rule = _rules.FirstOrDefault(candidate => candidate.Id == id);
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.RemoveFlowRuleAsync(id, cancellationToken),
-            $"Removed rule '{rule?.Name ?? id.ToString()}'. The service accepted the change.") &&
+            $"Removed rule '{rule?.Name ?? id.ToString()}'. The service accepted the change.",
+            removedRuleId: id) &&
             _editingRuleId == id)
         {
             ResetRuleEditor();
         }
     }
 
-    private async Task<bool> RunRuleMutationAsync(Func<CancellationToken, Task> mutation, string successMessage)
+    private async Task<bool> RunRuleMutationAsync(
+        Func<CancellationToken, Task> mutation,
+        string successMessage,
+        FlowRuleSnapshot? ruleToSave = null,
+        uint? removedRuleId = null)
     {
         await _preferencesLoadTask;
         if (!await _refreshGate.WaitAsync(0))
@@ -333,35 +383,31 @@ public sealed partial class MainWindow : Window
             ConnectionInfo.Severity = InfoBarSeverity.Success;
             ConnectionInfo.Title = "Traffic rule updated";
             ConnectionInfo.Message = successMessage;
-            if (_page == "rules")
+            var ownedRules = (_preferences?.CustomRules ?? Array.Empty<FlowRuleSnapshot>())
+                .ToDictionary(rule => rule.Id);
+            if (removedRuleId.HasValue)
             {
-                try
-                {
-                    _rules = await IpcClient.GetFlowRulesAsync(timeout.Token);
-                    RenderRules();
-                    var savedPreferences = BuildPreferences(_rules);
-                    try
-                    {
-                        await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
-                        ConnectionInfo.Message = $"{successMessage} Custom rules are also saved for this Windows user.";
-                    }
-                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-                    {
-                        ConnectionInfo.Severity = InfoBarSeverity.Warning;
-                        ConnectionInfo.Title = "Rule applied but not saved";
-                        ConnectionInfo.Message = $"The service accepted the rule, but local persistence failed: {error.Message}";
-                    }
-                    _preferences = savedPreferences;
-                    _hasPreferencesToRestore = true;
-                    _preferencesSynchronized = true;
-                }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException)
-                {
-                    ConnectionInfo.Severity = InfoBarSeverity.Warning;
-                    ConnectionInfo.Title = "Rule applied but not saved";
-                    ConnectionInfo.Message = $"The service accepted the rule, but local persistence failed: {error.Message}";
-                }
+                ownedRules.Remove(removedRuleId.Value);
             }
+            if (ruleToSave is not null)
+            {
+                ownedRules[ruleToSave.Id] = ruleToSave;
+            }
+            var savedPreferences = BuildPreferences(ownedRules.Values.OrderBy(rule => rule.Id).ToArray());
+            try
+            {
+                await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
+                ConnectionInfo.Message = $"{successMessage} This shell's custom rules are saved for this Windows user.";
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                ConnectionInfo.Title = "Rule applied but not saved";
+                ConnectionInfo.Message = $"The service accepted the rule, but local persistence failed: {error.Message}";
+            }
+            _preferences = savedPreferences;
+            _hasPreferencesToRestore = true;
+            _preferencesSynchronized = true;
         }
         catch (OperationCanceledException)
         {
@@ -422,18 +468,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private uint NextCustomRuleId()
-    {
-        var used = _rules.Select(rule => rule.Id).ToHashSet();
-        for (uint id = 1_000; id < uint.MaxValue; id++)
-        {
-            if (!used.Contains(id))
-            {
-                return id;
-            }
-        }
-        throw new InvalidOperationException("No custom rule identifiers are available.");
-    }
+    private uint NextCustomRuleId() => NextCustomRuleId(_rules.Select(rule => rule.Id));
 
     private void ShowRuleValidationError(string message)
     {
@@ -538,17 +573,20 @@ public sealed partial class MainWindow : Window
         {
             "home" => "Multi-WAN status",
             "rules" => "Traffic policy",
+            "relay" => "Relay health",
             "diagnostics" => "Service diagnostics",
             _ => "Product information",
         };
         PageMessage.Text = page switch
         {
             "rules" => "Built-in rules are read-only. Custom rules are saved in this Windows user's local preferences and re-applied when the shell reconnects; the service itself keeps policy in memory.",
+            "relay" => "Relay failover and key-update health from the service. Relay endpoints and identities are deliberately redacted.",
             "diagnostics" => "Service counters and the capacity self-test are read from the local service. Export creates a redacted JSON bundle you can review or share from the save location you choose.",
             "about" => "BalanciFy is a Windows-first multi-WAN bonding project. This WinUI shell talks only to the local service over its ACL-protected named pipe.",
             _ => string.Empty,
         };
         RulesPanel.Visibility = page == "rules" ? Visibility.Visible : Visibility.Collapsed;
+        RelayPanel.Visibility = page == "relay" ? Visibility.Visible : Visibility.Collapsed;
         SelfTestButton.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
         ExportSupportBundleButton.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
         DiagnosticsStatsText.Visibility = page == "diagnostics" ? Visibility.Visible : Visibility.Collapsed;
@@ -582,7 +620,9 @@ public sealed partial class MainWindow : Window
             }
             if (_hasPreferencesToRestore && _preferences is not null && !_settingsDirty && !_preferencesSynchronized)
             {
-                await SynchronizePreferencesAsync(_preferences, timeout.Token);
+                var preferencesToRestore = await ReconcileSavedRulesAsync(_preferences, timeout.Token);
+                _preferences = preferencesToRestore;
+                await SynchronizePreferencesAsync(preferencesToRestore, timeout.Token);
                 _preferencesSynchronized = true;
                 snapshot = await IpcClient.GetStatusAsync(timeout.Token);
             }
@@ -623,6 +663,14 @@ public sealed partial class MainWindow : Window
                 _rules = await IpcClient.GetFlowRulesAsync(timeout.Token);
                 RenderRules();
             }
+            if (_page == "relay")
+            {
+                var relay = await IpcClient.GetRelaySnapshotAsync(timeout.Token);
+                var convergence = relay.LastConvergenceMs is { } milliseconds
+                    ? $"{milliseconds:N0} ms"
+                    : "not yet recorded";
+                RelayStatusText.Text = $"Relay configured: {(relay.Configured ? "yes" : "no")} · failovers: {relay.FailoverCount:N0} · last failover convergence: {convergence} · coordinated key update due: {(relay.RekeyUpdateRequired ? "yes" : "no")}";
+            }
             if (_page == "diagnostics")
             {
                 DiagnosticsStatsText.Text = $"Forwarded {snapshot.PacketsForwarded:N0} packets · refused {snapshot.Refused:N0} · authentication failures {snapshot.AuthenticationFailures:N0} · ECN CE {snapshot.EcnCe:N0} · delay signals {snapshot.DelayEvents:N0}";
@@ -630,11 +678,11 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            ShowDisconnected("Service request timed out. The previous snapshot is retained.");
+            ShowDisconnected("Service request or saved-preference restoration timed out. The previous snapshot is retained.");
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException or System.Text.Json.JsonException)
         {
-            ShowDisconnected($"Could not read service status: {error.Message}");
+            ShowDisconnected($"Could not refresh service state or restore saved preferences: {error.Message}");
         }
         finally
         {

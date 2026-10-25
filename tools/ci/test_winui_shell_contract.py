@@ -46,6 +46,7 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("SetAllowMeteredOpcode = 8", CLIENT)
         self.assertIn("SetFlowRuleAsync", WINDOW)
         self.assertIn("GetSupportBundleAsync", WINDOW)
+        self.assertIn("GetRelaySnapshotAsync", WINDOW)
         self.assertIn("ExportSupportBundleButton_Click", WINDOW)
         self.assertIn("EditRuleButton_Click", WINDOW)
         self.assertIn("RemoveRuleButton_Click", WINDOW)
@@ -95,6 +96,18 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("AutomationProperties.SetName(removeButton", WINDOW)
         self.assertIn('AutomationProperties.LiveSetting="Polite"', (APP_DIR / "MainWindow.xaml").read_text(encoding="utf-8"))
 
+    def test_relay_health_panel_uses_redacted_service_diagnostics(self):
+        xaml = (APP_DIR / "MainWindow.xaml").read_text(encoding="utf-8")
+        self.assertIn('Content="Relay health" Tag="relay"', xaml)
+        self.assertIn('x:Name="RelayPanel"', xaml)
+        self.assertIn('x:Name="RelayStatusText"', xaml)
+        self.assertIn("GetRelaySnapshotAsync", WINDOW)
+        self.assertIn("JsonDocument.Parse(bundle", CLIENT)
+        self.assertIn('"relay_failover_count"', CLIENT)
+        self.assertIn('"relay_failover_convergence_ms"', CLIENT)
+        self.assertIn('"update_required"', CLIENT)
+        self.assertIn("relay endpoints and identities", WINDOW.lower())
+
     def test_user_preferences_are_bounded_atomic_and_reapplied(self):
         self.assertIn("Environment.SpecialFolder.LocalApplicationData", PREFERENCES)
         self.assertIn('"BalanciFy",', PREFERENCES)
@@ -105,6 +118,9 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("FileMode.CreateNew", PREFERENCES)
         self.assertIn("stream.Flush(flushToDisk: true)", PREFERENCES)
         self.assertIn("File.Move(temporaryPath, path, overwrite: true)", PREFERENCES)
+        self.assertIn("ReconcileSavedRulesAsync", WINDOW)
+        self.assertIn("currentRule != savedRule", WINDOW)
+        self.assertIn("NextCustomRuleId(usedIds)", WINDOW)
         self.assertIn("SynchronizePreferencesAsync", WINDOW)
         self.assertIn("UiPreferencesStore.SaveAsync", WINDOW)
         self.assertIn("_serviceDisconnected", WINDOW)

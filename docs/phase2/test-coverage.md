@@ -1,7 +1,7 @@
-# Test coverage — current inventory: 334 Rust tests, what is covered
+# Test coverage — current inventory: 335 Rust tests, what is covered
 
-Date: 2026-10-25
-Status: full local profile at `d630d5d` passed 331 Rust tests and all twelve profile stages (logs: `target/local-ci/logs/20261024T204831Z/`). Later changes added the unsupported-datagram rejection regression, handshake-timeout-from-attempt regression, and endpoint-to-identity selection regression; the current source inventory is 334 tests, pending the next consolidated Rust run.
+Date: 2026-10-26
+Status: full local profile at `9b53620` passed 335 Rust tests and all twelve profile stages (logs: `target/local-ci/logs/20261025T225834Z/`). Subsequent edits are WinUI C# and Python source-contract checks; quick profile at `target/local-ci/logs/20261025T232137Z/` passed 61 CI Python tests and all other quick stages, and they do not change Rust tests.
 
 ## Counts
 
@@ -43,7 +43,7 @@ Status: full local profile at `d630d5d` passed 331 Rust tests and all twelve pro
 - SBOM tool: 7 Python tests for locked-graph closure, dev-dependency exclusion, license/checksum preservation, invalid-license handling, VEX omission, missing graph rejection, and atomic writes; CI also validates the generated document using `spdx-tools` 0.8.5.
 - crypto bench, drr-bench, pacing-bench, ecn-bench, throughput.rs, etc. (binaries, not tests)
 
-The full-profile run at `d630d5d` passed 331 Rust tests on Linux, 5 lab Python tests, 49 CI Python tests, 12 portable driver tests, dependency policy, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. Later relay/service changes raise the source inventory to 334; include these tests in the next consolidated Rust run. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
+The full-profile run at `9b53620` passed 335 Rust tests on Linux, 5 lab Python tests, 60 CI Python tests, 12 portable driver tests, dependency policy, release build, SPDX 2.3/3.0.1 generation and validation, and netem safety. The latest WinUI changes are covered by source-contract tests and await the next consolidated run. Earlier runner failures were corrected (E0503 borrow checker in delay detection, missing Counters fields, truncated test tail, FlowClass/BondClass mismatch, WindowsEtwHandle case, bench imports, rate-limiter burst, non-ASCII markers, format! escaping, and ACK argument order).
 
 ## Gaps (deliberate, in scope for rest of Phase 2/3)
 

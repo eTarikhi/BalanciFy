@@ -15,6 +15,9 @@
             <NavigationViewItem Content="Rules" Tag="rules">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem Content="Relay health" Tag="relay">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Globe" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem Content="Diagnostics" Tag="diagnostics">
                 <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
             </NavigationViewItem>
@@ -82,6 +85,12 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+
+                    <StackPanel x:Name="RelayPanel" Visibility="Collapsed" Spacing="10">
+                        <TextBlock Text="Relay and transport health" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock x:Name="RelayStatusText" Text="Waiting for service diagnostics…" TextWrapping="Wrap" />
+                        <TextBlock Text="Relay endpoints and identities are intentionally omitted from this view." Opacity="0.75" TextWrapping="Wrap" />
+                    </StackPanel>
 
                     <StackPanel x:Name="RulesPanel" Visibility="Collapsed" Spacing="10">
                         <TextBlock Text="Configured traffic rules" FontSize="20" FontWeight="SemiBold" />
