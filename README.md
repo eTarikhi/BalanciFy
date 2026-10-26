@@ -41,8 +41,10 @@ support-bundle validation edits in its worktree passed dependency audit, 5 lab
 Python tests, 62 CI Python tests, netem safety and 12 portable driver tests; its
 logs are retained at `target/local-ci/logs/20261026T011948Z/`. It intentionally
 skips Rust/release/SPDX validation. These results are CI evidence only, not product acceptance. The
-latest workflow runs for the audit commits were still in progress when this
-status was written.
+latest workflow runs `40253719333` (pull request) and `40253714360` (push)
+for head `5df7959` were queued at 2026-10-26 01:20 UTC; they are not evidence
+of a pass or failure. The revised Windows diagnostic workflow and native build
+remain unvalidated on hosted CI.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
