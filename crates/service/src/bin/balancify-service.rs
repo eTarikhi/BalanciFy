@@ -12,6 +12,7 @@ use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
 use balancify_service::driver_device::{should_retry_driver_tx, DriverDevice};
 use balancify_service::ipc::server::{IpcServer, IpcStream};
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
+use balancify_service::machine_policy::MachinePolicyStore;
 use balancify_service::{Service, ServiceConfig, Action};
 use std::net::{UdpSocket, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -407,10 +408,19 @@ fn main() -> std::io::Result<()> {
         probe_timeout: Duration::from_secs(5),
         auto_accept: false,
     };
+    let policy_store = MachinePolicyStore::open(state_dir.join("machine-policy"))?;
     let dummy_key = [0u8; 32];
     let dummy_salt = [0u8; 3];
     let dummy_cipher = TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
-    let mut svc = Service::new(cfg, dummy_cipher.clone(), dummy_cipher);
+    let (mut svc, recovered_policy) = Service::new_with_machine_policy_store(
+        cfg,
+        dummy_cipher.clone(),
+        dummy_cipher,
+        policy_store,
+    )?;
+    if recovered_policy {
+        eprintln!("WARNING: machine policy was recovered from its last valid backup");
+    }
     svc.set_static_keypair(keypair);
     if !pinned_relays.is_empty() {
         svc.set_pinned_relays(pinned_relays);

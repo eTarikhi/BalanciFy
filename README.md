@@ -27,30 +27,22 @@ for the prioritized work list and evidence classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows Rust workspace tests pass; latest recorded CI at `b6f955e` reports 335 Rust tests on each platform, and Linux release build plus SPDX 2.3/3.0.1 generation/validation pass. Authenticated lab transport, IPC contracts, bounded packet handling, simulated path/failover tests and support-bundle redaction have automated coverage. | Production Windows service lifecycle, relay deployment/interoperability, service-owned durable machine policy, and real network behavior. |
-| Windows UI | Native WinUI 3/.NET shell source contains Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and bounded per-user UI preferences. | The latest completed hosted run at `b6f955e` failed while building WinUI; its original log was not retained. The next CI run is being improved to expose compiler diagnostics. No Windows runtime, tray, accessibility, or usability acceptance is recorded. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows Rust workspace tests, Linux release build, and SPDX 2.3/3.0.1 generation/validation passed on the source represented by head `331797b`; those jobs do not include the new machine-policy changes in this branch. Authenticated lab transport, IPC contracts, bounded packet handling, simulated path/failover tests and support-bundle redaction have automated coverage. | Production Windows service lifecycle, relay deployment/interoperability, validation of the new service-owned durable machine-policy implementation, and real network behavior. |
+| Windows UI | Native WinUI 3/.NET shell source contains Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and an explicit one-time migration path for old per-user policy snapshots. The in-progress changes remove ongoing per-user policy saves/replay and route settings through service-owned policy. | Hosted runs for `331797b` failed at the WinUI build: XAML compiler WMC0055 rejected `SymbolIcon Symbol="Info"` at `MainWindow.xaml(25,54)`. The current source uses `Help` and has a regression assertion; it also adds the missing `if: always()` so native quick checks run after a failed build. Hosted validation of these fixes and current C# changes is pending. No Windows runtime, tray, accessibility, or usability acceptance is recorded. |
 | Driver and OS integration | Hosted WDK CI compiles/links unsigned x64 and ARM64 drivers and checks PE mitigations/INF contracts; portable C packet/OID tests pass. Driver/service source includes bounded queue and injection paths. | No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
 | Performance gates | Blueprint §10.3 defines the thresholds and lab harnesses include safe netem dry-run and software simulations. | No Rig B/hardware measurements. Aggregate/single-flow throughput, ≤3 ms added wired delay, ≤0.1% delivered reordering, ≤2 s failover, 72 h soak, 100 resume cycles and compatibility matrix remain acceptance targets, not results. |
 
-Hosted CI at `b6f955e` passed dependency/crypto audit, WSL/Linux quick profile,
-lab Python tests, Ubuntu/Windows Rust tests, x64/ARM64 WDK builds and Linux
-release/SBOM jobs; only the native MSVC job failed at the WinUI build, so its
-following native quick profile was skipped. A Linux quick profile run against source HEAD `44c89e8` with the pending
-support-bundle validation edits in its worktree passed dependency audit, 5 lab
-Python tests, 62 CI Python tests, netem safety and 12 portable driver tests; its
-logs are retained at `target/local-ci/logs/20261026T011948Z/`. It intentionally
-skips Rust/release/SPDX validation. These results are CI evidence only, not product acceptance. The
-latest workflow runs `40253719333` (pull request) and `40253714360` (push)
-for head `5df7959` were queued at 2026-10-26 01:20 UTC; they are not evidence
-of a pass or failure. The revised Windows diagnostic workflow and native build
-remain unvalidated on hosted CI.
+Hosted runs `40256260258` and `40256265450` for head `331797b` completed with failure: Ubuntu/Windows Rust tests, Linux release/SPDX, dependency, WSL, lab, and WDK x64/ARM64 jobs passed; native WinUI failed while the following native quick step was skipped. Local quick CI on the current worktree passed dependency audit, 5 lab Python tests, 70 CI Python tests, netem safety and 12 portable driver tests; it intentionally skips Rust/release/SPDX. Logs: `target/local-ci/logs/20261026T021425Z/`. Targeted machine-policy and WinUI contracts passed 8/8 and 10/10. Hosted runs predate these policy changes and do not validate them. Windows build/runtime and product acceptance remain open.
+
+The current worktree implements ADR-0046 service-owned policy and explicit migration from the historical `%LOCALAPPDATA%` snapshot. The change is not yet validated by Rust/Windows builds; do not treat source presence as runtime evidence.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
-identities use account-appropriate state roots; the shell's policy snapshot is
-per-user UI state, not the service's durable machine configuration. See ADR-0035
-and ADR-0038 for transport fail-closed behavior.
+identities use account-appropriate state roots; ADR-0046 makes the service the
+intended durable machine-policy authority and limits the old per-user file to
+explicit migration. Rust/Windows validation is pending. See ADR-0035, ADR-0038,
+and ADR-0046 for transport and policy behavior.
 
 ## Repository layout
 

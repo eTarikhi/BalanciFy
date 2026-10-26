@@ -1,8 +1,10 @@
 # ADR-0045: Persist WinUI policy preferences in the interactive user's profile
 
-- Status: Accepted
+- Status: Superseded by ADR-0046 for policy authority and ongoing persistence; retained as the historical v1 migration format
 - Date: 2026-10-26
-- Related: ADR-0035, ADR-0038, ADR-0044
+- Related: ADR-0035, ADR-0038, ADR-0044, ADR-0046
+
+> **Current behavior:** the `%LOCALAPPDATA%\\BalanciFy\\ui-preferences.json` v1 document is read-only legacy migration input. It is never replayed automatically and the shell no longer writes it. A user must explicitly confirm import to commit settings and merged rules as machine-wide policy through service IPC. See ADR-0046. The historic decision below explains how the v1 file came to exist; its restoration/save behavior is no longer current.
 
 ## Context
 
@@ -17,6 +19,6 @@ The WinUI shell could edit service policy and custom flow rules, but the service
 - If the service accepts an update but the local write fails, the UI reports that the service change succeeded but persistence did not. The UI does not claim the service itself has durable policy.
 - Service policy remains volatile for CLI, other IPC clients, and periods before this user's shell reconnects. A future service-owned persistent configuration would require a separate design for machine-wide versus per-user ownership and the service's security/ACL model.
 
-## Consequences
+## Consequences (historical)
 
-The shell now preserves an interactive user's preferences across service and application restarts without changing IPC v1. The service still starts with defaults until a shell carrying saved preferences connects, and multiple Windows users can apply different local preference sets to the same machine-wide service. Windows compilation, application runtime, named-pipe restoration, and multi-user behavior require native Windows validation; source-level tests do not establish those runtime properties.
+At the time, the shell preserved an interactive user's preferences across service and application restarts without changing IPC v1. The service started with defaults until a shell carrying saved preferences connected, and multiple Windows users could apply different local preference sets to the same machine-wide service. This behavior is superseded: the service now owns durable machine policy, and the old file is available only for explicit one-time migration. Windows compilation, application runtime, named-pipe behavior, ACL enforcement, and multi-user behavior still require native Windows validation; source-level tests do not establish those runtime properties.

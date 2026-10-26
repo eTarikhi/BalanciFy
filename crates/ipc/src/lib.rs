@@ -34,6 +34,7 @@ pub const FRAME_HEADER_LEN: usize = 6;
 /// Hard ceiling on one message. Status snapshots are a few hundred bytes; a
 /// multi-megabyte frame on a control pipe is an attack, not a use case (Sec.9.1a).
 pub const MAX_PAYLOAD: usize = 1 << 20;
+pub const MAX_CUSTOM_POLICY_RULES: usize = 128;
 
 // ------------------------------------------------------------------- framing
 
@@ -222,6 +223,7 @@ pub enum Opcode {
     RunSelfTest,
     SubscribeEvents,
     GetSupportBundle,
+    ApplyMachinePolicy,
 }
 
 impl Opcode {
@@ -239,6 +241,7 @@ impl Opcode {
             Opcode::RunSelfTest => 9,
             Opcode::SubscribeEvents => 10,
             Opcode::GetSupportBundle => 11,
+            Opcode::ApplyMachinePolicy => 12,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -255,10 +258,11 @@ impl Opcode {
             9 => Opcode::RunSelfTest,
             10 => Opcode::SubscribeEvents,
             11 => Opcode::GetSupportBundle,
+            12 => Opcode::ApplyMachinePolicy,
             _ => return None,
         })
     }
-    pub fn all() -> [Opcode; 12] {
+    pub fn all() -> [Opcode; 13] {
         [
             Opcode::Ping,
             Opcode::GetStatus,
@@ -272,6 +276,7 @@ impl Opcode {
             Opcode::RunSelfTest,
             Opcode::SubscribeEvents,
             Opcode::GetSupportBundle,
+            Opcode::ApplyMachinePolicy,
         ]
     }
 }
@@ -333,6 +338,12 @@ pub enum Request {
     RunSelfTest,
     SubscribeEvents { interval_hz: u8 },
     GetSupportBundle,
+    ApplyMachinePolicy {
+        bond_enabled: bool,
+        duplicate_mode: bool,
+        allow_metered: bool,
+        custom_rules: Vec<FlowRule>,
+    },
 }
 
 /// One row of the Rules screen (Sec.8.2), and the wire form of a core rule.
@@ -461,6 +472,16 @@ impl Request {
             Request::GetSupportBundle => {
                 w.u8(Opcode::GetSupportBundle.as_u8());
             }
+            Request::ApplyMachinePolicy { bond_enabled, duplicate_mode, allow_metered, custom_rules } => {
+                w.u8(Opcode::ApplyMachinePolicy.as_u8())
+                    .bool(*bond_enabled)
+                    .bool(*duplicate_mode)
+                    .bool(*allow_metered)
+                    .u16(custom_rules.len() as u16);
+                for rule in custom_rules {
+                    encode_rule(&mut w, rule);
+                }
+            }
             Request::RemoveFlowRule { id } => {
                 w.u8(Opcode::RemoveFlowRule.as_u8()).u32(*id);
             }
@@ -486,6 +507,16 @@ impl Request {
             Opcode::SetAllowMetered => Request::SetAllowMetered { allowed: r.bool()? },
             Opcode::SubscribeEvents => Request::SubscribeEvents { interval_hz: r.u8()? },
             Opcode::GetSupportBundle => Request::GetSupportBundle,
+            Opcode::ApplyMachinePolicy => {
+                let bond_enabled = r.bool()?;
+                let duplicate_mode = r.bool()?;
+                let allow_metered = r.bool()?;
+                let count = r.u16()? as usize;
+                if count > MAX_CUSTOM_POLICY_RULES { return None; }
+                let mut custom_rules = Vec::with_capacity(count);
+                for _ in 0..count { custom_rules.push(decode_rule(&mut r)?); }
+                Request::ApplyMachinePolicy { bond_enabled, duplicate_mode, allow_metered, custom_rules }
+            }
             Opcode::RemoveFlowRule => Request::RemoveFlowRule { id: r.u32()? },
             Opcode::SetFlowRule => Request::SetFlowRule(decode_rule(&mut r)?),
         };
@@ -960,10 +991,27 @@ mod tests {
             Request::GetSupportBundle,
             Request::RemoveFlowRule { id: 4242 },
             Request::SetFlowRule(sample_rule()),
+            Request::ApplyMachinePolicy {
+                bond_enabled: true,
+                duplicate_mode: false,
+                allow_metered: true,
+                custom_rules: vec![sample_rule()],
+            },
         ];
         for req in requests {
             assert_eq!(Request::decode(&req.encode()), Some(req.clone()));
         }
+    }
+
+    #[test]
+    fn apply_machine_policy_rejects_rule_counts_above_the_contract_limit() {
+        let mut writer = Writer::new();
+        writer.u8(Opcode::ApplyMachinePolicy.as_u8())
+            .bool(true)
+            .bool(false)
+            .bool(false)
+            .u16((MAX_CUSTOM_POLICY_RULES + 1) as u16);
+        assert_eq!(Request::decode(&writer.into_bytes()), None);
     }
 
     #[test]
@@ -1012,7 +1060,7 @@ mod tests {
         for op in Opcode::all() {
             assert_eq!(Opcode::from_u8(op.as_u8()), Some(op));
         }
-        assert_eq!(Opcode::all().len(), 12);
+        assert_eq!(Opcode::all().len(), 13);
         assert_eq!(Opcode::GetSupportBundle.as_u8(), 11);
         assert_eq!(Opcode::from_u8(200), None);
         for s in 0..=4u8 { assert!(Status::from_u8(s).is_some()); }

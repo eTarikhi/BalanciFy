@@ -1,5 +1,5 @@
 //! ETW diagnostics for Windows, with stderr fallback on non-Windows platforms.
-//! The provider uses a stable Balancify GUID and writes event IDs 100-600 with
+//! The provider uses a stable Balancify GUID and writes event IDs 100-700 with
 //! the message as a UTF-16 payload. This keeps the service dependency-free while
 //! allowing Windows ETW consumers to subscribe to the provider.
 
@@ -254,6 +254,7 @@ pub const EVT_ECN_CE: u16 = 401;
 pub const EVT_DELAY_CONGESTION: u16 = 402;
 pub const EVT_RELAY_FAILOVER: u16 = 500;
 pub const EVT_AUTH_FAILED: u16 = 600;
+pub const EVT_POLICY_PERSISTENCE_FAILED: u16 = 700;
 
 #[cfg(test)]
 mod tests {
@@ -299,6 +300,7 @@ mod tests {
             EVT_DELAY_CONGESTION,
             EVT_RELAY_FAILOVER,
             EVT_AUTH_FAILED,
+            EVT_POLICY_PERSISTENCE_FAILED,
         ];
         let mut unique = ids.to_vec();
         unique.sort_unstable();
@@ -311,5 +313,6 @@ mod tests {
         assert_eq!((EVT_ECN_CE, EVT_DELAY_CONGESTION), (401, 402));
         assert_eq!(EVT_RELAY_FAILOVER, 500);
         assert_eq!(EVT_AUTH_FAILED, 600);
+        assert_eq!(EVT_POLICY_PERSISTENCE_FAILED, 700);
     }
 }

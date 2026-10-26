@@ -171,6 +171,7 @@ jobs:
             Write-Output "::error title=WinUI build diagnostics::$annotation"
           }
       - name: Run native Windows quick validation with the MSVC developer environment
+        if: always()
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'

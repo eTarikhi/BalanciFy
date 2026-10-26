@@ -23,6 +23,8 @@ internal static class IpcClient
     private const byte SetBondModeOpcode = 6;
     private const byte SetDuplicateModeOpcode = 7;
     private const byte SetAllowMeteredOpcode = 8;
+    private const byte ApplyMachinePolicyOpcode = 12;
+    private const int MaxCustomPolicyRules = 128;
     private const byte AckResponseTag = 5;
     private const byte StatusResponseTag = 2;
     private const byte FlowRulesResponseTag = 4;
@@ -142,6 +144,36 @@ internal static class IpcClient
     public static Task SetAllowMeteredAsync(bool allowed, CancellationToken cancellationToken) =>
         SendAckRequestAsync(new[] { SetAllowMeteredOpcode, allowed ? (byte)1 : (byte)0 }, cancellationToken);
 
+    public static Task ApplyMachinePolicyAsync(
+        bool bondEnabled,
+        bool duplicateMode,
+        bool allowMetered,
+        IReadOnlyList<FlowRuleSnapshot> customRules,
+        CancellationToken cancellationToken)
+    {
+        if (customRules.Count > MaxCustomPolicyRules)
+        {
+            throw new ArgumentException("Machine policy contains too many custom rules.", nameof(customRules));
+        }
+        var payload = new List<byte>(5 + customRules.Count * 24)
+        {
+            ApplyMachinePolicyOpcode,
+            bondEnabled ? (byte)1 : (byte)0,
+            duplicateMode ? (byte)1 : (byte)0,
+            allowMetered ? (byte)1 : (byte)0,
+        };
+        AppendUInt16(payload, (ushort)customRules.Count);
+        foreach (var rule in customRules)
+        {
+            AppendFlowRule(payload, rule);
+        }
+        if (payload.Count > MaxPayload)
+        {
+            throw new ArgumentException("Machine policy exceeds the IPC frame limit.", nameof(customRules));
+        }
+        return SendAckRequestAsync(payload.ToArray(), cancellationToken);
+    }
+
     public static Task RemoveFlowRuleAsync(uint id, CancellationToken cancellationToken)
     {
         var payload = new byte[5];
@@ -152,13 +184,18 @@ internal static class IpcClient
 
     public static Task SetFlowRuleAsync(FlowRuleSnapshot rule, CancellationToken cancellationToken)
     {
+        var payload = new List<byte>(18 + StrictUtf8.GetByteCount(rule.Name)) { SetFlowRuleOpcode };
+        AppendFlowRule(payload, rule);
+        return SendAckRequestAsync(payload.ToArray(), cancellationToken);
+    }
+
+    private static void AppendFlowRule(List<byte> payload, FlowRuleSnapshot rule)
+    {
         var name = StrictUtf8.GetBytes(rule.Name);
         if (name.Length is 0 or > byte.MaxValue)
         {
             throw new ArgumentException("Rule names must contain 1 to 255 UTF-8 bytes.", nameof(rule));
         }
-
-        var payload = new List<byte>(18 + name.Length) { SetFlowRuleOpcode };
         AppendUInt32(payload, rule.Id);
         payload.Add((byte)name.Length);
         payload.AddRange(name);
@@ -169,7 +206,6 @@ internal static class IpcClient
         AppendUInt16(payload, rule.PortStart);
         AppendUInt16(payload, rule.PortEnd);
         payload.Add(rule.DuplicateEligible ? (byte)1 : (byte)0);
-        return SendAckRequestAsync(payload.ToArray(), cancellationToken);
     }
 
     private static async Task SendAckRequestAsync(byte[] requestPayload, CancellationToken cancellationToken)

@@ -10,10 +10,8 @@ public sealed partial class MainWindow : Window
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly Task _preferencesLoadTask;
     private IReadOnlyList<FlowRuleSnapshot> _rules = Array.Empty<FlowRuleSnapshot>();
-    private UiPreferences? _preferences;
-    private bool _hasPreferencesToRestore;
-    private bool _preferencesSynchronized;
-    private bool _serviceDisconnected;
+    private LegacyPolicySnapshot? _legacyPolicy;
+    private bool _legacyPolicyPending;
     private string? _preferencesLoadWarning;
     private bool _loadingSettings;
     private bool _settingsDirty;
@@ -51,14 +49,12 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            _preferences = await UiPreferencesStore.LoadAsync(CancellationToken.None);
-            _hasPreferencesToRestore = _preferences is not null;
-            _preferencesSynchronized = !_hasPreferencesToRestore;
+            _legacyPolicy = await LegacyPolicySnapshotStore.LoadAsync(CancellationToken.None);
+            _legacyPolicyPending = _legacyPolicy is not null;
         }
         catch (Exception error) when (IsPreferenceLoadFailure(error))
         {
-            _preferencesSynchronized = true;
-            _preferencesLoadWarning = $"Saved local preferences were ignored: {error.Message}";
+            _preferencesLoadWarning = $"Saved local preferences were not imported: {error.Message}";
         }
     }
 
@@ -75,39 +71,6 @@ public sealed partial class MainWindow : Window
         error is System.Runtime.InteropServices.COMException ||
         error is InvalidDataException;
 
-    private async Task<UiPreferences> ReconcileSavedRulesAsync(UiPreferences preferences, CancellationToken cancellationToken)
-    {
-        var serviceRules = await IpcClient.GetFlowRulesAsync(cancellationToken);
-        var serviceRulesById = serviceRules.ToDictionary(rule => rule.Id);
-        var usedIds = serviceRulesById.Keys.ToHashSet();
-        var reconciledRules = new List<FlowRuleSnapshot>(preferences.CustomRules.Count);
-        var changed = false;
-        foreach (var savedRule in preferences.CustomRules)
-        {
-            var rule = savedRule;
-            if (serviceRulesById.TryGetValue(savedRule.Id, out var currentRule) && currentRule != savedRule)
-            {
-                rule = savedRule with { Id = NextCustomRuleId(usedIds) };
-                usedIds.Add(rule.Id);
-                changed = true;
-            }
-            else
-            {
-                usedIds.Add(rule.Id);
-            }
-            reconciledRules.Add(rule);
-        }
-
-        if (!changed)
-        {
-            return preferences;
-        }
-
-        var reconciled = preferences with { CustomRules = reconciledRules };
-        await UiPreferencesStore.SaveAsync(reconciled, CancellationToken.None);
-        return reconciled;
-    }
-
     private static uint NextCustomRuleId(IEnumerable<uint> occupiedIds)
     {
         var used = occupiedIds.ToHashSet();
@@ -119,28 +82,6 @@ public sealed partial class MainWindow : Window
             }
         }
         throw new InvalidOperationException("No custom rule identifiers are available.");
-    }
-
-    private async Task SynchronizePreferencesAsync(UiPreferences preferences, CancellationToken cancellationToken)
-    {
-        await IpcClient.SetBondModeAsync(preferences.BondEnabled, cancellationToken);
-        await IpcClient.SetDuplicateModeAsync(preferences.DuplicateMode, cancellationToken);
-        await IpcClient.SetAllowMeteredAsync(preferences.AllowMetered, cancellationToken);
-        foreach (var rule in preferences.CustomRules)
-        {
-            await IpcClient.SetFlowRuleAsync(rule, cancellationToken);
-        }
-    }
-
-    private UiPreferences BuildPreferences(IReadOnlyList<FlowRuleSnapshot> customRules)
-    {
-        var unchangedSettings = _settingsDirty ? _preferences : null;
-        return new UiPreferences(
-            1,
-            unchangedSettings?.BondEnabled ?? BondToggle.IsOn,
-            unchangedSettings?.DuplicateMode ?? DuplicateToggle.IsOn,
-            unchangedSettings?.AllowMetered ?? MeteredToggle.IsOn,
-            customRules.Where(rule => rule.Id >= 1_000).ToArray());
     }
 
     private void Settings_Toggled(object sender, RoutedEventArgs e)
@@ -177,9 +118,9 @@ public sealed partial class MainWindow : Window
             var dialog = new ContentDialog
             {
                 XamlRoot = RootNavigation.XamlRoot,
-                Title = "Reset saved preferences?",
-                Content = "This removes this Windows user's saved policy and custom-rule snapshot. Current service settings remain active until the service restarts; this shell will not restore the deleted snapshot.",
-                PrimaryButtonText = "Reset saved preferences",
+                Title = "Remove legacy per-user policy snapshot?",
+                Content = "This deletes only the old policy snapshot stored in this Windows user's profile. It does not change the authoritative machine policy held by the service.",
+                PrimaryButtonText = "Remove local snapshot",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close,
             };
@@ -188,22 +129,17 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            UiPreferencesStore.Delete();
-            _preferences = new UiPreferences(
-                1,
-                BondToggle.IsOn,
-                DuplicateToggle.IsOn,
-                MeteredToggle.IsOn,
-                Array.Empty<FlowRuleSnapshot>());
-            _hasPreferencesToRestore = false;
-            _preferencesSynchronized = true;
+            LegacyPolicySnapshotStore.Delete();
+            _legacyPolicy = null;
+            _legacyPolicyPending = false;
+            ImportLegacyPolicyButton.Visibility = Visibility.Collapsed;
             _preferencesLoadWarning = null;
             _settingsDirty = false;
             ApplySettingsButton.IsEnabled = false;
             DiscardSettingsButton.IsEnabled = false;
             ConnectionInfo.Severity = InfoBarSeverity.Success;
-            ConnectionInfo.Title = "Saved preferences removed";
-            ConnectionInfo.Message = "The current service policy was not changed.";
+            ConnectionInfo.Title = "Legacy snapshot removed";
+            ConnectionInfo.Message = "The machine-wide service policy was not changed.";
             reset = true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
@@ -225,6 +161,82 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void ImportLegacyPolicyButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _preferencesLoadTask;
+        var legacyPolicy = _legacyPolicy;
+        if (legacyPolicy is null || !await _refreshGate.WaitAsync(0))
+        {
+            return;
+        }
+
+        RefreshButton.IsEnabled = false;
+        ImportLegacyPolicyButton.IsEnabled = false;
+        ApplySettingsButton.IsEnabled = false;
+        DiscardSettingsButton.IsEnabled = false;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = RootNavigation.XamlRoot,
+                Title = "Import saved policy to this machine?",
+                Content = "This one-time import makes the saved mode and custom rules authoritative for the whole machine. It merges saved custom rules with current service rules and preserves unrelated rules. Other Windows users will see the resulting machine policy.",
+                PrimaryButtonText = "Import machine-wide policy",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await IpcClient.ApplyMachinePolicyAsync(
+                legacyPolicy.BondEnabled,
+                legacyPolicy.DuplicateMode,
+                legacyPolicy.AllowMetered,
+                legacyPolicy.CustomRules,
+                timeout.Token);
+
+            _legacyPolicyPending = false;
+            _legacyPolicy = null;
+            ImportLegacyPolicyButton.Visibility = Visibility.Collapsed;
+            try
+            {
+                LegacyPolicySnapshotStore.Delete();
+                _preferencesLoadWarning = null;
+                ConnectionInfo.Severity = InfoBarSeverity.Success;
+                ConnectionInfo.Title = "Machine policy imported and saved";
+                ConnectionInfo.Message = "The service committed the imported settings and rules as machine-wide policy.";
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                _preferencesLoadWarning = $"Machine policy was imported, but the obsolete local snapshot could not be deleted: {error.Message}";
+                ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                ConnectionInfo.Title = "Policy imported; old snapshot remains";
+                ConnectionInfo.Message = _preferencesLoadWarning;
+            }
+            _settingsDirty = false;
+        }
+        catch (OperationCanceledException)
+        {
+            ShowDisconnected("Policy import timed out. Refresh service status before retrying; the service may have committed the transaction.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException or ArgumentException or InvalidDataException)
+        {
+            ShowDisconnected($"Could not import legacy policy: {error.Message}");
+        }
+        finally
+        {
+            RefreshButton.IsEnabled = true;
+            ImportLegacyPolicyButton.IsEnabled = _legacyPolicyPending;
+            ApplySettingsButton.IsEnabled = _settingsDirty;
+            DiscardSettingsButton.IsEnabled = _settingsDirty;
+            _refreshGate.Release();
+        }
+        await RefreshStatusAsync();
+    }
+
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
     {
         await _preferencesLoadTask;
@@ -243,47 +255,27 @@ public sealed partial class MainWindow : Window
         var applied = false;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await IpcClient.SetBondModeAsync(BondToggle.IsOn, timeout.Token);
-            await IpcClient.SetDuplicateModeAsync(DuplicateToggle.IsOn, timeout.Token);
-            await IpcClient.SetAllowMeteredAsync(MeteredToggle.IsOn, timeout.Token);
-            _settingsDirty = false;
-            applied = true;
-            var customRules = _preferences?.CustomRules ?? Array.Empty<FlowRuleSnapshot>();
-            var savedPreferences = new UiPreferences(
-                1,
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await IpcClient.ApplyMachinePolicyAsync(
                 BondToggle.IsOn,
                 DuplicateToggle.IsOn,
                 MeteredToggle.IsOn,
-                customRules);
-            try
-            {
-                await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
-                _preferences = savedPreferences;
-                _hasPreferencesToRestore = true;
-                _preferencesSynchronized = true;
-                _preferencesLoadWarning = null;
-                ConnectionInfo.Severity = InfoBarSeverity.Success;
-                ConnectionInfo.Title = "Settings applied and saved";
-                ConnectionInfo.Message = "The service accepted the policy settings, which are also saved for this Windows user.";
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                _preferences = savedPreferences;
-                _hasPreferencesToRestore = true;
-                _preferencesSynchronized = true;
-                ConnectionInfo.Severity = InfoBarSeverity.Warning;
-                ConnectionInfo.Title = "Settings applied but not saved";
-                ConnectionInfo.Message = $"The service accepted the settings, but local persistence failed: {error.Message}";
-            }
+                Array.Empty<FlowRuleSnapshot>(),
+                timeout.Token);
+            _settingsDirty = false;
+            applied = true;
+            _preferencesLoadWarning = null;
+            ConnectionInfo.Severity = InfoBarSeverity.Success;
+            ConnectionInfo.Title = "Machine policy saved";
+            ConnectionInfo.Message = "The service atomically saved the machine-wide settings and current custom rules.";
         }
         catch (OperationCanceledException)
         {
-            ShowDisconnected("Settings update timed out; earlier values may have applied. Your selections are retained—retry Apply or discard the changes.");
+            ShowDisconnected("Settings update timed out. Refresh service status before retrying; the service may have committed the atomic policy update.");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException)
         {
-            ShowDisconnected($"Settings update failed; earlier values may have applied. Your selections are retained—retry Apply or discard the changes. {error.Message}");
+            ShowDisconnected($"Machine policy was not confirmed. Refresh status before retrying. {error.Message}");
         }
         finally
         {
@@ -336,9 +328,9 @@ public sealed partial class MainWindow : Window
             ShowRuleValidationError("Pinned uplink ID must be an integer from 0 to 255.");
             return;
         }
-        if (!_editingRuleId.HasValue && _rules.Count(existing => existing.Id >= 1_000) >= UiPreferencesStore.MaxCustomRules)
+        if (!_editingRuleId.HasValue && _rules.Count(existing => existing.Id >= 1_000) >= LegacyPolicySnapshotStore.MaxCustomRules)
         {
-            ShowRuleValidationError($"A maximum of {UiPreferencesStore.MaxCustomRules} custom rules can be saved for this Windows user.");
+            ShowRuleValidationError($"A maximum of {LegacyPolicySnapshotStore.MaxCustomRules} machine-wide custom rules are supported.");
             return;
         }
 
@@ -356,8 +348,7 @@ public sealed partial class MainWindow : Window
         var action = wasEditing ? "Updated" : "Added";
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.SetFlowRuleAsync(rule, cancellationToken),
-            $"{action} rule '{name}'. The service accepted the change.",
-            ruleToSave: rule))
+            $"{action} rule '{name}'. The service stored the machine-wide policy."))
         {
             ResetRuleEditor();
         }
@@ -427,8 +418,7 @@ public sealed partial class MainWindow : Window
         var rule = _rules.FirstOrDefault(candidate => candidate.Id == id);
         if (await RunRuleMutationAsync(
             cancellationToken => IpcClient.RemoveFlowRuleAsync(id, cancellationToken),
-            $"Removed rule '{rule?.Name ?? id.ToString()}'. The service accepted the change.",
-            removedRuleId: id) &&
+            $"Removed rule '{rule?.Name ?? id.ToString()}'. The service stored the machine-wide policy.") &&
             _editingRuleId == id)
         {
             ResetRuleEditor();
@@ -437,11 +427,8 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> RunRuleMutationAsync(
         Func<CancellationToken, Task> mutation,
-        string successMessage,
-        FlowRuleSnapshot? ruleToSave = null,
-        uint? removedRuleId = null)
+        string successMessage)
     {
-        await _preferencesLoadTask;
         if (!await _refreshGate.WaitAsync(0))
         {
             return false;
@@ -458,34 +445,8 @@ public sealed partial class MainWindow : Window
             await mutation(timeout.Token);
             applied = true;
             ConnectionInfo.Severity = InfoBarSeverity.Success;
-            ConnectionInfo.Title = "Traffic rule updated";
+            ConnectionInfo.Title = "Traffic rule saved to machine policy";
             ConnectionInfo.Message = successMessage;
-            var ownedRules = (_preferences?.CustomRules ?? Array.Empty<FlowRuleSnapshot>())
-                .ToDictionary(rule => rule.Id);
-            if (removedRuleId.HasValue)
-            {
-                ownedRules.Remove(removedRuleId.Value);
-            }
-            if (ruleToSave is not null)
-            {
-                ownedRules[ruleToSave.Id] = ruleToSave;
-            }
-            var savedPreferences = BuildPreferences(ownedRules.Values.OrderBy(rule => rule.Id).ToArray());
-            try
-            {
-                await UiPreferencesStore.SaveAsync(savedPreferences, CancellationToken.None);
-                _preferencesLoadWarning = null;
-                ConnectionInfo.Message = $"{successMessage} This shell's custom rules are saved for this Windows user.";
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                ConnectionInfo.Severity = InfoBarSeverity.Warning;
-                ConnectionInfo.Title = "Rule applied but not saved";
-                ConnectionInfo.Message = $"The service accepted the rule, but local persistence failed: {error.Message}";
-            }
-            _preferences = savedPreferences;
-            _hasPreferencesToRestore = true;
-            _preferencesSynchronized = true;
         }
         catch (OperationCanceledException)
         {
@@ -657,7 +618,7 @@ public sealed partial class MainWindow : Window
         };
         PageMessage.Text = page switch
         {
-            "rules" => "Built-in rules are read-only. Custom rules are saved in this Windows user's local preferences and re-applied when the shell reconnects; the service itself keeps policy in memory.",
+            "rules" => "Custom traffic rules and mode settings are service-owned, saved as machine policy, and shared across Windows users. Older per-user snapshots are never replayed automatically; choose Import explicitly to migrate one.",
             "relay" => "Relay failover and key-update health from the service. Relay endpoints and identities are deliberately redacted.",
             "diagnostics" => "Service counters and the capacity self-test are read from the local service. Export creates a redacted JSON bundle you can review or share from the save location you choose.",
             "about" => "BalanciFy is a Windows-first multi-WAN bonding project. This WinUI shell talks only to the local service over its ACL-protected named pipe.",
@@ -685,46 +646,31 @@ public sealed partial class MainWindow : Window
         RefreshButton.IsEnabled = false;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(
-                _hasPreferencesToRestore && _preferences is not null && (!_preferencesSynchronized || _serviceDisconnected) ? 30 : 5));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var snapshot = await IpcClient.GetStatusAsync(timeout.Token);
-            if (_hasPreferencesToRestore && _preferences is not null && !_settingsDirty &&
-                (_serviceDisconnected ||
-                 snapshot.BondEnabled != _preferences.BondEnabled ||
-                 snapshot.DuplicateMode != _preferences.DuplicateMode ||
-                 snapshot.AllowMetered != _preferences.AllowMetered))
-            {
-                _preferencesSynchronized = false;
-            }
-            if (_hasPreferencesToRestore && _preferences is not null && !_settingsDirty && !_preferencesSynchronized)
-            {
-                var preferencesToRestore = await ReconcileSavedRulesAsync(_preferences, timeout.Token);
-                _preferences = preferencesToRestore;
-                await SynchronizePreferencesAsync(preferencesToRestore, timeout.Token);
-                _preferencesSynchronized = true;
-                snapshot = await IpcClient.GetStatusAsync(timeout.Token);
-            }
-            _serviceDisconnected = false;
+            ImportLegacyPolicyButton.Visibility = _legacyPolicyPending ? Visibility.Visible : Visibility.Collapsed;
+            ImportLegacyPolicyButton.IsEnabled = _legacyPolicyPending;
+            ResetPreferencesButton.IsEnabled = _legacyPolicyPending || _preferencesLoadWarning is not null;
             if (_preferencesLoadWarning is { } preferencesWarning)
             {
                 ConnectionInfo.Severity = InfoBarSeverity.Warning;
-                ConnectionInfo.Title = "Saved preferences were ignored";
+                ConnectionInfo.Title = "Legacy policy snapshot needs attention";
                 ConnectionInfo.Message = preferencesWarning;
+            }
+            else if (_legacyPolicyPending)
+            {
+                ConnectionInfo.Severity = InfoBarSeverity.Warning;
+                ConnectionInfo.Title = "Legacy per-user policy needs review";
+                ConnectionInfo.Message = "It is not applied automatically. Import it explicitly as machine-wide policy, or remove the old local snapshot.";
             }
             else
             {
                 ConnectionInfo.Severity = InfoBarSeverity.Success;
                 ConnectionInfo.Title = "Connected to the BalanciFy service";
-                ConnectionInfo.Message = $"Local named pipe · refreshed {DateTime.Now:T}";
+                ConnectionInfo.Message = $"Machine policy · local named pipe · refreshed {DateTime.Now:T}";
             }
             ServiceVersionText.Text = snapshot.ServiceVersion;
             SchemaText.Text = $"IPC schema {snapshot.SchemaVersion} · active flows {snapshot.ActiveFlows}";
-            _preferences ??= new UiPreferences(
-                1,
-                snapshot.BondEnabled,
-                snapshot.DuplicateMode,
-                snapshot.AllowMetered,
-                Array.Empty<FlowRuleSnapshot>());
             if (!_settingsDirty)
             {
                 _loadingSettings = true;
@@ -741,7 +687,7 @@ public sealed partial class MainWindow : Window
                 ApplySettingsButton.IsEnabled = false;
                 DiscardSettingsButton.IsEnabled = false;
             }
-            PolicyText.Text = $"Policy {snapshot.PolicyRevision} · MTU {snapshot.AdapterMtu}";
+            PolicyText.Text = $"Machine policy {snapshot.PolicyRevision} · MTU {snapshot.AdapterMtu}";
             UplinkList.ItemsSource = snapshot.Uplinks
                 .Select(uplink => $"Uplink {uplink.Id}: {StateName(uplink.State)} · RTT {uplink.RttMs} ms · loss {uplink.LossPermille}‰ · capacity {FormatBitsPerSecond(uplink.CapacityBps)} · {(uplink.Eligible ? "eligible" : "ineligible")}{(uplink.Metered ? " · metered" : string.Empty)}")
                 .ToArray();
@@ -765,11 +711,11 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            ShowDisconnected("Service request or saved-preference restoration timed out. The previous snapshot is retained.");
+            ShowDisconnected("Service request timed out. The previous snapshot is retained.");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException or System.Text.Json.JsonException)
         {
-            ShowDisconnected($"Could not refresh service state or restore saved preferences: {error.Message}");
+            ShowDisconnected($"Could not refresh service state: {error.Message}");
         }
         finally
         {
@@ -780,7 +726,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowDisconnected(string message)
     {
-        _serviceDisconnected = true;
+        ImportLegacyPolicyButton.IsEnabled = false;
         ConnectionInfo.Severity = InfoBarSeverity.Warning;
         ConnectionInfo.Title = "Service unavailable";
         ConnectionInfo.Message = message;

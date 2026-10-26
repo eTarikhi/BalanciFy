@@ -16,13 +16,14 @@
 //! Nothing here opens a socket or reads a clock: callers pass `now` and take
 //! back [`Action`]s (Sec.4.7.4 sans-I/O loop).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 pub mod support;
 pub mod driver_device;
 pub mod etw;
+pub mod machine_policy;
 pub mod packet;
 pub mod wintun;
 pub use balancify_ipc as ipc;
@@ -37,6 +38,7 @@ use balancify_tunnel::{
     should_duplicate, Crypto, Event, FrameKind, Header, Receiver, ReceiverConfig, Sender,
     SenderConfig,
 };
+use machine_policy::{MachinePolicy, MachinePolicyStore};
 
 /// What the I/O adapter must do with the service's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,12 +145,20 @@ impl From<Counters> for ipc::Counters {
     }
 }
 
+#[derive(Debug)]
+enum MachinePolicyMutationError {
+    Invalid(String),
+    Persistence,
+}
+
 pub struct Service<C: Crypto> {
     cfg: ServiceConfig,
     policy: PolicyEngine,
     snapshot: PolicySnapshot,
     flows: FlowTable,
     rules: RuleSet,
+    machine_policy: MachinePolicy,
+    machine_policy_store: Option<MachinePolicyStore>,
     bond: BondGainTracker,
     keepalives: KeepaliveScheduler,
     path_mtu: BTreeMap<UplinkId, u16>,
@@ -223,6 +233,12 @@ impl<C: Crypto + Clone> Service<C> {
             max_sessions: ReceiverConfig::default().max_sessions,
         };
         let policy = PolicyEngine::new(policy_cfg, cfg.seed);
+        let machine_policy = MachinePolicy {
+            bond_enabled: cfg.bond_enabled,
+            duplicate_mode: cfg.duplicate_mode,
+            allow_metered: cfg.allow_metered,
+            custom_rules: Vec::new(),
+        };
         let flows = FlowTable::new(cfg.idle_timeout);
         let keepalives = KeepaliveScheduler::new(cfg.keepalive_interval);
         let tx = Sender::with_config(cfg.session, tx_crypto, Vec::new(), sender_cfg);
@@ -233,6 +249,8 @@ impl<C: Crypto + Clone> Service<C> {
             snapshot: PolicySnapshot::default(),
             flows,
             rules: RuleSet::curated(),
+            machine_policy,
+            machine_policy_store: None,
             bond: BondGainTracker::default(),
             keepalives,
             path_mtu: BTreeMap::new(),
@@ -276,6 +294,26 @@ impl<C: Crypto + Clone> Service<C> {
             counters: Counters::default(),
             event_interval_hz: 1,
         }
+    }
+
+    /// Construct the service with its machine-wide policy loaded before any
+    /// IPC requests can be accepted. Corrupt/future policy fails startup closed.
+    pub fn new_with_machine_policy_store(
+        mut cfg: ServiceConfig,
+        tx_crypto: C,
+        rx_crypto: C,
+        store: MachinePolicyStore,
+    ) -> std::io::Result<(Self, bool)> {
+        let loaded = store.load()?;
+        cfg.bond_enabled = loaded.policy.bond_enabled;
+        cfg.duplicate_mode = loaded.policy.duplicate_mode;
+        cfg.allow_metered = loaded.policy.allow_metered;
+        let mut service = Self::new(cfg, tx_crypto, rx_crypto);
+        service.rules = Self::rules_for_policy(&loaded.policy)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+        service.machine_policy = loaded.policy;
+        service.machine_policy_store = Some(store);
+        Ok((service, loaded.recovered_from_backup))
     }
 
     // ------------------------------------------------------------- topology
@@ -1067,34 +1105,64 @@ impl<C: Crypto + Clone> Service<C> {
             Request::GetStatus => Response::Status(self.status_snapshot()),
             Request::ListUplinks => Response::Uplinks(self.uplink_infos()),
             Request::ListFlowRules => Response::FlowRules(self.flow_rule_infos()),
-            Request::SetFlowRule(rule) => match self.apply_rule(rule) {
-                Ok(()) => Response::Ack,
-                Err(message) => Response::Error { status: ipc::Status::BadRequest, message },
-            },
+            Request::SetFlowRule(rule) => {
+                let mut candidate = self.machine_policy.clone();
+                candidate.custom_rules.retain(|existing| existing.id != rule.id);
+                candidate.custom_rules.push(rule);
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
+            }
             Request::RemoveFlowRule { id } => {
                 if id < balancify_core::FIRST_CUSTOM_RULE_ID {
                     Response::Error {
                         status: ipc::Status::BadRequest,
                         message: format!("rule id {id} is reserved for built-in rules"),
                     }
-                } else if self.rules.remove(id) {
-                    Response::Ack
                 } else {
-                    Response::Error { status: ipc::Status::BadRequest, message: format!("no rule {id}") }
+                    let mut candidate = self.machine_policy.clone();
+                    let count_before = candidate.custom_rules.len();
+                    candidate.custom_rules.retain(|rule| rule.id != id);
+                    if candidate.custom_rules.len() == count_before {
+                        Response::Error { status: ipc::Status::BadRequest, message: format!("no custom rule {id}") }
+                    } else {
+                        match self.commit_machine_policy(candidate) {
+                            Ok(()) => Response::Ack,
+                            Err(error) => Self::machine_policy_error_response(error),
+                        }
+                    }
                 }
             }
             Request::SetBondMode { enabled } => {
-                self.cfg.bond_enabled = enabled;
-                Response::Ack
+                let mut candidate = self.machine_policy.clone();
+                candidate.bond_enabled = enabled;
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
             }
             Request::SetDuplicateMode { enabled } => {
-                self.cfg.duplicate_mode = enabled;
-                Response::Ack
+                let mut candidate = self.machine_policy.clone();
+                candidate.duplicate_mode = enabled;
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
             }
             Request::SetAllowMetered { allowed } => {
-                self.cfg.allow_metered = allowed;
-                self.policy.set_allow_metered(allowed);
-                Response::Ack
+                let mut candidate = self.machine_policy.clone();
+                candidate.allow_metered = allowed;
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
+            }
+            Request::ApplyMachinePolicy { bond_enabled, duplicate_mode, allow_metered, custom_rules } => {
+                match self.import_machine_policy(bond_enabled, duplicate_mode, allow_metered, custom_rules) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
             }
             Request::GetSupportBundle => {
                 let bundle = support::SupportBundle::collect(self, now);
@@ -1243,12 +1311,111 @@ impl<C: Crypto + Clone> Service<C> {
             .collect()
     }
 
-    fn apply_rule(&mut self, rule: ipc::FlowRule) -> Result<(), String> {
+    fn import_machine_policy(
+        &mut self,
+        bond_enabled: bool,
+        duplicate_mode: bool,
+        allow_metered: bool,
+        imported_rules: Vec<ipc::FlowRule>,
+    ) -> Result<(), MachinePolicyMutationError> {
+        let mut candidate = self.machine_policy.clone();
+        candidate.bond_enabled = bond_enabled;
+        candidate.duplicate_mode = duplicate_mode;
+        candidate.allow_metered = allow_metered;
+        Self::merge_imported_rules(&mut candidate.custom_rules, imported_rules)
+            .map_err(MachinePolicyMutationError::Invalid)?;
+        self.commit_machine_policy(candidate)
+    }
+
+    fn merge_imported_rules(
+        existing: &mut Vec<ipc::FlowRule>,
+        imported: Vec<ipc::FlowRule>,
+    ) -> Result<(), String> {
+        let mut used_ids: BTreeSet<u32> = existing.iter().map(|rule| rule.id).collect();
+        for mut rule in imported {
+            if existing.iter().any(|current| same_rule_ignoring_id(current, &rule)) {
+                continue;
+            }
+            if existing.iter().any(|current| current.id == rule.id) {
+                let mut candidate_id = balancify_core::FIRST_CUSTOM_RULE_ID;
+                while used_ids.contains(&candidate_id) {
+                    candidate_id = candidate_id.checked_add(1)
+                        .ok_or_else(|| "no custom rule identifiers are available".to_string())?;
+                }
+                rule.id = candidate_id;
+            }
+            if !used_ids.insert(rule.id) {
+                return Err("imported custom rules contain duplicate identifiers".to_string());
+            }
+            existing.push(rule);
+            if existing.len() > ipc::MAX_CUSTOM_POLICY_RULES {
+                return Err("machine policy supports at most 128 custom rules".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_machine_policy(&mut self, candidate: MachinePolicy) -> Result<(), MachinePolicyMutationError> {
+        candidate.validate().map_err(|error| MachinePolicyMutationError::Invalid(error.to_string()))?;
+        let candidate_rules = self.updated_rules_for_policy(&candidate)
+            .map_err(MachinePolicyMutationError::Invalid)?;
+        if let Some(store) = &self.machine_policy_store {
+            if let Err(error) = store.save(&candidate) {
+                self.etw.error(
+                    etw::EVT_POLICY_PERSISTENCE_FAILED,
+                    &format!("machine policy persistence failed kind={:?}", error.kind()),
+                );
+                return Err(MachinePolicyMutationError::Persistence);
+            }
+        }
+        self.cfg.bond_enabled = candidate.bond_enabled;
+        self.cfg.duplicate_mode = candidate.duplicate_mode;
+        self.cfg.allow_metered = candidate.allow_metered;
+        self.policy.set_allow_metered(candidate.allow_metered);
+        self.rules = candidate_rules;
+        self.machine_policy = candidate;
+        Ok(())
+    }
+
+    fn machine_policy_error_response(error: MachinePolicyMutationError) -> ipc::Response {
+        match error {
+            MachinePolicyMutationError::Invalid(message) => ipc::Response::Error {
+                status: ipc::Status::BadRequest,
+                message,
+            },
+            MachinePolicyMutationError::Persistence => ipc::Response::Error {
+                status: ipc::Status::Internal,
+                message: "service policy could not be saved; the live policy was not changed".to_string(),
+            },
+        }
+    }
+
+    fn updated_rules_for_policy(&self, policy: &MachinePolicy) -> Result<RuleSet, String> {
+        let mut rules = self.rules.clone();
+        for existing in &self.machine_policy.custom_rules {
+            if !policy.custom_rules.iter().any(|candidate| candidate == existing) {
+                rules.remove(existing.id);
+            }
+        }
+        for candidate in &policy.custom_rules {
+            if !self.machine_policy.custom_rules.iter().any(|existing| existing == candidate) {
+                rules.add(Self::core_rule_from_ipc(candidate)?);
+            }
+        }
+        Ok(rules)
+    }
+
+    fn rules_for_policy(policy: &MachinePolicy) -> Result<RuleSet, String> {
+        let mut rules = RuleSet::curated();
+        for rule in &policy.custom_rules {
+            rules.add(Self::core_rule_from_ipc(rule)?);
+        }
+        Ok(rules)
+    }
+
+    fn core_rule_from_ipc(rule: &ipc::FlowRule) -> Result<balancify_core::Rule, String> {
         if rule.id < balancify_core::FIRST_CUSTOM_RULE_ID {
-            return Err(format!(
-                "rule id {} is reserved for built-in rules",
-                rule.id
-            ));
+            return Err(format!("rule id {} is reserved for built-in rules", rule.id));
         }
         let class = match rule.class {
             ipc::CLASS_BULK => FlowClass::Bulk,
@@ -1256,18 +1423,22 @@ impl<C: Crypto + Clone> Service<C> {
             ipc::CLASS_PINNED => FlowClass::Pinned(UplinkId(rule.pinned_uplink)),
             other => return Err(format!("unknown flow class {other}")),
         };
-        if rule.name.trim().is_empty() { return Err("rule name must not be empty".to_string()); }
+        if rule.name.trim().is_empty() || rule.name.chars().count() > 120 || rule.name.len() > 480 {
+            return Err("rule name must contain 1..=120 characters".to_string());
+        }
+        if rule.class != ipc::CLASS_PINNED && rule.pinned_uplink != 0 {
+            return Err("only pinned rules may specify an uplink".to_string());
+        }
         if rule.port_start > rule.port_end {
             return Err(format!("port range {}..{} is inverted", rule.port_start, rule.port_end));
         }
-        let mut r = balancify_core::Rule::new(rule.id, rule.name, class).priority(rule.priority);
-        if rule.proto != 0 { r = r.proto(rule.proto); }
+        let mut core_rule = balancify_core::Rule::new(rule.id, rule.name.clone(), class).priority(rule.priority);
+        if rule.proto != 0 { core_rule = core_rule.proto(rule.proto); }
         if !(rule.port_start == 0 && rule.port_end == 0) {
-            r = r.port(balancify_core::PortRange::range(rule.port_start, rule.port_end));
+            core_rule = core_rule.port(balancify_core::PortRange::range(rule.port_start, rule.port_end));
         }
-        if rule.duplicate { r = r.duplicate(true); }
-        self.rules.add(r);
-        Ok(())
+        if rule.duplicate { core_rule = core_rule.duplicate(true); }
+        Ok(core_rule)
     }
 }
 
@@ -1460,6 +1631,17 @@ fn uplink_info(u: &UplinkView, best_weight: f64) -> ipc::UplinkInfo {
         metered: u.metered,
         eligible: u.eligible,
     }
+}
+
+fn same_rule_ignoring_id(left: &ipc::FlowRule, right: &ipc::FlowRule) -> bool {
+    left.name == right.name
+        && left.class == right.class
+        && left.pinned_uplink == right.pinned_uplink
+        && left.priority == right.priority
+        && left.proto == right.proto
+        && left.port_start == right.port_start
+        && left.port_end == right.port_end
+        && left.duplicate == right.duplicate
 }
 
 fn permille(v: f64) -> i16 {
@@ -1964,6 +2146,120 @@ mod tests {
         let (kind, payload, _) = balancify_ipc::decode_frame(&frame).unwrap().unwrap();
         assert_eq!(kind, balancify_ipc::FrameKind::Response);
         assert_eq!(balancify_ipc::Response::decode(payload), Some(response));
+    }
+
+    #[test]
+    fn legacy_policy_import_merges_rules_remaps_conflicts_and_is_idempotent() {
+        let now = Instant::now();
+        let mut service = ready_service(now);
+        let current = ipc::FlowRule {
+            id: balancify_core::FIRST_CUSTOM_RULE_ID,
+            name: "current-machine-rule".to_string(),
+            class: ipc::CLASS_BULK,
+            pinned_uplink: 0,
+            priority: 20,
+            proto: 6,
+            port_start: 8443,
+            port_end: 8443,
+            duplicate: false,
+        };
+        assert_eq!(service.handle(ipc::Request::SetFlowRule(current.clone()), now), ipc::Response::Ack);
+        let legacy = ipc::FlowRule {
+            name: "legacy-user-rule".to_string(),
+            class: ipc::CLASS_LATENCY_SENSITIVE,
+            priority: 5,
+            duplicate: true,
+            ..current.clone()
+        };
+        let import = || ipc::Request::ApplyMachinePolicy {
+            bond_enabled: false,
+            duplicate_mode: true,
+            allow_metered: true,
+            custom_rules: vec![legacy.clone()],
+        };
+        assert_eq!(service.handle(import(), now), ipc::Response::Ack);
+        assert!(!service.config().bond_enabled);
+        assert!(service.config().duplicate_mode);
+        assert!(service.config().allow_metered);
+        let rules = service.rules().rules();
+        assert!(rules.iter().any(|rule| rule.id == current.id && rule.name == current.name));
+        let imported = rules.iter().find(|rule| rule.name == legacy.name).unwrap();
+        assert_ne!(imported.id, legacy.id, "conflicting legacy ID is remapped, never overwritten");
+        let rule_count = rules.iter().filter(|rule| rule.id >= balancify_core::FIRST_CUSTOM_RULE_ID).count();
+        assert_eq!(service.handle(import(), now), ipc::Response::Ack);
+        assert_eq!(
+            service.rules().rules().iter().filter(|rule| rule.id >= balancify_core::FIRST_CUSTOM_RULE_ID).count(),
+            rule_count,
+            "retrying a timed-out import does not duplicate a remapped rule",
+        );
+    }
+
+    #[test]
+    fn machine_policy_survives_service_restart_and_restores_rules() {
+        let root = std::env::temp_dir().join(format!("balancify-service-policy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let now = Instant::now();
+        let (mut service, recovered) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        assert!(!recovered);
+        let rule = ipc::FlowRule {
+            id: balancify_core::FIRST_CUSTOM_RULE_ID,
+            name: "persistent-voice".to_string(),
+            class: ipc::CLASS_LATENCY_SENSITIVE,
+            pinned_uplink: 0,
+            priority: 7,
+            proto: 17,
+            port_start: 50_000,
+            port_end: 50_100,
+            duplicate: true,
+        };
+        assert_eq!(service.handle(ipc::Request::ApplyMachinePolicy {
+            bond_enabled: false,
+            duplicate_mode: true,
+            allow_metered: true,
+            custom_rules: vec![rule.clone()],
+        }, now), ipc::Response::Ack);
+        drop(service);
+
+        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let (mut restored, recovered) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        assert!(!recovered);
+        assert!(!restored.config().bond_enabled);
+        assert!(restored.config().duplicate_mode);
+        assert!(restored.config().allow_metered);
+        assert!(restored.rules().rules().iter().any(|saved| saved.id == rule.id && saved.name == rule.name));
+        assert_eq!(restored.handle(ipc::Request::SetBondMode { enabled: true }, now), ipc::Response::Ack);
+        drop(restored);
+
+        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let (restored_again, _) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        assert!(restored_again.config().bond_enabled, "individual settings mutations also persist");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_machine_policy_write_does_not_mutate_live_service_state() {
+        let root = std::env::temp_dir().join(format!("balancify-service-policy-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state_dir = root.join("policy");
+        let store = MachinePolicyStore::open(&state_dir).unwrap();
+        let (mut service, _) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        std::fs::remove_dir(&state_dir).unwrap();
+        std::fs::write(&state_dir, b"block policy directory creation").unwrap();
+        let response = service.handle(ipc::Request::SetBondMode { enabled: false }, Instant::now());
+        assert!(matches!(response, ipc::Response::Error { status: ipc::Status::Internal, .. }));
+        assert!(service.config().bond_enabled);
+        let _ = std::fs::remove_file(state_dir);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
