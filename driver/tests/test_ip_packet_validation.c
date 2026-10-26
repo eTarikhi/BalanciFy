@@ -55,6 +55,34 @@ static void test_ipv4_tcp_udp_and_fragment_bounds(void) {
         first_fragment[6] = 0x20; /* More Fragments; transport header may be split */
         first_fragment[9] = 6;
         assert(BalancifyIsValidIpPacket(first_fragment, sizeof(first_fragment), 1500));
+        first_fragment[6] = 0x60; /* DF and fragmentation cannot be combined */
+        assert(!BalancifyIsValidIpPacket(first_fragment, sizeof(first_fragment), 1500));
+    }
+    {
+        unsigned char empty_fragment[20] = { 0x45, 0, 0, 20 };
+        unsigned char unaligned_fragment[29] = { 0x45, 0, 0, 29 };
+        empty_fragment[6] = 0x20;
+        unaligned_fragment[6] = 0x20;
+        assert(!BalancifyIsValidIpPacket(empty_fragment, sizeof(empty_fragment), 1500));
+        assert(!BalancifyIsValidIpPacket(unaligned_fragment, sizeof(unaligned_fragment), 1500));
+    }
+    {
+        unsigned char options[24] = { 0x46, 0, 0, 24 };
+        options[9] = 59; /* No transport header */
+        options[20] = 1; /* NOP followed by zero padding */
+        assert(BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[20] = 0x9e;
+        options[21] = 1; /* TLV length shorter than its header */
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[21] = 5; /* TLV overruns the option area */
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[20] = 0; /* End of Option List requires zero padding */
+        options[21] = 1;
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
+        options[20] = 0x9e;
+        options[21] = 3;
+        options[23] = 0x9e; /* Final TLV is missing its length byte */
+        assert(!BalancifyIsValidIpPacket(options, sizeof(options), 1500));
     }
 }
 
@@ -96,11 +124,37 @@ static void test_ipv6_extension_and_transport_bounds(void) {
     }
 
     {
-        unsigned char fragment[48] = { 0x60, 0, 0, 0, 0, 8 };
+        unsigned char duplicate_fragments[56] = { 0x60, 0, 0, 0, 0, 16 };
+        duplicate_fragments[6] = 44;
+        duplicate_fragments[40] = 44;
+        duplicate_fragments[48] = 59;
+        assert(!BalancifyIsValidIpPacket(duplicate_fragments, sizeof(duplicate_fragments), 1500));
+    }
+
+    {
+        unsigned char fragment[56] = { 0x60, 0, 0, 0, 0, 16 };
         fragment[6] = 44;
         fragment[40] = 6;
-        fragment[43] = 1; /* More Fragments: transport header may be split */
+        fragment[43] = 1; /* More Fragments, with an aligned 8-byte payload */
         assert(BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
+        fragment[41] = 1; /* Reserved byte must be zero */
+        assert(!BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
+        fragment[41] = 0;
+        fragment[43] = 3; /* Reserved fragment-field bit must be zero */
+        assert(!BalancifyIsValidIpPacket(fragment, sizeof(fragment), 1500));
+    }
+
+    {
+        unsigned char empty_fragment[48] = { 0x60, 0, 0, 0, 0, 8 };
+        unsigned char unaligned_fragment[55] = { 0x60, 0, 0, 0, 0, 15 };
+        empty_fragment[6] = 44;
+        unaligned_fragment[6] = 44;
+        empty_fragment[40] = 17;
+        unaligned_fragment[40] = 17;
+        empty_fragment[43] = 1; /* More Fragments without payload */
+        unaligned_fragment[43] = 1; /* More Fragments with a 7-byte payload */
+        assert(!BalancifyIsValidIpPacket(empty_fragment, sizeof(empty_fragment), 1500));
+        assert(!BalancifyIsValidIpPacket(unaligned_fragment, sizeof(unaligned_fragment), 1500));
     }
 }
 

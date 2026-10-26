@@ -34,6 +34,7 @@ pub const FRAME_HEADER_LEN: usize = 6;
 /// Hard ceiling on one message. Status snapshots are a few hundred bytes; a
 /// multi-megabyte frame on a control pipe is an attack, not a use case (Sec.9.1a).
 pub const MAX_PAYLOAD: usize = 1 << 20;
+pub const MAX_CUSTOM_POLICY_RULES: usize = 128;
 
 // ------------------------------------------------------------------- framing
 
@@ -222,6 +223,7 @@ pub enum Opcode {
     RunSelfTest,
     SubscribeEvents,
     GetSupportBundle,
+    ApplyMachinePolicy,
 }
 
 impl Opcode {
@@ -239,6 +241,7 @@ impl Opcode {
             Opcode::RunSelfTest => 9,
             Opcode::SubscribeEvents => 10,
             Opcode::GetSupportBundle => 11,
+            Opcode::ApplyMachinePolicy => 12,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -255,10 +258,11 @@ impl Opcode {
             9 => Opcode::RunSelfTest,
             10 => Opcode::SubscribeEvents,
             11 => Opcode::GetSupportBundle,
+            12 => Opcode::ApplyMachinePolicy,
             _ => return None,
         })
     }
-    pub fn all() -> [Opcode; 12] {
+    pub fn all() -> [Opcode; 13] {
         [
             Opcode::Ping,
             Opcode::GetStatus,
@@ -272,6 +276,7 @@ impl Opcode {
             Opcode::RunSelfTest,
             Opcode::SubscribeEvents,
             Opcode::GetSupportBundle,
+            Opcode::ApplyMachinePolicy,
         ]
     }
 }
@@ -295,6 +300,7 @@ pub enum Status {
     BadRequest,
     Unavailable,
     Internal,
+    PermissionDenied,
 }
 
 impl Status {
@@ -305,6 +311,7 @@ impl Status {
             Status::BadRequest => 2,
             Status::Unavailable => 3,
             Status::Internal => 4,
+            Status::PermissionDenied => 5,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -314,6 +321,7 @@ impl Status {
             2 => Status::BadRequest,
             3 => Status::Unavailable,
             4 => Status::Internal,
+            5 => Status::PermissionDenied,
             _ => return None,
         })
     }
@@ -333,6 +341,12 @@ pub enum Request {
     RunSelfTest,
     SubscribeEvents { interval_hz: u8 },
     GetSupportBundle,
+    ApplyMachinePolicy {
+        bond_enabled: bool,
+        duplicate_mode: bool,
+        allow_metered: bool,
+        custom_rules: Vec<FlowRule>,
+    },
 }
 
 /// One row of the Rules screen (Sec.8.2), and the wire form of a core rule.
@@ -438,6 +452,20 @@ pub const WARN_ADAPTER_MTU_BELOW_IPV4_MIN: u8 = 5;
 // ------------------------------------------------------------------ encoding
 
 impl Request {
+    /// Whether this request changes machine-wide policy and therefore requires
+    /// an elevated local administrator on the Windows service pipe.
+    pub const fn requires_machine_admin(&self) -> bool {
+        matches!(
+            self,
+            Request::SetFlowRule(_)
+                | Request::RemoveFlowRule { .. }
+                | Request::SetBondMode { .. }
+                | Request::SetDuplicateMode { .. }
+                | Request::SetAllowMetered { .. }
+                | Request::ApplyMachinePolicy { .. }
+        )
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(64);
         match self {
@@ -460,6 +488,16 @@ impl Request {
             }
             Request::GetSupportBundle => {
                 w.u8(Opcode::GetSupportBundle.as_u8());
+            }
+            Request::ApplyMachinePolicy { bond_enabled, duplicate_mode, allow_metered, custom_rules } => {
+                w.u8(Opcode::ApplyMachinePolicy.as_u8())
+                    .bool(*bond_enabled)
+                    .bool(*duplicate_mode)
+                    .bool(*allow_metered)
+                    .u16(custom_rules.len() as u16);
+                for rule in custom_rules {
+                    encode_rule(&mut w, rule);
+                }
             }
             Request::RemoveFlowRule { id } => {
                 w.u8(Opcode::RemoveFlowRule.as_u8()).u32(*id);
@@ -486,6 +524,16 @@ impl Request {
             Opcode::SetAllowMetered => Request::SetAllowMetered { allowed: r.bool()? },
             Opcode::SubscribeEvents => Request::SubscribeEvents { interval_hz: r.u8()? },
             Opcode::GetSupportBundle => Request::GetSupportBundle,
+            Opcode::ApplyMachinePolicy => {
+                let bond_enabled = r.bool()?;
+                let duplicate_mode = r.bool()?;
+                let allow_metered = r.bool()?;
+                let count = r.u16()? as usize;
+                if count > MAX_CUSTOM_POLICY_RULES { return None; }
+                let mut custom_rules = Vec::with_capacity(count);
+                for _ in 0..count { custom_rules.push(decode_rule(&mut r)?); }
+                Request::ApplyMachinePolicy { bond_enabled, duplicate_mode, allow_metered, custom_rules }
+            }
             Opcode::RemoveFlowRule => Request::RemoveFlowRule { id: r.u32()? },
             Opcode::SetFlowRule => Request::SetFlowRule(decode_rule(&mut r)?),
         };
@@ -960,10 +1008,27 @@ mod tests {
             Request::GetSupportBundle,
             Request::RemoveFlowRule { id: 4242 },
             Request::SetFlowRule(sample_rule()),
+            Request::ApplyMachinePolicy {
+                bond_enabled: true,
+                duplicate_mode: false,
+                allow_metered: true,
+                custom_rules: vec![sample_rule()],
+            },
         ];
         for req in requests {
             assert_eq!(Request::decode(&req.encode()), Some(req.clone()));
         }
+    }
+
+    #[test]
+    fn apply_machine_policy_rejects_rule_counts_above_the_contract_limit() {
+        let mut writer = Writer::new();
+        writer.u8(Opcode::ApplyMachinePolicy.as_u8())
+            .bool(true)
+            .bool(false)
+            .bool(false)
+            .u16((MAX_CUSTOM_POLICY_RULES + 1) as u16);
+        assert_eq!(Request::decode(&writer.into_bytes()), None);
     }
 
     #[test]
@@ -977,6 +1042,7 @@ mod tests {
             Response::SelfTest { passed: true, detail: "loopback ok".to_string() },
             Response::SupportBundle(format!("{{\"diagnostic\":\"{}\"}}", "x".repeat(1024))),
             Response::Error { status: Status::Unavailable, message: "no uplink".to_string() },
+            Response::Error { status: Status::PermissionDenied, message: "admin required".to_string() },
         ];
         for resp in responses {
             assert_eq!(Response::decode(&resp.encode()), Some(resp.clone()));
@@ -1012,11 +1078,40 @@ mod tests {
         for op in Opcode::all() {
             assert_eq!(Opcode::from_u8(op.as_u8()), Some(op));
         }
-        assert_eq!(Opcode::all().len(), 12);
+        assert_eq!(Opcode::all().len(), 13);
         assert_eq!(Opcode::GetSupportBundle.as_u8(), 11);
         assert_eq!(Opcode::from_u8(200), None);
-        for s in 0..=4u8 { assert!(Status::from_u8(s).is_some()); }
-        assert_eq!(Status::from_u8(5), None);
+        for s in 0..=5u8 { assert!(Status::from_u8(s).is_some()); }
+        assert_eq!(Status::from_u8(6), None);
+    }
+
+    #[test]
+    fn only_machine_policy_mutations_require_admin_authority() {
+        let mutations = [
+            Request::SetFlowRule(sample_rule()),
+            Request::RemoveFlowRule { id: 100 },
+            Request::SetBondMode { enabled: true },
+            Request::SetDuplicateMode { enabled: true },
+            Request::SetAllowMetered { allowed: true },
+            Request::ApplyMachinePolicy {
+                bond_enabled: true,
+                duplicate_mode: false,
+                allow_metered: false,
+                custom_rules: vec![sample_rule()],
+            },
+        ];
+        assert!(mutations.iter().all(Request::requires_machine_admin));
+
+        let read_only = [
+            Request::Ping,
+            Request::GetStatus,
+            Request::ListUplinks,
+            Request::ListFlowRules,
+            Request::RunSelfTest,
+            Request::SubscribeEvents { interval_hz: 1 },
+            Request::GetSupportBundle,
+        ];
+        assert!(read_only.iter().all(|request| !request.requires_machine_admin()));
     }
 
     impl StatusSnapshot {

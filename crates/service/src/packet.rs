@@ -70,6 +70,27 @@ pub fn flow_key_from_packet(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     }
 }
 
+fn valid_ipv4_options(packet: &[u8], header_len: usize) -> bool {
+    let mut offset = IPV4_MIN_HEADER_LEN;
+    while offset < header_len {
+        match packet[offset] {
+            0 => return packet[offset + 1..header_len].iter().all(|byte| *byte == 0),
+            1 => offset += 1,
+            _ => {
+                if header_len - offset < 2 {
+                    return false;
+                }
+                let option_len = usize::from(packet[offset + 1]);
+                if option_len < 2 || option_len > header_len - offset {
+                    return false;
+                }
+                offset += option_len;
+            }
+        }
+    }
+    true
+}
+
 fn parse_ipv4(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     if packet.len() < IPV4_MIN_HEADER_LEN {
         return Err(PacketFlowError::EmptyOrTruncated);
@@ -82,11 +103,22 @@ fn parse_ipv4(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     if total_len != packet.len() || total_len < header_len {
         return Err(PacketFlowError::LengthMismatch);
     }
+    if !valid_ipv4_options(packet, header_len) {
+        return Err(PacketFlowError::InvalidIpv4Header);
+    }
     let fragment = read_u16(packet, 6)?;
     if fragment & 0x8000 != 0 {
         return Err(PacketFlowError::InvalidIpv4Header);
     }
     let fragmented = fragment & 0x3fff != 0;
+    let fragment_payload_len = total_len - header_len;
+    if fragmented
+        && ((fragment & 0x4000 != 0)
+            || fragment_payload_len == 0
+            || (fragment & 0x2000 != 0 && fragment_payload_len % 8 != 0))
+    {
+        return Err(PacketFlowError::InvalidIpv4Header);
+    }
     let protocol = packet[9];
     let source = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
     let destination = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
@@ -125,6 +157,7 @@ fn parse_ipv6(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
     let mut next_header = packet[6];
     let mut offset = IPV6_HEADER_LEN;
     let mut extension_count = 0usize;
+    let mut fragment_header_seen = false;
     loop {
         if !is_ipv6_extension(next_header) {
             break;
@@ -134,15 +167,31 @@ fn parse_ipv6(packet: &[u8]) -> Result<FlowKey, PacketFlowError> {
             return Err(PacketFlowError::TooManyIpv6ExtensionHeaders);
         }
         if next_header == 44 {
-            let following = *packet.get(offset).ok_or(PacketFlowError::InvalidIpv6Extension)?;
-            let fragment_field = read_u16(packet, offset + 2)
-                .map_err(|_| PacketFlowError::InvalidIpv6Extension)?;
+            if fragment_header_seen {
+                return Err(PacketFlowError::InvalidIpv6Extension);
+            }
+            fragment_header_seen = true;
             let end = offset.checked_add(8).ok_or(PacketFlowError::InvalidIpv6Extension)?;
             if end > total_len {
                 return Err(PacketFlowError::InvalidIpv6Extension);
             }
+            let following = packet[offset];
+            if packet[offset + 1] != 0 {
+                return Err(PacketFlowError::InvalidIpv6Extension);
+            }
+            let fragment_field = read_u16(packet, offset + 2)
+                .map_err(|_| PacketFlowError::InvalidIpv6Extension)?;
+            if fragment_field & 0x0006 != 0 {
+                return Err(PacketFlowError::InvalidIpv6Extension);
+            }
             let is_fragmented = fragment_field & 0xfff9 != 0;
             if is_fragmented {
+                let fragment_payload_len = total_len - end;
+                if fragment_payload_len == 0
+                    || (fragment_field & 0x0001 != 0 && fragment_payload_len % 8 != 0)
+                {
+                    return Err(PacketFlowError::InvalidIpv6Extension);
+                }
                 // All fragments carry the same immediate post-fragment
                 // protocol value, even when an extension header follows it.
                 return Ok(FlowKey::new(
@@ -300,13 +349,32 @@ mod tests {
 
     #[test]
     fn fragments_share_a_portless_ipv4_flow_key() {
-        let first = ipv4(6, &tcp_header(1234, 443), 0x2000, false);
+        let mut first_payload = tcp_header(1234, 443).to_vec();
+        first_payload.extend_from_slice(&[0; 4]); // 24-byte non-final fragment payload
+        let first = ipv4(6, &first_payload, 0x2000, false);
         let later = ipv4(6, &[0xaa; 8], 1, false);
         let first_key = flow_key_from_packet(&first).unwrap();
         let later_key = flow_key_from_packet(&later).unwrap();
         assert_eq!(first_key, later_key);
         assert_eq!(first_key.src.port(), 0);
         assert_eq!(first_key.dst.port(), 0);
+    }
+
+    #[test]
+    fn rejects_invalid_ipv4_fragment_payload_lengths_and_df() {
+        assert_eq!(
+            flow_key_from_packet(&ipv4(17, &[], 0x2000, false)),
+            Err(PacketFlowError::InvalidIpv4Header),
+        );
+        assert_eq!(
+            flow_key_from_packet(&ipv4(17, &[0; 9], 0x2000, false)),
+            Err(PacketFlowError::InvalidIpv4Header),
+        );
+        assert_eq!(
+            flow_key_from_packet(&ipv4(17, &[0; 8], 0x6000, false)),
+            Err(PacketFlowError::InvalidIpv4Header),
+        );
+        assert!(flow_key_from_packet(&ipv4(17, &[0xaa], 1, false)).is_ok());
     }
 
     #[test]
@@ -344,12 +412,87 @@ mod tests {
     fn ipv6_fragmented_packets_use_a_consistent_portless_key() {
         let mut first_fragment = vec![6, 0, 0, 1, 0, 0, 0, 1]; // M bit set
         first_fragment.extend_from_slice(&tcp_header(1234, 443));
+        first_fragment.extend_from_slice(&[0; 4]); // 24-byte non-final fragment payload
         let later_fragment = vec![6, 0, 0, 8, 0, 0, 0, 1, 0xaa, 0xbb];
         let first = flow_key_from_packet(&ipv6(44, &first_fragment)).unwrap();
         let later = flow_key_from_packet(&ipv6(44, &later_fragment)).unwrap();
         assert_eq!(first, later);
         assert_eq!(first.proto, 6);
         assert_eq!(first.src.port(), 0);
+    }
+
+    #[test]
+    fn rejects_nonzero_ipv6_fragment_reserved_fields() {
+        let valid_fragment = vec![6, 0, 0, 1, 0, 0, 0, 1, 0xaa, 0xbb];
+
+        let mut reserved_octet = valid_fragment.clone();
+        reserved_octet[1] = 1;
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &reserved_octet)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+
+        let mut reserved_bits = valid_fragment;
+        reserved_bits[3] |= 0x02;
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &reserved_bits)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_ipv6_nonfinal_fragment_payload_lengths() {
+        let empty_nonfinal_fragment = [17, 0, 0, 1, 0, 0, 0, 0];
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &empty_nonfinal_fragment)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+
+        let mut short_nonfinal_fragment = empty_nonfinal_fragment.to_vec();
+        short_nonfinal_fragment.extend_from_slice(&[0xaa; 7]);
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &short_nonfinal_fragment)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+
+        let mut aligned_nonfinal_fragment = empty_nonfinal_fragment.to_vec();
+        aligned_nonfinal_fragment.extend_from_slice(&[0xaa; 8]);
+        assert!(flow_key_from_packet(&ipv6(44, &aligned_nonfinal_fragment)).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_ipv6_fragment_headers() {
+        let duplicate_fragments = [
+            44, 0, 0, 0, 0, 0, 0, 0,
+            59, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert_eq!(
+            flow_key_from_packet(&ipv6(44, &duplicate_fragments)),
+            Err(PacketFlowError::InvalidIpv6Extension),
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_ipv4_option_lengths_and_padding() {
+        let mut valid = ipv4(59, &[], 0, true);
+        valid[20..24].copy_from_slice(&[1, 0, 0, 0]); // NOP, then zero padding
+        assert!(flow_key_from_packet(&valid).is_ok());
+
+        for options in [
+            [0x9e, 1, 0, 0], // TLV length is shorter than its header
+            [0x9e, 5, 0, 0], // TLV extends beyond the option area
+            [0x9e, 0, 0, 0], // TLV length zero
+            [0x9e, 3, 0, 0x9e], // no length byte for the final TLV
+            [0, 1, 0, 0], // nonzero byte after End of Option List
+        ] {
+            let mut malformed = ipv4(59, &[], 0, true);
+            malformed[20..24].copy_from_slice(&options);
+            assert_eq!(
+                flow_key_from_packet(&malformed),
+                Err(PacketFlowError::InvalidIpv4Header),
+                "malformed IPv4 options must be rejected: {options:?}",
+            );
+        }
     }
 
     #[test]

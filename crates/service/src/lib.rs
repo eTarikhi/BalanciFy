@@ -16,13 +16,14 @@
 //! Nothing here opens a socket or reads a clock: callers pass `now` and take
 //! back [`Action`]s (Sec.4.7.4 sans-I/O loop).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 pub mod support;
 pub mod driver_device;
 pub mod etw;
+pub mod machine_policy;
 pub mod packet;
 pub mod wintun;
 pub use balancify_ipc as ipc;
@@ -37,6 +38,7 @@ use balancify_tunnel::{
     should_duplicate, Crypto, Event, FrameKind, Header, Receiver, ReceiverConfig, Sender,
     SenderConfig,
 };
+use machine_policy::{MachinePolicy, MachinePolicyStore};
 
 /// What the I/O adapter must do with the service's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,12 +145,20 @@ impl From<Counters> for ipc::Counters {
     }
 }
 
+#[derive(Debug)]
+enum MachinePolicyMutationError {
+    Invalid(String),
+    Persistence,
+}
+
 pub struct Service<C: Crypto> {
     cfg: ServiceConfig,
     policy: PolicyEngine,
     snapshot: PolicySnapshot,
     flows: FlowTable,
     rules: RuleSet,
+    machine_policy: MachinePolicy,
+    machine_policy_store: Option<MachinePolicyStore>,
     bond: BondGainTracker,
     keepalives: KeepaliveScheduler,
     path_mtu: BTreeMap<UplinkId, u16>,
@@ -164,16 +174,19 @@ pub struct Service<C: Crypto> {
     /// Last observed local (source) endpoint per uplink, for NAT re-binding
     /// detection (Sec.6.6).
     path_local: BTreeMap<UplinkId, SocketAddr>,
-    /// Rekey tracking for forward secrecy (Sec.11.3).
+    /// Key-update diagnostics. The one-way KDF can derive keys locally, but
+    /// live sessions must not rotate until both peers coordinate the update.
     last_rekey: Option<Instant>,
     packets_since_rekey: u64,
+    key_epoch_started: Option<Instant>,
     rekey_interval: Duration,
     rekey_packet_threshold: u64,
+    rekey_due: bool,
     /// Relay failover (Sec.4.5): primary + secondary relay addrs, health tracking + convergence measurement Sec.10.3 failover <=2s
     relay_primary: Option<SocketAddr>,
     relay_secondary: Option<SocketAddr>,
     relay_current: Option<SocketAddr>,
-    relay_last_ack: Option<Instant>,
+    relay_timeout_since: Option<Instant>,
     relay_failover_timeout: Duration,
     relay_failover_count: u64,
     relay_failover_start: Option<Instant>,
@@ -220,6 +233,12 @@ impl<C: Crypto + Clone> Service<C> {
             max_sessions: ReceiverConfig::default().max_sessions,
         };
         let policy = PolicyEngine::new(policy_cfg, cfg.seed);
+        let machine_policy = MachinePolicy {
+            bond_enabled: cfg.bond_enabled,
+            duplicate_mode: cfg.duplicate_mode,
+            allow_metered: cfg.allow_metered,
+            custom_rules: Vec::new(),
+        };
         let flows = FlowTable::new(cfg.idle_timeout);
         let keepalives = KeepaliveScheduler::new(cfg.keepalive_interval);
         let tx = Sender::with_config(cfg.session, tx_crypto, Vec::new(), sender_cfg);
@@ -230,6 +249,8 @@ impl<C: Crypto + Clone> Service<C> {
             snapshot: PolicySnapshot::default(),
             flows,
             rules: RuleSet::curated(),
+            machine_policy,
+            machine_policy_store: None,
             bond: BondGainTracker::default(),
             keepalives,
             path_mtu: BTreeMap::new(),
@@ -241,12 +262,14 @@ impl<C: Crypto + Clone> Service<C> {
             path_local: BTreeMap::new(),
             last_rekey: None,
             packets_since_rekey: 0,
-            rekey_interval: Duration::from_secs(3600), // 1 hour default per Sec.11.3
-            rekey_packet_threshold: 1_000_000,          // 1M packets or 1 hour
+            key_epoch_started: None,
+            rekey_interval: Duration::from_secs(3600), // planned 1 hour threshold
+            rekey_packet_threshold: 1_000_000,          // planned 1M packet threshold
+            rekey_due: false,
             relay_primary: None,
             relay_secondary: None,
             relay_current: None,
-            relay_last_ack: None,
+            relay_timeout_since: None,
             relay_failover_timeout: Duration::from_secs(10),
             relay_failover_count: 0,
             relay_failover_start: None,
@@ -271,6 +294,26 @@ impl<C: Crypto + Clone> Service<C> {
             counters: Counters::default(),
             event_interval_hz: 1,
         }
+    }
+
+    /// Construct the service with its machine-wide policy loaded before any
+    /// IPC requests can be accepted. Corrupt/future policy fails startup closed.
+    pub fn new_with_machine_policy_store(
+        mut cfg: ServiceConfig,
+        tx_crypto: C,
+        rx_crypto: C,
+        store: MachinePolicyStore,
+    ) -> std::io::Result<(Self, bool)> {
+        let loaded = store.load()?;
+        cfg.bond_enabled = loaded.policy.bond_enabled;
+        cfg.duplicate_mode = loaded.policy.duplicate_mode;
+        cfg.allow_metered = loaded.policy.allow_metered;
+        let mut service = Self::new(cfg, tx_crypto, rx_crypto);
+        service.rules = Self::rules_for_policy(&loaded.policy)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+        service.machine_policy = loaded.policy;
+        service.machine_policy_store = Some(store);
+        Ok((service, loaded.recovered_from_backup))
     }
 
     // ------------------------------------------------------------- topology
@@ -591,8 +634,8 @@ impl<C: Crypto + Clone> Service<C> {
             self.pacing.on_send(sent.path, payload.len() as u64, now);
             self.counters.packets_stripped += 1;
             self.packets_since_rekey += 1;
-            if self.last_rekey.is_none() {
-                self.last_rekey = Some(now);
+            if self.key_epoch_started.is_none() {
+                self.key_epoch_started = Some(now);
             }
             self.keepalives.on_traffic(sent.path, now);
             self.policy.note_traffic(UplinkId(sent.path), now);
@@ -644,8 +687,8 @@ impl<C: Crypto + Clone> Service<C> {
         self.counters.packets_forwarded += 1;
         // Flow-level capacity is sampled when the authenticated FlowAck arrives.
         self.packets_since_rekey += 1;
-        if self.last_rekey.is_none() {
-            self.last_rekey = Some(now);
+        if self.key_epoch_started.is_none() {
+            self.key_epoch_started = Some(now);
         }
         self.keepalives.on_traffic(uplink.0, now);
         self.policy.note_traffic(uplink, now);
@@ -802,25 +845,28 @@ impl<C: Crypto + Clone> Service<C> {
         let probe_timeout = self.cfg.probe_timeout;
         self.probes.retain(|_, (sent_at, _)| now.duration_since(*sent_at) < probe_timeout);
 
-        // Sec.11.3 rekey for forward secrecy: time-based (1h) or packet-based (1M)
-        if self.should_rekey(now) {
-            if self.maybe_rekey(now) {
-                self.last_rekey = Some(now);
-                self.packets_since_rekey = 0;
-                self.etw.info(etw::EVT_REKEY, &format!("rekeyed session {} at {:?}", self.cfg.session, now));
-            }
+        // Do not rotate transport ciphers locally: the relay has no key-update
+        // message/acknowledgement, so a unilateral switch would strand the
+        // session. Record when a coordinated handshake is required instead.
+        if !self.rekey_due && self.should_rekey(now) {
+            self.rekey_due = true;
+            self.etw.warn(
+                etw::EVT_REKEY,
+                &format!("session {} reached its key-update threshold; coordinated handshake required", self.cfg.session),
+            );
         }
 
-        // Sec.4.5 relay failover: if no ACK from current relay within timeout,
-        // switch to secondary (or back to primary). The caller must re-handshake
-        // if using secure mode; we just report the new relay via counter.
+        // Sec.4.5 relay failover: if no authenticated relay activity arrives
+        // within the timeout (including initial handshake silence), switch to
+        // the alternate endpoint. The socket adapter detects the switch and
+        // initiates a fresh secure handshake for that relay.
         if self.relay_primary.is_some() {
-            if let Some(new_relay) = self.check_relay_failover(now) {
-                self.etw.warn(
-                    etw::EVT_RELAY_FAILOVER,
-                    &format!("relay failover: {} -> {} count={}", self.relay_primary.unwrap(), new_relay, self.relay_failover_count),
+            if self.check_relay_failover(now).is_some() {
+                let message = relay_failover_event_message(
+                    self.relay_failover_count,
+                    self.relay_failover_timeout,
                 );
-                eprintln!("relay failover: {} -> {}", self.relay_primary.unwrap(), new_relay);
+                eprintln!("{message}");
             }
         }
 
@@ -829,60 +875,17 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     fn should_rekey(&self, now: Instant) -> bool {
-        if let Some(last) = self.last_rekey {
-            if now.duration_since(last) >= self.rekey_interval {
-                return true;
-            }
-        } else {
-            // First rekey check: if we've sent enough packets, trigger
-            if self.packets_since_rekey == 0 {
-                return false;
-            }
-        }
-        self.packets_since_rekey >= self.rekey_packet_threshold
+        let time_due = self
+            .key_epoch_started
+            .is_some_and(|started| now.duration_since(started) >= self.rekey_interval);
+        time_due || self.packets_since_rekey >= self.rekey_packet_threshold
     }
 
-
-    /// Rekey transport keys for forward secrecy (Sec.11.3). Generic version using Crypto::rekey().
-    /// Returns true if rekeyed (both ciphers support rekey).
-    pub fn maybe_rekey(&mut self, now: Instant) -> bool {
-        let tx_cipher = self.tx.crypto().clone();
-        let rx_cipher = self.rx.crypto().clone();
-        let new_tx = match tx_cipher.rekey() {
-            Some(c) => c,
-            None => return false,
-        };
-        let new_rx = match rx_cipher.rekey() {
-            Some(c) => c,
-            None => return false,
-        };
-        let session = self.cfg.session;
-        let quanta = {
-            let q = self.snapshot.quanta();
-            if q.is_empty() {
-                self.tx.paths().into_iter().map(|p| (p, 1400u64)).collect()
-            } else {
-                q
-            }
-        };
-        let sender_cfg = SenderConfig { rto: self.cfg.rto, ..SenderConfig::default() };
-        let receiver_cfg = ReceiverConfig {
-            hold_cap: self.cfg.hold_cap,
-            idle_timeout: self.cfg.idle_timeout,
-            auto_accept: self.cfg.auto_accept,
-            max_sessions: self.rx.config().max_sessions,
-        };
-        self.tx = Sender::with_config(session, new_tx, quanta, sender_cfg);
-        self.rx = Receiver::new(new_rx, receiver_cfg);
-        if !self.cfg.auto_accept {
-            self.rx.open_session(session, now);
-        }
-        true
-    }
-
+    /// Configure the point at which diagnostics mark the session as needing a
+    /// coordinated key update. Reaching this threshold does not change keys.
     pub fn set_rekey_interval(&mut self, interval: Duration, packet_threshold: u64) {
         self.rekey_interval = interval;
-        self.rekey_packet_threshold = packet_threshold;
+        self.rekey_packet_threshold = packet_threshold.max(1);
     }
 
     pub fn packets_since_rekey(&self) -> u64 {
@@ -891,9 +894,18 @@ impl<C: Crypto + Clone> Service<C> {
     pub fn last_rekey(&self) -> Option<Instant> {
         self.last_rekey
     }
+    pub fn rekey_due(&self) -> bool {
+        self.rekey_due
+    }
+
+    /// Start or preserve the failure-detection clock for an outbound relay handshake.
+    /// Retries must not postpone failover indefinitely when a relay never replies.
+    pub fn note_relay_attempt(&mut self, now: Instant) {
+        self.relay_timeout_since.get_or_insert(now);
+    }
 
     pub fn on_relay_ack(&mut self, now: Instant) {
-        self.relay_last_ack = Some(now);
+        self.relay_timeout_since = Some(now);
         // If we were in failover, measure convergence time (first ACK after failover)
         if let Some(start) = self.relay_failover_start.take() {
             let convergence = now.duration_since(start);
@@ -908,7 +920,7 @@ impl<C: Crypto + Clone> Service<C> {
     }
 
     pub fn check_relay_failover(&mut self, now: Instant) -> Option<SocketAddr> {
-        let last = match self.relay_last_ack {
+        let last = match self.relay_timeout_since {
             Some(t) => t,
             None => return None,
         };
@@ -924,7 +936,7 @@ impl<C: Crypto + Clone> Service<C> {
         if let Some(next_addr) = next {
             if next_addr != current {
                 self.relay_current = Some(next_addr);
-                self.relay_last_ack = Some(now);
+                self.relay_timeout_since = Some(now);
                 self.relay_failover_count += 1;
                 self.relay_failover_start = Some(now);
                 self.relay_failover_convergence = None;
@@ -939,7 +951,7 @@ impl<C: Crypto + Clone> Service<C> {
         self.relay_primary = Some(primary);
         self.relay_secondary = secondary;
         self.relay_current = Some(primary);
-        self.relay_last_ack = None;
+        self.relay_timeout_since = None;
     }
 
     pub fn relay_current(&self) -> Option<SocketAddr> {
@@ -1093,34 +1105,64 @@ impl<C: Crypto + Clone> Service<C> {
             Request::GetStatus => Response::Status(self.status_snapshot()),
             Request::ListUplinks => Response::Uplinks(self.uplink_infos()),
             Request::ListFlowRules => Response::FlowRules(self.flow_rule_infos()),
-            Request::SetFlowRule(rule) => match self.apply_rule(rule) {
-                Ok(()) => Response::Ack,
-                Err(message) => Response::Error { status: ipc::Status::BadRequest, message },
-            },
+            Request::SetFlowRule(rule) => {
+                let mut candidate = self.machine_policy.clone();
+                candidate.custom_rules.retain(|existing| existing.id != rule.id);
+                candidate.custom_rules.push(rule);
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
+            }
             Request::RemoveFlowRule { id } => {
                 if id < balancify_core::FIRST_CUSTOM_RULE_ID {
                     Response::Error {
                         status: ipc::Status::BadRequest,
                         message: format!("rule id {id} is reserved for built-in rules"),
                     }
-                } else if self.rules.remove(id) {
-                    Response::Ack
                 } else {
-                    Response::Error { status: ipc::Status::BadRequest, message: format!("no rule {id}") }
+                    let mut candidate = self.machine_policy.clone();
+                    let count_before = candidate.custom_rules.len();
+                    candidate.custom_rules.retain(|rule| rule.id != id);
+                    if candidate.custom_rules.len() == count_before {
+                        Response::Error { status: ipc::Status::BadRequest, message: format!("no custom rule {id}") }
+                    } else {
+                        match self.commit_machine_policy(candidate) {
+                            Ok(()) => Response::Ack,
+                            Err(error) => Self::machine_policy_error_response(error),
+                        }
+                    }
                 }
             }
             Request::SetBondMode { enabled } => {
-                self.cfg.bond_enabled = enabled;
-                Response::Ack
+                let mut candidate = self.machine_policy.clone();
+                candidate.bond_enabled = enabled;
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
             }
             Request::SetDuplicateMode { enabled } => {
-                self.cfg.duplicate_mode = enabled;
-                Response::Ack
+                let mut candidate = self.machine_policy.clone();
+                candidate.duplicate_mode = enabled;
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
             }
             Request::SetAllowMetered { allowed } => {
-                self.cfg.allow_metered = allowed;
-                self.policy.set_allow_metered(allowed);
-                Response::Ack
+                let mut candidate = self.machine_policy.clone();
+                candidate.allow_metered = allowed;
+                match self.commit_machine_policy(candidate) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
+            }
+            Request::ApplyMachinePolicy { bond_enabled, duplicate_mode, allow_metered, custom_rules } => {
+                match self.import_machine_policy(bond_enabled, duplicate_mode, allow_metered, custom_rules) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Self::machine_policy_error_response(error),
+                }
             }
             Request::GetSupportBundle => {
                 let bundle = support::SupportBundle::collect(self, now);
@@ -1269,12 +1311,111 @@ impl<C: Crypto + Clone> Service<C> {
             .collect()
     }
 
-    fn apply_rule(&mut self, rule: ipc::FlowRule) -> Result<(), String> {
+    fn import_machine_policy(
+        &mut self,
+        bond_enabled: bool,
+        duplicate_mode: bool,
+        allow_metered: bool,
+        imported_rules: Vec<ipc::FlowRule>,
+    ) -> Result<(), MachinePolicyMutationError> {
+        let mut candidate = self.machine_policy.clone();
+        candidate.bond_enabled = bond_enabled;
+        candidate.duplicate_mode = duplicate_mode;
+        candidate.allow_metered = allow_metered;
+        Self::merge_imported_rules(&mut candidate.custom_rules, imported_rules)
+            .map_err(MachinePolicyMutationError::Invalid)?;
+        self.commit_machine_policy(candidate)
+    }
+
+    fn merge_imported_rules(
+        existing: &mut Vec<ipc::FlowRule>,
+        imported: Vec<ipc::FlowRule>,
+    ) -> Result<(), String> {
+        let mut used_ids: BTreeSet<u32> = existing.iter().map(|rule| rule.id).collect();
+        for mut rule in imported {
+            if existing.iter().any(|current| same_rule_ignoring_id(current, &rule)) {
+                continue;
+            }
+            if existing.iter().any(|current| current.id == rule.id) {
+                let mut candidate_id = balancify_core::FIRST_CUSTOM_RULE_ID;
+                while used_ids.contains(&candidate_id) {
+                    candidate_id = candidate_id.checked_add(1)
+                        .ok_or_else(|| "no custom rule identifiers are available".to_string())?;
+                }
+                rule.id = candidate_id;
+            }
+            if !used_ids.insert(rule.id) {
+                return Err("imported custom rules contain duplicate identifiers".to_string());
+            }
+            existing.push(rule);
+            if existing.len() > ipc::MAX_CUSTOM_POLICY_RULES {
+                return Err("machine policy supports at most 128 custom rules".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_machine_policy(&mut self, candidate: MachinePolicy) -> Result<(), MachinePolicyMutationError> {
+        candidate.validate().map_err(|error| MachinePolicyMutationError::Invalid(error.to_string()))?;
+        let candidate_rules = self.updated_rules_for_policy(&candidate)
+            .map_err(MachinePolicyMutationError::Invalid)?;
+        if let Some(store) = &self.machine_policy_store {
+            if let Err(error) = store.save(&candidate) {
+                self.etw.error(
+                    etw::EVT_POLICY_PERSISTENCE_FAILED,
+                    &format!("machine policy persistence failed kind={:?}", error.kind()),
+                );
+                return Err(MachinePolicyMutationError::Persistence);
+            }
+        }
+        self.cfg.bond_enabled = candidate.bond_enabled;
+        self.cfg.duplicate_mode = candidate.duplicate_mode;
+        self.cfg.allow_metered = candidate.allow_metered;
+        self.policy.set_allow_metered(candidate.allow_metered);
+        self.rules = candidate_rules;
+        self.machine_policy = candidate;
+        Ok(())
+    }
+
+    fn machine_policy_error_response(error: MachinePolicyMutationError) -> ipc::Response {
+        match error {
+            MachinePolicyMutationError::Invalid(message) => ipc::Response::Error {
+                status: ipc::Status::BadRequest,
+                message,
+            },
+            MachinePolicyMutationError::Persistence => ipc::Response::Error {
+                status: ipc::Status::Internal,
+                message: "service policy could not be saved; the live policy was not changed".to_string(),
+            },
+        }
+    }
+
+    fn updated_rules_for_policy(&self, policy: &MachinePolicy) -> Result<RuleSet, String> {
+        let mut rules = self.rules.clone();
+        for existing in &self.machine_policy.custom_rules {
+            if !policy.custom_rules.iter().any(|candidate| candidate == existing) {
+                rules.remove(existing.id);
+            }
+        }
+        for candidate in &policy.custom_rules {
+            if !self.machine_policy.custom_rules.iter().any(|existing| existing == candidate) {
+                rules.add(Self::core_rule_from_ipc(candidate)?);
+            }
+        }
+        Ok(rules)
+    }
+
+    fn rules_for_policy(policy: &MachinePolicy) -> Result<RuleSet, String> {
+        let mut rules = RuleSet::curated();
+        for rule in &policy.custom_rules {
+            rules.add(Self::core_rule_from_ipc(rule)?);
+        }
+        Ok(rules)
+    }
+
+    fn core_rule_from_ipc(rule: &ipc::FlowRule) -> Result<balancify_core::Rule, String> {
         if rule.id < balancify_core::FIRST_CUSTOM_RULE_ID {
-            return Err(format!(
-                "rule id {} is reserved for built-in rules",
-                rule.id
-            ));
+            return Err(format!("rule id {} is reserved for built-in rules", rule.id));
         }
         let class = match rule.class {
             ipc::CLASS_BULK => FlowClass::Bulk,
@@ -1282,18 +1423,22 @@ impl<C: Crypto + Clone> Service<C> {
             ipc::CLASS_PINNED => FlowClass::Pinned(UplinkId(rule.pinned_uplink)),
             other => return Err(format!("unknown flow class {other}")),
         };
-        if rule.name.trim().is_empty() { return Err("rule name must not be empty".to_string()); }
+        if rule.name.trim().is_empty() || rule.name.chars().count() > 120 || rule.name.len() > 480 {
+            return Err("rule name must contain 1..=120 characters".to_string());
+        }
+        if rule.class != ipc::CLASS_PINNED && rule.pinned_uplink != 0 {
+            return Err("only pinned rules may specify an uplink".to_string());
+        }
         if rule.port_start > rule.port_end {
             return Err(format!("port range {}..{} is inverted", rule.port_start, rule.port_end));
         }
-        let mut r = balancify_core::Rule::new(rule.id, rule.name, class).priority(rule.priority);
-        if rule.proto != 0 { r = r.proto(rule.proto); }
+        let mut core_rule = balancify_core::Rule::new(rule.id, rule.name.clone(), class).priority(rule.priority);
+        if rule.proto != 0 { core_rule = core_rule.proto(rule.proto); }
         if !(rule.port_start == 0 && rule.port_end == 0) {
-            r = r.port(balancify_core::PortRange::range(rule.port_start, rule.port_end));
+            core_rule = core_rule.port(balancify_core::PortRange::range(rule.port_start, rule.port_end));
         }
-        if rule.duplicate { r = r.duplicate(true); }
-        self.rules.add(r);
-        Ok(())
+        if rule.duplicate { core_rule = core_rule.duplicate(true); }
+        Ok(core_rule)
     }
 }
 
@@ -1323,6 +1468,10 @@ impl Service<balancify_crypto::TunnelCipher> {
             };
             self.tx = Sender::with_config(session, tx_cipher, quanta, sender_cfg);
             self.rx = Receiver::new(rx_cipher, receiver_cfg);
+            self.last_rekey = None;
+            self.packets_since_rekey = 0;
+            self.key_epoch_started = Some(now);
+            self.rekey_due = false;
             if !self.cfg.auto_accept {
                 self.rx.open_session(session, now);
             }
@@ -1400,21 +1549,26 @@ impl Service<balancify_crypto::TunnelCipher> {
             msg
         };
 
-        let initiator = self.handshake_initiator.as_mut().ok_or(balancify_crypto::HandshakeError::BadOrder)?;
+        // A handshake response is single-use, including malformed or
+        // mismatched responses. Do not leave an authenticated-but-rejected
+        // transcript available for another attempt.
+        let mut initiator = self
+            .handshake_initiator
+            .take()
+            .ok_or(balancify_crypto::HandshakeError::BadOrder)?;
         let (payload, keys) = initiator.read_message(raw)?;
 
-        // Payload should echo session id
-        if payload.len() >= 8 {
-            let echoed = u64::from_be_bytes(payload[..8].try_into().unwrap());
-            if echoed != self.cfg.session {
-                // Session mismatch, but still allow? For now, treat as ok if we trust relay
-                // The session id is what we sent, so mismatch is suspicious.
-                // We'll still apply keys but log via counter? For now, continue.
-            }
+        if payload.len() != std::mem::size_of::<u64>() {
+            return Err(balancify_crypto::HandshakeError::Truncated);
+        }
+        let echoed = u64::from_be_bytes(payload[..8].try_into().unwrap());
+        if echoed != self.cfg.session {
+            return Err(balancify_crypto::HandshakeError::AuthFailed);
         }
 
         self.apply_transport_keys(&keys, now);
         self.handshake_initiator = None;
+        self.on_relay_ack(now);
         Ok(())
     }
 
@@ -1445,6 +1599,8 @@ impl Service<balancify_crypto::TunnelCipher> {
         }
     }
 
+    /// Apply keys produced by a peer-coordinated handshake. Do not call with
+    /// locally derived keys: the remote endpoint must install the same epoch.
     pub fn rekey_with(&mut self, new_keys: &balancify_crypto::TransportKeys, now: Instant) {
         self.apply_transport_keys(new_keys, now);
         self.last_rekey = Some(now);
@@ -1475,6 +1631,17 @@ fn uplink_info(u: &UplinkView, best_weight: f64) -> ipc::UplinkInfo {
         metered: u.metered,
         eligible: u.eligible,
     }
+}
+
+fn same_rule_ignoring_id(left: &ipc::FlowRule, right: &ipc::FlowRule) -> bool {
+    left.name == right.name
+        && left.class == right.class
+        && left.pinned_uplink == right.pinned_uplink
+        && left.priority == right.priority
+        && left.proto == right.proto
+        && left.port_start == right.port_start
+        && left.port_end == right.port_end
+        && left.duplicate == right.duplicate
 }
 
 fn permille(v: f64) -> i16 {
@@ -1954,7 +2121,7 @@ mod tests {
 
         let later = now + Duration::from_secs(9);
         assert!(svc.ingest_path(UplinkId(0), &forged, later).is_empty());
-        assert_eq!(svc.relay_last_ack, Some(now), "unauthenticated ACK cannot keep a relay alive");
+        assert_eq!(svc.relay_timeout_since, Some(now), "unauthenticated ACK cannot keep a relay alive");
         assert_eq!(svc.counters().auth_failed, 1);
     }
 
@@ -1979,6 +2146,120 @@ mod tests {
         let (kind, payload, _) = balancify_ipc::decode_frame(&frame).unwrap().unwrap();
         assert_eq!(kind, balancify_ipc::FrameKind::Response);
         assert_eq!(balancify_ipc::Response::decode(payload), Some(response));
+    }
+
+    #[test]
+    fn legacy_policy_import_merges_rules_remaps_conflicts_and_is_idempotent() {
+        let now = Instant::now();
+        let mut service = ready_service(now);
+        let current = ipc::FlowRule {
+            id: balancify_core::FIRST_CUSTOM_RULE_ID,
+            name: "current-machine-rule".to_string(),
+            class: ipc::CLASS_BULK,
+            pinned_uplink: 0,
+            priority: 20,
+            proto: 6,
+            port_start: 8443,
+            port_end: 8443,
+            duplicate: false,
+        };
+        assert_eq!(service.handle(ipc::Request::SetFlowRule(current.clone()), now), ipc::Response::Ack);
+        let legacy = ipc::FlowRule {
+            name: "legacy-user-rule".to_string(),
+            class: ipc::CLASS_LATENCY_SENSITIVE,
+            priority: 5,
+            duplicate: true,
+            ..current.clone()
+        };
+        let import = || ipc::Request::ApplyMachinePolicy {
+            bond_enabled: false,
+            duplicate_mode: true,
+            allow_metered: true,
+            custom_rules: vec![legacy.clone()],
+        };
+        assert_eq!(service.handle(import(), now), ipc::Response::Ack);
+        assert!(!service.config().bond_enabled);
+        assert!(service.config().duplicate_mode);
+        assert!(service.config().allow_metered);
+        let rules = service.rules().rules();
+        assert!(rules.iter().any(|rule| rule.id == current.id && rule.name == current.name));
+        let imported = rules.iter().find(|rule| rule.name == legacy.name).unwrap();
+        assert_ne!(imported.id, legacy.id, "conflicting legacy ID is remapped, never overwritten");
+        let rule_count = rules.iter().filter(|rule| rule.id >= balancify_core::FIRST_CUSTOM_RULE_ID).count();
+        assert_eq!(service.handle(import(), now), ipc::Response::Ack);
+        assert_eq!(
+            service.rules().rules().iter().filter(|rule| rule.id >= balancify_core::FIRST_CUSTOM_RULE_ID).count(),
+            rule_count,
+            "retrying a timed-out import does not duplicate a remapped rule",
+        );
+    }
+
+    #[test]
+    fn machine_policy_survives_service_restart_and_restores_rules() {
+        let root = std::env::temp_dir().join(format!("balancify-service-policy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let now = Instant::now();
+        let (mut service, recovered) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        assert!(!recovered);
+        let rule = ipc::FlowRule {
+            id: balancify_core::FIRST_CUSTOM_RULE_ID,
+            name: "persistent-voice".to_string(),
+            class: ipc::CLASS_LATENCY_SENSITIVE,
+            pinned_uplink: 0,
+            priority: 7,
+            proto: 17,
+            port_start: 50_000,
+            port_end: 50_100,
+            duplicate: true,
+        };
+        assert_eq!(service.handle(ipc::Request::ApplyMachinePolicy {
+            bond_enabled: false,
+            duplicate_mode: true,
+            allow_metered: true,
+            custom_rules: vec![rule.clone()],
+        }, now), ipc::Response::Ack);
+        drop(service);
+
+        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let (mut restored, recovered) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        assert!(!recovered);
+        assert!(!restored.config().bond_enabled);
+        assert!(restored.config().duplicate_mode);
+        assert!(restored.config().allow_metered);
+        assert!(restored.rules().rules().iter().any(|saved| saved.id == rule.id && saved.name == rule.name));
+        assert_eq!(restored.handle(ipc::Request::SetBondMode { enabled: true }, now), ipc::Response::Ack);
+        drop(restored);
+
+        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let (restored_again, _) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        assert!(restored_again.config().bond_enabled, "individual settings mutations also persist");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_machine_policy_write_does_not_mutate_live_service_state() {
+        let root = std::env::temp_dir().join(format!("balancify-service-policy-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state_dir = root.join("policy");
+        let store = MachinePolicyStore::open(&state_dir).unwrap();
+        let (mut service, _) = Service::new_with_machine_policy_store(
+            ServiceConfig::default(), PassThrough, PassThrough, store,
+        ).unwrap();
+        std::fs::remove_dir(&state_dir).unwrap();
+        std::fs::write(&state_dir, b"block policy directory creation").unwrap();
+        let response = service.handle(ipc::Request::SetBondMode { enabled: false }, Instant::now());
+        assert!(matches!(response, ipc::Response::Error { status: ipc::Status::Internal, .. }));
+        assert!(service.config().bond_enabled);
+        let _ = std::fs::remove_file(state_dir);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2240,7 +2521,7 @@ mod tests {
 
     #[test]
     fn secure_handshake_establishes_transport_keys() {
-        use balancify_crypto::{EphemeralKeypair, Initiator, Responder, StaticKeypair, PinnedKeys};
+        use balancify_crypto::{EphemeralKeypair, PinnedKeys, Responder, StaticKeypair};
         let now = Instant::now();
         let relay_kp = StaticKeypair::generate();
         let client_kp = StaticKeypair::generate();
@@ -2252,6 +2533,8 @@ mod tests {
         let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
         let cfg = ServiceConfig { session: 12345, seed: 0xBEEF, auto_accept: false, ..ServiceConfig::default() };
         let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        svc.set_relays("192.0.2.10:4430".parse().unwrap(), None);
+        svc.note_relay_attempt(now - Duration::from_secs(1));
         svc.set_static_keypair(client_kp.clone());
         let mut pinned_relays = PinnedKeys::new();
         pinned_relays.pin(relay_kp.public_bytes());
@@ -2282,6 +2565,7 @@ mod tests {
 
         // Now service should have transport keys applied and session open
         assert_eq!(svc.sessions(), 1, "session opened after handshake");
+        assert_eq!(svc.relay_timeout_since, Some(now), "authenticated handshake response refreshes relay liveness");
 
         // Verify that service can now send and relay can receive (using relay's keys)
         // We already have relay's transport keys from responder, but we need to reconstruct
@@ -2293,6 +2577,76 @@ mod tests {
         svc.publish(now);
         let actions = svc.send_app_packet(&flow, None, b"hello secure", now);
         assert!(actions.iter().any(|a| matches!(a, Action::Send { .. })), "must send after secure session");
+    }
+
+    #[test]
+    fn handshake_rejects_wrong_session_echo_without_installing_keys() {
+        use balancify_crypto::{EphemeralKeypair, Responder, StaticKeypair};
+        let now = Instant::now();
+        let relay_kp = StaticKeypair::generate();
+        let client_kp = StaticKeypair::generate();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let cfg = ServiceConfig { session: 12345, auto_accept: false, ..ServiceConfig::default() };
+        let mut svc = Service::new(
+            cfg,
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+        );
+        svc.set_static_keypair(client_kp);
+
+        let msg1 = svc.initiate_handshake(relay_kp.public_bytes(), b"balancify handshake v1").unwrap();
+        let mut responder = Responder::new(relay_kp.secret_bytes(), b"balancify handshake v1");
+        let request_payload = responder.read_message_checked(&msg1[2..], None, None, None).unwrap();
+        assert_eq!(request_payload, 12345u64.to_be_bytes());
+        let wrong_session = 54321u64.to_be_bytes();
+        let eph = EphemeralKeypair::generate().secret_bytes();
+        let (msg2, _) = responder.write_message(eph, &wrong_session).unwrap();
+        let mut framed = vec![0xFF, 0x02];
+        framed.extend_from_slice(&msg2);
+
+        assert_eq!(
+            svc.handle_handshake_msg2(&framed, now),
+            Err(balancify_crypto::HandshakeError::AuthFailed)
+        );
+        assert_eq!(svc.sessions(), 0, "mismatched session echo must not install keys");
+        assert_eq!(
+            svc.handle_handshake_msg2(&framed, now),
+            Err(balancify_crypto::HandshakeError::BadOrder),
+            "a rejected response consumes the pending initiator"
+        );
+    }
+
+    #[test]
+    fn handshake_rejects_malformed_session_echo_without_installing_keys() {
+        use balancify_crypto::{EphemeralKeypair, Responder, StaticKeypair};
+        let now = Instant::now();
+        let relay_kp = StaticKeypair::generate();
+        let client_kp = StaticKeypair::generate();
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let cfg = ServiceConfig { session: 12345, auto_accept: false, ..ServiceConfig::default() };
+        let mut svc = Service::new(
+            cfg,
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+            balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap(),
+        );
+        svc.set_static_keypair(client_kp);
+
+        let msg1 = svc.initiate_handshake(relay_kp.public_bytes(), b"balancify handshake v1").unwrap();
+        let mut responder = Responder::new(relay_kp.secret_bytes(), b"balancify handshake v1");
+        let request_payload = responder.read_message_checked(&msg1[2..], None, None, None).unwrap();
+        assert_eq!(request_payload, 12345u64.to_be_bytes());
+        let eph = EphemeralKeypair::generate().secret_bytes();
+        let (msg2, _) = responder.write_message(eph, &[0x01]).unwrap();
+        let mut framed = vec![0xFF, 0x02];
+        framed.extend_from_slice(&msg2);
+
+        assert_eq!(
+            svc.handle_handshake_msg2(&framed, now),
+            Err(balancify_crypto::HandshakeError::Truncated)
+        );
+        assert_eq!(svc.sessions(), 0, "malformed session echo must not install keys");
     }
 
     #[test]
@@ -2324,6 +2678,7 @@ mod tests {
         let message = relay_failover_event_message(1, Duration::from_secs(5));
         assert_eq!(message, "relay failover count=1 timeout=5s");
         assert!(!message.contains("10.0.0.1"));
+        assert!(!message.contains("10.0.0.2"));
     }
 
     #[test]
@@ -2356,6 +2711,28 @@ mod tests {
         let switched_back = svc.check_relay_failover(now + Duration::from_secs(12));
         assert_eq!(switched_back, Some(primary));
         assert_eq!(svc.relay_failover_count(), 2);
+    }
+
+    #[test]
+    fn relay_failover_timeout_starts_with_handshake_attempt_without_ack() {
+        let dummy_key = [0u8; 32];
+        let dummy_salt = [0u8; 3];
+        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
+        let cfg = ServiceConfig { session: 1, ..ServiceConfig::default() };
+        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
+        let primary = "192.0.2.1:4430".parse().unwrap();
+        let secondary = "192.0.2.2:4430".parse().unwrap();
+        let now = Instant::now();
+        svc.set_relays(primary, Some(secondary));
+        svc.set_relay_failover_timeout(Duration::from_secs(5));
+        svc.note_relay_attempt(now);
+        svc.note_relay_attempt(now + Duration::from_secs(3)); // retries must not restart the clock
+
+        assert!(svc.check_relay_failover(now + Duration::from_secs(4)).is_none());
+        assert_eq!(svc.check_relay_failover(now + Duration::from_secs(6)), Some(secondary));
+        assert_eq!(svc.relay_current(), Some(secondary));
+        assert_eq!(svc.relay_failover_count(), 1);
     }
 
     #[test]
@@ -2414,35 +2791,6 @@ mod tests {
         assert!(conv.as_millis() >= 900 && conv.as_millis() <= 1100, "convergence ~1000ms, got {}ms", conv.as_millis());
         assert_eq!(svc.uplink_failover_history().len(), 1);
         assert!(conv.as_secs_f64() <= 2.0, "target <=2s, got {}ms", conv.as_millis());
-    }
-
-    #[test]
-    fn rekey_auto_trigger_by_packet_count() {
-        let now = Instant::now();
-        let dummy_key = [0u8; 32];
-        let dummy_salt = [0u8; 3];
-        let tx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
-        let rx_cipher = balancify_crypto::TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
-        let cfg = ServiceConfig { session: 1, seed: 0xBEEF, ..ServiceConfig::default() };
-        let mut svc = Service::new(cfg, tx_cipher, rx_cipher);
-        svc.add_uplink(UplinkId(0), 200_000_000, false, 1500, now);
-        for _ in 0..5 { svc.on_probe_ok(UplinkId(0), Duration::from_millis(10), now); }
-        svc.publish(now);
-        svc.set_rekey_interval(Duration::from_secs(3600), 5); // rekey after 5 packets
-
-        let flow = FlowKey::new(6, sa(5000), peer(443));
-        for i in 0..5 {
-            let _ = svc.send_app_packet(&flow, None, format!("p{}", i).as_bytes(), now);
-        }
-        assert_eq!(svc.packets_since_rekey(), 5);
-        // tick should trigger rekey
-        let _actions = svc.tick(now + Duration::from_secs(1));
-        // After rekey, packets_since should reset to 0
-        assert_eq!(svc.packets_since_rekey(), 0, "rekey should reset counter");
-        assert!(svc.last_rekey().is_some());
-        // Ensure service still can send after rekey
-        let actions2 = svc.send_app_packet(&flow, None, b"after rekey", now + Duration::from_secs(2));
-        assert!(actions2.iter().any(|a| matches!(a, Action::Send { .. })));
     }
 
     #[test]

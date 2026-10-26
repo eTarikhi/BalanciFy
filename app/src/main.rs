@@ -1,17 +1,90 @@
 //! Balancify desktop shell -- IPC client that renders service status
 //! This is a lab CLI that mimics the WinUI shell's behavior over IPC v1 (Sec.8.2).
-//! The real WinUI 3 / .NET 10 shell would use the same IPC contract over a named pipe.
-//! This CLI connects via TCP loopback (for CI/Linux) and renders Home, Rules, Diagnostics.
+//! The production WinUI 3 / .NET 10 shell will use the same IPC contract.
+//! This cross-platform lab CLI uses the local Windows named pipe by default and
+//! loopback TCP elsewhere; the optional TCP override supports native Windows lab runs.
 //! Enhanced with per-path ECN/delay, bond gain, uplink up/down, rekey, relay failover,
 //! per-flow sessions, Rig B throughput, HVCI, SBOM.
 
 use balancify_ipc::{
     decode_frame, encode_frame, Counters, Event, FrameKind, Request, Response,
-    FRAME_HEADER_LEN, MAX_PAYLOAD, StatusSnapshot, UplinkInfo,
+    FRAME_HEADER_LEN, MAX_PAYLOAD, StatusSnapshot,
 };
 use std::io::{Read, Write};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use balancify_ipc::server::{NamedPipeStream, WINDOWS_SERVICE_PIPE_NAME};
+
+enum IpcConnection {
+    Tcp(TcpStream),
+    #[cfg(windows)]
+    NamedPipe(NamedPipeStream),
+}
+
+impl Read for IpcConnection {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.read(buffer),
+            #[cfg(windows)]
+            Self::NamedPipe(stream) => stream.read(buffer),
+        }
+    }
+}
+
+impl Write for IpcConnection {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.write(buffer),
+            #[cfg(windows)]
+            Self::NamedPipe(stream) => stream.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.flush(),
+            #[cfg(windows)]
+            Self::NamedPipe(stream) => stream.flush(),
+        }
+    }
+}
+
+fn connect_ipc(addr: SocketAddr) -> std::io::Result<(IpcConnection, String)> {
+    #[cfg(windows)]
+    {
+        match std::env::var("BALANCIFY_IPC_TRANSPORT") {
+            Ok(value) if value == "loopback-tcp" => return connect_tcp(addr),
+            Ok(value) if value == "named-pipe" => {}
+            Ok(value) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unsupported BALANCIFY_IPC_TRANSPORT value: {value}"),
+                ));
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "BALANCIFY_IPC_TRANSPORT must be valid UTF-8",
+                ));
+            }
+        }
+        Ok((
+            IpcConnection::NamedPipe(NamedPipeStream::connect(WINDOWS_SERVICE_PIPE_NAME)?),
+            WINDOWS_SERVICE_PIPE_NAME.to_string(),
+        ))
+    }
+    #[cfg(not(windows))]
+    connect_tcp(addr)
+}
+
+fn connect_tcp(addr: SocketAddr) -> std::io::Result<(IpcConnection, String)> {
+    let stream = TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    Ok((IpcConnection::Tcp(stream), addr.to_string()))
+}
 
 fn parse_ipc_addr(value: Option<&str>) -> std::io::Result<SocketAddr> {
     let addr = value
@@ -30,13 +103,28 @@ fn parse_ipc_addr(value: Option<&str>) -> std::io::Result<SocketAddr> {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let addr = parse_ipc_addr(args.get(1).map(String::as_str))?;
-    let mode = args.get(2).map(|s| s.as_str()).unwrap_or("home");
+    if args.get(1).is_some_and(|arg| arg == "--help" || arg == "-h") {
+        println!("Usage: balancify-app [LOOPBACK_ADDR] [home|rules|diagnostics|tray|relay|bundle|perflow|rigb|hvci|sbom|failover|soak]");
+        println!("Windows defaults to the local named pipe; non-Windows uses loopback TCP.");
+        return Ok(());
+    }
+    let first = args.get(1).map(String::as_str);
+    let first_is_mode = first.is_some_and(|value| matches!(
+        value,
+        "home" | "rules" | "diagnostics" | "tray" | "relay" | "bundle" | "perflow"
+            | "rigb" | "hvci" | "sbom" | "failover" | "soak"
+    ));
+    let (addr, mode) = if first_is_mode {
+        (parse_ipc_addr(None)?, first.unwrap())
+    } else {
+        (
+            parse_ipc_addr(first)?,
+            args.get(2).map(String::as_str).unwrap_or("home"),
+        )
+    };
 
-    println!("Balancify shell -- connecting to {} mode={}", addr, mode);
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let (mut stream, endpoint) = connect_ipc(addr)?;
+    println!("Balancify shell -- connecting to {} mode={}", endpoint, mode);
 
     // Send requests based on mode
     match mode {
@@ -68,12 +156,10 @@ fn main() -> std::io::Result<()> {
                         match recv_event(&mut stream) {
                             Ok(Some(ev)) => {
                                 let now = Instant::now();
-                                let mut newly_stale = false;
                                 if let Some(cache) = last_good.as_mut() {
                                     let was_stale = cache.stale_reason().is_some();
                                     cache.apply_event(&ev, now);
-                                    newly_stale = !was_stale && cache.stale_reason().is_some();
-                                    if newly_stale {
+                                    if !was_stale && cache.stale_reason().is_some() {
                                         render_stale_home(cache, now);
                                     }
                                 }
@@ -286,7 +372,7 @@ fn render_connection_stale_home(cache: Option<&mut LastKnownGoodHome>, message: 
     }
 }
 
-fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
+fn send_request<S: Read + Write>(stream: &mut S, req: &Request) -> std::io::Result<()> {
     let payload = req.encode();
     let mut frame = Vec::new();
     encode_frame(FrameKind::Request, &payload, &mut frame).unwrap();
@@ -294,38 +380,52 @@ fn send_request(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
+fn read_frame<S: Read + Write>(stream: &mut S) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
     read_frame_inner(stream, false)
 }
 
-fn read_frame_inner(
-    stream: &mut TcpStream,
+fn read_frame_inner<S: Read + Write>(
+    stream: &mut S,
     idle_timeout_returns_none: bool,
 ) -> std::io::Result<Option<(FrameKind, Vec<u8>)>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
     let mut header = [0u8; FRAME_HEADER_LEN];
-    // A timeout is a harmless idle poll only if no byte of a frame has arrived.
-    // Once a frame starts, any timeout is a truncated frame and must be surfaced.
-    match stream.read(&mut header[..1]) {
-        Ok(0) => return Ok(None),
-        Ok(1) => {}
-        Ok(_) => unreachable!("one-byte read cannot exceed the buffer"),
-        Err(error)
-            if idle_timeout_returns_none
-                && (error.kind() == std::io::ErrorKind::WouldBlock
-                    || error.kind() == std::io::ErrorKind::TimedOut) =>
-        {
-            return Ok(None);
+    // Idle timeouts are harmless only before the first byte. Once a frame
+    // starts, timeout or truncation errors are surfaced to the caller.
+    loop {
+        match stream.read(&mut header[..1]) {
+            Ok(0) => return Ok(None),
+            Ok(1) => break,
+            Ok(_) => unreachable!("one-byte read cannot exceed the buffer"),
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                if idle_timeout_returns_none {
+                    return Ok(None);
+                }
+                return Err(error);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    if idle_timeout_returns_none {
+                        return Ok(None);
+                    }
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "IPC response read timed out",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error),
         }
-        Err(error) => return Err(error),
     }
-    stream.read_exact(&mut header[1..])?;
+    read_exact_until(stream, &mut header[1..], deadline)?;
     let len = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
     if len > MAX_PAYLOAD {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "IPC frame exceeds maximum payload"));
     }
     let mut frame = header.to_vec();
     frame.resize(FRAME_HEADER_LEN + len, 0);
-    stream.read_exact(&mut frame[FRAME_HEADER_LEN..])?;
+    read_exact_until(stream, &mut frame[FRAME_HEADER_LEN..], deadline)?;
     let (kind, payload, consumed) = decode_frame(&frame)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "incomplete IPC frame"))?;
@@ -335,7 +435,29 @@ fn read_frame_inner(
     Ok(Some((kind, payload.to_vec())))
 }
 
-fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
+fn read_exact_until<S: Read>(
+    stream: &mut S,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> std::io::Result<()> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match stream.read(&mut buffer[filled..]) {
+            Ok(0) => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "truncated IPC frame")),
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "IPC frame read timed out"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn recv_response<S: Read + Write>(stream: &mut S) -> std::io::Result<Option<Response>> {
     match read_frame(stream)? {
         None => Ok(None),
         Some((FrameKind::Response, payload)) => Response::decode(&payload)
@@ -345,7 +467,7 @@ fn recv_response(stream: &mut TcpStream) -> std::io::Result<Option<Response>> {
     }
 }
 
-fn recv_event(stream: &mut TcpStream) -> std::io::Result<Option<Event>> {
+fn recv_event<S: Read + Write>(stream: &mut S) -> std::io::Result<Option<Event>> {
     let frame = read_frame_inner(stream, true)?;
     match frame {
         None => Ok(None),
@@ -579,7 +701,36 @@ fn render_event(ev: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use balancify_ipc::UplinkInfo;
     use std::net::TcpListener;
+
+    struct IntermittentStream {
+        input: Vec<u8>,
+        offset: usize,
+        would_block_next: bool,
+    }
+
+    impl Read for IntermittentStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.would_block_next {
+                self.would_block_next = false;
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            if self.offset == self.input.len() {
+                return Ok(0);
+            }
+            let count = buffer.len().min(3).min(self.input.len() - self.offset);
+            buffer[..count].copy_from_slice(&self.input[self.offset..self.offset + count]);
+            self.offset += count;
+            self.would_block_next = true;
+            Ok(count)
+        }
+    }
+
+    impl Write for IntermittentStream {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> { Ok(buffer.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
 
     fn tcp_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -625,6 +776,19 @@ mod tests {
             parse_ipc_addr(Some("not-an-address")).unwrap_err().kind(),
             std::io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn frame_reader_retries_nonblocking_reads_without_losing_frame_boundaries() {
+        let mut bytes = Vec::new();
+        encode_frame(FrameKind::Response, &Response::Ack.encode(), &mut bytes).unwrap();
+        let mut stream = IntermittentStream {
+            input: bytes,
+            offset: 0,
+            would_block_next: true,
+        };
+        let frame = read_frame_inner(&mut stream, false).unwrap().unwrap();
+        assert_eq!(frame, (FrameKind::Response, Response::Ack.encode()));
     }
 
     #[test]

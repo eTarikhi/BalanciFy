@@ -1,0 +1,24 @@
+# ADR-0045: Persist WinUI policy preferences in the interactive user's profile
+
+- Status: Superseded by ADR-0046 for policy authority and ongoing persistence; retained as the historical v1 migration format
+- Date: 2026-10-26
+- Related: ADR-0035, ADR-0038, ADR-0044, ADR-0046
+
+> **Current behavior:** the `%LOCALAPPDATA%\\BalanciFy\\ui-preferences.json` v1 document is read-only legacy migration input. It is never replayed automatically and the shell no longer writes it. A user must explicitly confirm import to commit settings and merged rules as machine-wide policy through service IPC. See ADR-0046. The historic decision below explains how the v1 file came to exist; its restoration/save behavior is no longer current.
+
+## Context
+
+The WinUI shell could edit service policy and custom flow rules, but the service keeps these values in memory and resets them on restart. Persisting policy in the service would require a new service-owned configuration format, ACL policy, migration behavior, and IPC coordination. The shell already represents an interactive user's preferences and can restore them through the existing versioned IPC without changing the service or wire contract.
+
+## Decision
+
+- The WinUI shell stores its own preference snapshot at `%LOCALAPPDATA%\\BalanciFy\\ui-preferences.json`. The file contains only bonding/duplication/metered-link booleans and at most 128 custom flow rules; it never stores keys, relay identities, or credentials.
+- The JSON document is schema-versioned, validated on load and save, and limited to 256 KiB. Writes use a uniquely named same-directory temporary created with `CreateNew`, flush data to disk, then replace the destination. The local file is explicitly user-scoped, not shared machine configuration.
+- After the shell connects, it applies its saved policy and upserts its saved custom rules through IPC. It retries restoration after a detected disconnect/service restart. It does not remove unrelated custom rules held by the service; if a saved ID is already occupied by a different service rule, it allocates and durably saves a free custom ID before restoring, avoiding an overwrite.
+- The shell offers a confirmation-gated reset that deletes only the local preference snapshot; it does not mutate current service policy or custom rules. It explains that service state remains active until restart and the shell will no longer restore the deleted snapshot.
+- If the service accepts an update but the local write fails, the UI reports that the service change succeeded but persistence did not. The UI does not claim the service itself has durable policy.
+- Service policy remains volatile for CLI, other IPC clients, and periods before this user's shell reconnects. A future service-owned persistent configuration would require a separate design for machine-wide versus per-user ownership and the service's security/ACL model.
+
+## Consequences (historical)
+
+At the time, the shell preserved an interactive user's preferences across service and application restarts without changing IPC v1. The service started with defaults until a shell carrying saved preferences connected, and multiple Windows users could apply different local preference sets to the same machine-wide service. This behavior is superseded: the service now owns durable machine policy, and the old file is available only for explicit one-time migration. Windows compilation, application runtime, named-pipe behavior, ACL enforcement, and multi-user behavior still require native Windows validation; source-level tests do not establish those runtime properties.

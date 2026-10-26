@@ -44,17 +44,52 @@ static int BalancifyIsValidTransport(
     }
 }
 
+static int BalancifyIsValidIpv4Options(
+    const unsigned char *packet,
+    size_t headerLength) {
+    size_t offset = 20u;
+    while (offset < headerLength) {
+        unsigned int optionType = (unsigned int)packet[offset];
+        size_t optionLength;
+        if (optionType == 0u) {
+            size_t padding;
+            for (padding = offset + 1u; padding < headerLength; padding++) {
+                if (packet[padding] != 0u) return 0;
+            }
+            return 1;
+        }
+        if (optionType == 1u) {
+            offset++;
+            continue;
+        }
+        if (headerLength - offset < 2u) return 0;
+        optionLength = (size_t)packet[offset + 1u];
+        if (optionLength < 2u || optionLength > headerLength - offset) return 0;
+        offset += optionLength;
+    }
+    return 1;
+}
+
 static int BalancifyIsValidIpv4Packet(
     const unsigned char *packet,
     size_t packetLength) {
     size_t headerLength = (size_t)(packet[0] & 0x0Fu) * 4u;
     size_t totalLength = (size_t)BalancifyReadNetworkU16(packet + 2u);
     unsigned int fragment = BalancifyReadNetworkU16(packet + 6u);
+    size_t fragmentPayloadLength;
     int fragmented = (fragment & 0x3FFFu) != 0u;
 
     if (headerLength < 20u || headerLength > packetLength ||
         totalLength < headerLength || totalLength != packetLength ||
-        (fragment & 0x8000u) != 0u) {
+        (fragment & 0x8000u) != 0u ||
+        !BalancifyIsValidIpv4Options(packet, headerLength)) {
+        return 0;
+    }
+    fragmentPayloadLength = totalLength - headerLength;
+    if (fragmented && (
+            (fragment & 0x4000u) != 0u ||
+            fragmentPayloadLength == 0u ||
+            ((fragment & 0x2000u) != 0u && (fragmentPayloadLength % 8u) != 0u))) {
         return 0;
     }
     return BalancifyIsValidTransport(
@@ -68,6 +103,7 @@ static int BalancifyIsValidIpv6Packet(
     size_t offset = 40u;
     unsigned int nextHeader = (unsigned int)packet[6];
     unsigned int extensionCount = 0u;
+    int fragmentHeaderSeen = 0;
 
     if (totalLength != packetLength) return 0;
     while (BalancifyIsIpv6Extension(nextHeader)) {
@@ -80,10 +116,18 @@ static int BalancifyIsValidIpv6Packet(
         }
         if (nextHeader == 44u) {
             unsigned int fragmentField;
-            if (totalLength - offset < 8u) return 0;
+            if (fragmentHeaderSeen || totalLength - offset < 8u) return 0;
+            fragmentHeaderSeen = 1;
             followingHeader = (unsigned int)packet[offset];
+            if (packet[offset + 1u] != 0u) return 0;
             fragmentField = BalancifyReadNetworkU16(packet + offset + 2u);
+            if ((fragmentField & 0x0006u) != 0u) return 0;
             if ((fragmentField & 0xFFF9u) != 0u) {
+                size_t fragmentPayloadLength = totalLength - offset - 8u;
+                if (fragmentPayloadLength == 0u ||
+                    ((fragmentField & 0x0001u) != 0u && (fragmentPayloadLength % 8u) != 0u)) {
+                    return 0;
+                }
                 // Non-atomic fragments do not need a transport header here.
                 // The service's bounded parser applies the same rule.
                 return 1;

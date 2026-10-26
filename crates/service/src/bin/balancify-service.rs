@@ -2,23 +2,25 @@
 //! Blueprint Sec.4.2, Sec.11.1 Phase 4 MVP.
 //!
 //! This binary demonstrates the sans-I/O service core wired to real UDP sockets
-//! (one per uplink), with secure handshake, pacing, congestion control, rekey,
+//! (one per uplink), with secure handshake, pacing, congestion control, key-update diagnostics,
 //! and dual-relay failover. It also serves IPC v1 request/response and
-//! subscribed event frames on a loopback-only TCP adapter for the lab; production uses an ACL-protected
-//! Windows named pipe. In production, packets come from the NDIS miniport.
+//! subscribed event frames over loopback TCP on non-Windows lab hosts or an
+//! ACL-protected Windows named pipe. In production, packets come from the NDIS miniport.
 
 use balancify_core::UplinkId;
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
-use balancify_service::driver_device::DriverDevice;
-use balancify_service::ipc::server::IpcServer;
+use balancify_service::driver_device::{should_retry_driver_tx, DriverDevice};
+use balancify_service::ipc::server::{IpcServer, IpcStream};
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
+use balancify_service::machine_policy::MachinePolicyStore;
 use balancify_service::{Service, ServiceConfig, Action};
-use std::collections::BTreeMap;
 use std::net::{UdpSocket, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const RELAY_FAILOVER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectionMode {
@@ -49,19 +51,39 @@ fn select_connection_mode(
     Ok(ConnectionMode::InsecureLab)
 }
 
+fn parse_remote_relay_address(value: &str, label: &str) -> std::io::Result<SocketAddr> {
+    let address = value.parse::<SocketAddr>().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid {label} relay address"),
+        )
+    })?;
+    if address.port() == 0 || address.ip().is_unspecified() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} relay address must use a nonzero port and specified IP"),
+        ));
+    }
+    Ok(address)
+}
+
 fn parse_relay_addresses(
     primary: Option<&str>,
     secondary: Option<&str>,
 ) -> std::io::Result<(SocketAddr, Option<SocketAddr>)> {
     let primary = primary
-        .map(|value| value.parse::<SocketAddr>())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid primary relay address"))?
+        .map(|value| parse_remote_relay_address(value, "primary"))
+        .transpose()?
         .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
     let secondary = secondary
-        .map(|value| value.parse::<SocketAddr>())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid secondary relay address"))?;
+        .map(|value| parse_remote_relay_address(value, "secondary"))
+        .transpose()?;
+    if secondary == Some(primary) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "primary and secondary relay addresses must differ",
+        ));
+    }
     Ok((primary, secondary))
 }
 
@@ -77,6 +99,17 @@ fn parse_relay_public_key(encoded: &str) -> std::io::Result<[u8; 32]> {
         ));
     }
     Ok(public)
+}
+
+fn configured_relay_public_key(name: &str) -> std::io::Result<Option<[u8; 32]>> {
+    match std::env::var(name) {
+        Ok(encoded) => parse_relay_public_key(&encoded).map(Some),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must contain a hexadecimal relay identity"),
+        )),
+    }
 }
 
 fn resolve_relay_public(
@@ -102,6 +135,38 @@ fn resolve_relay_public(
             None => Ok(None),
         },
     }
+}
+
+fn relay_identity_for_address(
+    address: SocketAddr,
+    primary: SocketAddr,
+    primary_identity: Option<[u8; 32]>,
+    secondary: Option<SocketAddr>,
+    secondary_identity: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    if address == primary {
+        primary_identity
+    } else if secondary == Some(address) {
+        secondary_identity
+    } else {
+        None
+    }
+}
+
+fn initiate_and_send_handshake(
+    service: &mut Service<TunnelCipher>,
+    relay_identity: [u8; 32],
+    socket: &UdpSocket,
+    relay_address: SocketAddr,
+    now: Instant,
+) -> std::io::Result<()> {
+    let msg1 = service.initiate_handshake(relay_identity, b"balancify handshake v1")
+        .map_err(|error| std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("handshake initialization failed: {error:?}"),
+        ))?;
+    service.note_relay_attempt(now);
+    send_datagram(socket, &msg1, relay_address)
 }
 
 fn is_expected_relay_source(source: SocketAddr, expected_relay: SocketAddr) -> bool {
@@ -179,6 +244,23 @@ fn send_datagram(sock: &UdpSocket, bytes: &[u8], destination: SocketAddr) -> std
     Ok(())
 }
 
+fn send_scheduled_actions(
+    actions: Vec<Action>,
+    service: &Service<TunnelCipher>,
+    sock0: &UdpSocket,
+    sock1: &UdpSocket,
+    relay_primary: SocketAddr,
+) -> std::io::Result<()> {
+    for action in actions {
+        if let Action::Send { uplink, bytes } = action {
+            let socket = if uplink.0 == 0 { sock0 } else { sock1 };
+            let relay = service.relay_current().unwrap_or(relay_primary);
+            send_datagram(socket, &bytes, relay)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_lab_target(mode: ConnectionMode, primary: SocketAddr, secondary: Option<SocketAddr>) -> std::io::Result<()> {
     if mode == ConnectionMode::InsecureLab
         && (!primary.ip().is_loopback() || secondary.is_some_and(|addr| !addr.ip().is_loopback()))
@@ -248,6 +330,7 @@ fn main() -> std::io::Result<()> {
             "--help" | "-h" => {
                 println!("Usage: balancify-service [--insecure-lab] [--simulate-app-traffic] [--driver-device] [PRIMARY_RELAY_ADDR] [SECONDARY_RELAY_ADDR]");
                 println!("Without a relay identity, the service fails closed. Insecure lab mode is debug-only and loopback-only.");
+                println!("For a secondary relay with a distinct identity, set BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY; otherwise it uses the primary identity.");
                 println!("Synthetic app traffic is opt-in and restricted to --insecure-lab mode.");
                 println!("--driver-device opens the Windows control device, injects received tunnel packets, and polls outbound raw-IP packets; it requires the driver and appropriate access.");
                 return Ok(());
@@ -263,22 +346,41 @@ fn main() -> std::io::Result<()> {
         positional.first().map(String::as_str),
         positional.get(1).map(String::as_str),
     )?;
+    let configured_relay = configured_relay_public_key("BALANCIFY_RELAY_PUBLIC_KEY")?;
+    let configured_secondary_relay = configured_relay_public_key("BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY")?;
+    if relay_secondary.is_none() && configured_secondary_relay.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY requires a secondary relay address",
+        ));
+    }
 
     let state_dir = default_state_dir()?;
     let secret_path = state_dir.join("client_secret.key");
     let pinned_path = state_dir.join("pinned_relays.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
     let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
-    let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
-        Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
-    };
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
+    // By default both endpoints may share a relay identity (for a replicated
+    // cluster). Set the secondary key explicitly when it has a distinct pin.
+    let secondary_relay_public = if relay_secondary.is_some() {
+        match configured_secondary_relay {
+            Some(public) => resolve_relay_public(Some(public), &pinned_relays)?,
+            None => relay_public,
+        }
+    } else {
+        None
+    };
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
+    if mode != ConnectionMode::Secure && configured_secondary_relay.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a secondary relay identity requires secure mode with a primary relay identity",
+        ));
+    }
     validate_lab_target(mode, relay_primary, relay_secondary)?;
     validate_simulated_traffic(mode, simulate_app_traffic_requested)?;
+    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
     let driver_device = if driver_device_requested {
         Some(DriverDevice::open()?)
     } else {
@@ -306,16 +408,25 @@ fn main() -> std::io::Result<()> {
         probe_timeout: Duration::from_secs(5),
         auto_accept: false,
     };
+    let policy_store = MachinePolicyStore::open(state_dir.join("machine-policy"))?;
     let dummy_key = [0u8; 32];
     let dummy_salt = [0u8; 3];
     let dummy_cipher = TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
-    let mut svc = Service::new(cfg, dummy_cipher.clone(), dummy_cipher);
+    let (mut svc, recovered_policy) = Service::new_with_machine_policy_store(
+        cfg,
+        dummy_cipher.clone(),
+        dummy_cipher,
+        policy_store,
+    )?;
+    if recovered_policy {
+        eprintln!("WARNING: machine policy was recovered from its last valid backup");
+    }
     svc.set_static_keypair(keypair);
     if !pinned_relays.is_empty() {
         svc.set_pinned_relays(pinned_relays);
     }
     svc.set_relays(relay_primary, relay_secondary);
-    svc.set_relay_failover_timeout(Duration::from_secs(10));
+    svc.set_relay_failover_timeout(RELAY_FAILOVER_TIMEOUT);
 
     // Simulate two uplinks with bound sockets
     let sock0 = UdpSocket::bind("0.0.0.0:0")?;
@@ -337,18 +448,15 @@ fn main() -> std::io::Result<()> {
     svc.publish(now);
 
     let (ipc_calls, ipc_addr) = start_ipc_listener()?;
-    println!("  IPC v1 loopback listener: {}", ipc_addr);
+    println!("  IPC v1 listener: {}", ipc_addr);
 
     // Handshake
+    let handshake_started_at = Instant::now();
     match mode {
         ConnectionMode::Secure => {
             let relay_identity = relay_public.expect("secure mode requires a relay identity");
             println!("  initiating authenticated handshake to primary...");
-            let prologue = b"balancify handshake v1";
-            let msg1 = svc.initiate_handshake(relay_identity, prologue)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("handshake initialization failed: {error:?}")))?;
-            send_datagram(&sock0, &msg1, relay_primary)?;
-            println!("  sent msg1 {} bytes", msg1.len());
+            initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_primary, handshake_started_at)?;
         }
         ConnectionMode::InsecureLab => {
             eprintln!("  WARNING: explicitly enabled INSECURE lab mode; loopback only, zero-key test cipher");
@@ -356,12 +464,18 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    let mut handshake_pending = mode == ConnectionMode::Secure;
+    let mut last_handshake_attempt = (mode == ConnectionMode::Secure).then_some(handshake_started_at);
     let mut dg = [0u8; 65535];
     let mut flow_counter = 0u64;
     let started_at = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
     let mut last_driver_poll = Instant::now();
+    // DEQUEUE_TX removes a packet from the kernel queue. Retain it here when
+    // the service reports Hold/Refused so temporary congestion or link loss
+    // cannot turn a successful miniport send completion into a silent drop.
+    let mut pending_driver_tx: Option<Vec<u8>> = None;
 
     loop {
         let now = Instant::now();
@@ -382,8 +496,30 @@ fn main() -> std::io::Result<()> {
 
         // Tick every 100ms
         if now.duration_since(last_tick) >= Duration::from_millis(100) {
+            let relay_before_tick = svc.relay_current();
             let actions = svc.tick(now);
+            let relay_after_tick = svc.relay_current();
+            if mode == ConnectionMode::Secure && relay_after_tick != relay_before_tick {
+                if let Some(relay_address) = relay_after_tick {
+                    let relay_identity = relay_identity_for_address(
+                        relay_address,
+                        relay_primary,
+                        relay_public,
+                        relay_secondary,
+                        secondary_relay_public,
+                    ).ok_or_else(|| std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "failed over to a relay without a configured identity",
+                    ))?;
+                    initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_address, now)?;
+                    handshake_pending = true;
+                    last_handshake_attempt = Some(now);
+                }
+            }
             for act in actions {
+                if mode == ConnectionMode::Secure && handshake_pending {
+                    continue;
+                }
                 if let Action::Send { uplink, bytes } = act {
                     let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
                     let relay = svc.relay_current().unwrap_or(relay_primary);
@@ -410,12 +546,25 @@ fn main() -> std::io::Result<()> {
                         eprintln!("ignoring datagram from an unexpected relay endpoint");
                         continue;
                     }
+                    if mode == ConnectionMode::Secure
+                        && handshake_pending
+                        && !(n >= 2 && dg[0] == 0xFF && dg[1] == 0x02)
+                    {
+                        continue;
+                    }
                     // Record local endpoint for NAT rebinding detection
                     if let Ok(local) = sock.local_addr() {
                         svc.note_local_endpoint(uplink_id, local, now);
                     }
                     match svc.handle_path_datagram(uplink_id, &dg[..n], now) {
                         Ok(actions) => {
+                            if mode == ConnectionMode::Secure
+                                && n >= 2
+                                && dg[0] == 0xFF
+                                && dg[1] == 0x02
+                            {
+                                handshake_pending = false;
+                            }
                             for act in actions {
                                 match act {
                                     Action::Deliver { data } => {
@@ -437,13 +586,9 @@ fn main() -> std::io::Result<()> {
                         }
                         Err(e) => {
                             eprintln!("Handshake error from {}: {:?}", from, e);
-                            // On handshake failure, try secondary if available
-                            if let Some(sec) = relay_secondary {
-                                if svc.relay_current() == Some(relay_primary) {
-                                    println!("Trying secondary relay {}", sec);
-                                    svc.set_relays(sec, Some(relay_primary));
-                                }
-                            }
+                            // If a handshake was pending, keep it pending for the bounded
+                            // fresh-flight retry. An unsolicited/duplicate response must
+                            // not suspend an already-established secure session.
                         }
                     }
                 }
@@ -452,31 +597,65 @@ fn main() -> std::io::Result<()> {
             }
         }
 
+        // Retry only after the full failure-detection interval. This gives a
+        // delayed response time to match its single-use Noise initiator; a
+        // secondary switch sends a fresh flight immediately from the tick above.
+        if handshake_pending
+            && last_handshake_attempt.is_some_and(|last| now.duration_since(last) >= RELAY_FAILOVER_TIMEOUT)
+        {
+            let relay_address = svc.relay_current().unwrap_or(relay_primary);
+            let relay_identity = relay_identity_for_address(
+                relay_address,
+                relay_primary,
+                relay_public,
+                relay_secondary,
+                secondary_relay_public,
+            ).ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "current relay has no configured identity",
+            ))?;
+            initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_address, now)?;
+            last_handshake_attempt = Some(now);
+        }
+
         // Poll a bounded batch from the miniport's driver-owned TX queue only
         // after a receiver session exists (authenticated handshake or explicit
         // insecure lab session). This keeps packets queued before handshake and
         // prevents use of the placeholder cipher. Each record is validated by
         // DriverDevice and revalidated by Service before tunnel scheduling.
+        // Keep the first packet whose service action is Hold/Refused and retry
+        // it before dequeuing more, preserving FIFO and bounding extra memory to
+        // one packet while the kernel queue supplies backpressure.
         if let Some(device) = &driver_device {
             if svc.sessions() > 0
+                && !handshake_pending
                 && now.duration_since(last_driver_poll) >= Duration::from_millis(10)
             {
                 last_driver_poll = now;
-                for _ in 0..64 {
-                    let Some(packet) = device.dequeue_tx()? else { break };
+                let mut budget = 64;
+                if let Some(packet) = pending_driver_tx.take() {
+                    budget -= 1;
                     let actions = svc.send_ip_packet(&packet, now).map_err(|error| {
                         std::io::Error::new(std::io::ErrorKind::InvalidData, error)
                     })?;
-                    for act in actions {
-                        match act {
-                            Action::Send { uplink, bytes } => {
-                                let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
-                                let relay = svc.relay_current().unwrap_or(relay_primary);
-                                send_datagram(sock, &bytes, relay)?;
-                            }
-                            Action::Refused { .. } => {}
-                            _ => {}
+                    if should_retry_driver_tx(&actions) {
+                        pending_driver_tx = Some(packet);
+                    } else {
+                        send_scheduled_actions(actions, &svc, &sock0, &sock1, relay_primary)?;
+                    }
+                }
+
+                if pending_driver_tx.is_none() {
+                    for _ in 0..budget {
+                        let Some(packet) = device.dequeue_tx()? else { break };
+                        let actions = svc.send_ip_packet(&packet, now).map_err(|error| {
+                            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                        })?;
+                        if should_retry_driver_tx(&actions) {
+                            pending_driver_tx = Some(packet);
+                            break;
                         }
+                        send_scheduled_actions(actions, &svc, &sock0, &sock1, relay_primary)?;
                     }
                 }
             }
@@ -544,10 +723,55 @@ fn reserve_ipc_client_slot(active: &AtomicUsize) -> bool {
     }
 }
 
-/// Start the lab TCP adapter on loopback. The actual product transport is an
-/// ACL-protected Windows named pipe; keeping this adapter local-only prevents
-/// accidental exposure of control operations to the LAN.
-fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
+fn spawn_ipc_client<S>(
+    stream: S,
+    requests_tx: Sender<IpcCall>,
+    active_clients: Arc<AtomicUsize>,
+) where
+    S: IpcStream + Send + 'static,
+{
+    if !reserve_ipc_client_slot(&active_clients) {
+        eprintln!("IPC client limit reached ({MAX_IPC_CLIENTS}); rejecting local connection");
+        return;
+    }
+    let slot = ActiveIpcClient(active_clients);
+    let requests = requests_tx.clone();
+    let event_requests = requests_tx;
+    let _ = std::thread::Builder::new()
+        .name("balancify-ipc-client".to_string())
+        .spawn(move || {
+            let _slot = slot;
+            let _ = balancify_service::ipc::server::handle_stream_with_events(
+                stream,
+                move |request| {
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if requests.send(IpcCall::Request(request, reply_tx)).is_err() {
+                        return Response::Error {
+                            status: Status::Unavailable,
+                            message: "service IPC dispatcher stopped".to_string(),
+                        };
+                    }
+                    reply_rx.recv().unwrap_or_else(|_| Response::Error {
+                        status: Status::Unavailable,
+                        message: "service did not return an IPC response".to_string(),
+                    })
+                },
+                move || {
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if event_requests.send(IpcCall::PollEvents(reply_tx)).is_err() {
+                        return Vec::new();
+                    }
+                    reply_rx.recv().unwrap_or_default()
+                },
+            );
+        });
+}
+
+fn start_loopback_tcp_listener(
+    request_tx: Sender<IpcCall>,
+    request_rx: Receiver<IpcCall>,
+    active_clients: Arc<AtomicUsize>,
+) -> std::io::Result<(Receiver<IpcCall>, String)> {
     let port_value = match std::env::var("BALANCIFY_IPC_PORT") {
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => "5000".to_string(),
@@ -566,56 +790,83 @@ fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, SocketAddr)> {
     })?;
     let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
     let server = IpcServer::bind_loopback_at(bind_addr)?;
-    let local_addr = server.addr();
-    let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
-    let active_clients = Arc::new(AtomicUsize::new(0));
-
+    let local_addr = server.addr().to_string();
     std::thread::Builder::new()
         .name("balancify-ipc-accept".to_string())
         .spawn(move || loop {
             if let Some(stream) = server.accept() {
-                if !reserve_ipc_client_slot(&active_clients) {
-                    eprintln!("IPC client limit reached ({MAX_IPC_CLIENTS}); rejecting local connection");
-                    drop(stream);
-                    continue;
-                }
-                let slot = ActiveIpcClient(Arc::clone(&active_clients));
-                let requests = request_tx.clone();
-                let event_requests = request_tx.clone();
-                let _ = std::thread::Builder::new()
-                    .name("balancify-ipc-client".to_string())
-                    .spawn(move || {
-                        let _slot = slot;
-                        let _ = balancify_service::ipc::server::handle_stream_with_events(
-                            stream,
-                            move |request| {
-                                let (reply_tx, reply_rx) = mpsc::channel();
-                                if requests.send(IpcCall::Request(request, reply_tx)).is_err() {
-                                    return Response::Error {
-                                        status: Status::Unavailable,
-                                        message: "service IPC dispatcher stopped".to_string(),
-                                    };
-                                }
-                                reply_rx.recv().unwrap_or_else(|_| Response::Error {
-                                    status: Status::Unavailable,
-                                    message: "service did not return an IPC response".to_string(),
-                                })
-                            },
-                            move || {
-                                let (reply_tx, reply_rx) = mpsc::channel();
-                                if event_requests.send(IpcCall::PollEvents(reply_tx)).is_err() {
-                                    return Vec::new();
-                                }
-                                reply_rx.recv().unwrap_or_default()
-                            },
-                        );
-                    });
+                spawn_ipc_client(
+                    stream,
+                    request_tx.clone(),
+                    Arc::clone(&active_clients),
+                );
             } else {
                 std::thread::sleep(Duration::from_millis(10));
             }
         })?;
-
     Ok((request_rx, local_addr))
+}
+
+/// Windows defaults to ACL-protected named-pipe IPC. The explicit debug-only
+/// override keeps the loopback CLI usable during native Windows development;
+/// non-Windows lab hosts retain loopback TCP.
+fn start_ipc_listener() -> std::io::Result<(Receiver<IpcCall>, String)> {
+    let (request_tx, request_rx) = mpsc::channel::<IpcCall>();
+    let active_clients = Arc::new(AtomicUsize::new(0));
+
+    #[cfg(windows)]
+    {
+        match std::env::var("BALANCIFY_IPC_TRANSPORT") {
+            Ok(value) if value == "loopback-tcp" && cfg!(debug_assertions) => {
+                return start_loopback_tcp_listener(request_tx, request_rx, active_clients);
+            }
+            Ok(value) if value == "loopback-tcp" => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "loopback TCP IPC override is available only in debug builds",
+                ));
+            }
+            Ok(value) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unsupported BALANCIFY_IPC_TRANSPORT value: {value}"),
+                ));
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "BALANCIFY_IPC_TRANSPORT must be valid UTF-8",
+                ));
+            }
+        }
+
+        let mut server = balancify_service::ipc::server::NamedPipeServer::bind(
+            balancify_service::ipc::server::WINDOWS_SERVICE_PIPE_NAME,
+        )?;
+        std::thread::Builder::new()
+            .name("balancify-ipc-accept".to_string())
+            .spawn(move || loop {
+                match server.accept() {
+                    Ok(stream) => spawn_ipc_client(
+                        stream,
+                        request_tx.clone(),
+                        Arc::clone(&active_clients),
+                    ),
+                    Err(error) => {
+                        eprintln!("IPC named-pipe accept failed: {error}");
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            })?;
+        Ok((
+            request_rx,
+            balancify_service::ipc::server::WINDOWS_SERVICE_PIPE_NAME.to_string(),
+        ))
+    }
+
+    #[cfg(not(windows))]
+    start_loopback_tcp_listener(request_tx, request_rx, active_clients)
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
@@ -685,6 +936,29 @@ mod ipc_capacity_tests {
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::InvalidInput
+        );
+        assert!(parse_relay_addresses(Some("127.0.0.1:0"), None).is_err());
+        assert!(parse_relay_addresses(Some("0.0.0.0:4430"), None).is_err());
+        assert!(parse_relay_addresses(None, Some("[::]:4431")).is_err());
+        assert!(parse_relay_addresses(Some("127.0.0.1:4430"), Some("127.0.0.1:4430")).is_err());
+    }
+
+    #[test]
+    fn failover_uses_the_identity_configured_for_the_selected_endpoint() {
+        let primary: SocketAddr = "192.0.2.1:4430".parse().unwrap();
+        let secondary: SocketAddr = "192.0.2.2:4430".parse().unwrap();
+        let unknown: SocketAddr = "192.0.2.3:4430".parse().unwrap();
+        assert_eq!(
+            relay_identity_for_address(primary, primary, Some([1; 32]), Some(secondary), Some([2; 32])),
+            Some([1; 32]),
+        );
+        assert_eq!(
+            relay_identity_for_address(secondary, primary, Some([1; 32]), Some(secondary), Some([2; 32])),
+            Some([2; 32]),
+        );
+        assert_eq!(
+            relay_identity_for_address(unknown, primary, Some([1; 32]), Some(secondary), Some([2; 32])),
+            None,
         );
     }
 

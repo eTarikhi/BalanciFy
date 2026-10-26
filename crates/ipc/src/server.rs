@@ -1,8 +1,10 @@
 //! Stream transport adapter for the IPC v1 contract.
 //!
-//! Production uses an ACL-protected named pipe with caller identity checks
-//! (Sec.9.2). This loopback TCP adapter is for the lab and CI; it carries the
-//! exact same binary framing and message encoding as the named-pipe adapter.
+//! Windows uses an ACL-protected named pipe; the loopback TCP adapter is for
+//! non-Windows lab and CI. Both transports carry the same binary framing and
+//! message encoding. Windows pipe clients must be in an interactive session;
+//! machine-wide policy mutations additionally require an elevated local
+//! administrator token. Finer-grained per-user roles are not implemented.
 
 use crate::{
     decode_frame, encode_frame, frame_event, Event, FrameError, FrameKind, Request, Response, Status,
@@ -12,8 +14,26 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-/// Lab-only loopback server. The production Windows adapter must enforce the
-/// service's named-pipe ACL and authenticate the connecting Windows identity.
+/// Stream abstraction shared by the loopback CI transport and Windows named pipe.
+pub trait IpcStream: Read + Write {
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()>;
+
+    /// Whether the transport authenticated an elevated local administrator.
+    /// Non-Windows TCP is a lab-only adapter; Windows loopback is never trusted.
+    fn is_machine_admin(&self) -> bool;
+}
+
+impl IpcStream for TcpStream {
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+
+    fn is_machine_admin(&self) -> bool {
+        !cfg!(windows)
+    }
+}
+
+/// Lab-only loopback TCP server. Windows service builds use `NamedPipeServer`.
 pub struct IpcServer {
     listener: TcpListener,
     addr: std::net::SocketAddr,
@@ -50,10 +70,442 @@ impl IpcServer {
     }
 }
 
+/// ACL-protected, local-only Windows byte-mode named-pipe transport.
+#[cfg(windows)]
+pub struct NamedPipeServer {
+    name: Vec<u16>,
+    pending_instance: Option<NamedPipeStream>,
+}
+
+#[cfg(windows)]
+pub const WINDOWS_SERVICE_PIPE_NAME: &str = r"\\.\pipe\BalanciFy.Service.v1";
+
+#[cfg(windows)]
+fn validate_pipe_name(name: &str) -> io::Result<Vec<u16>> {
+    if !name.starts_with(r"\\.\pipe\") || name[9..].is_empty() || name.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "named pipe path must use the canonical Windows named-pipe prefix",
+        ));
+    }
+    Ok(name.encode_utf16().chain(std::iter::once(0)).collect())
+}
+
+#[cfg(windows)]
+impl NamedPipeServer {
+    /// Bind `\\.\pipe\<name>` with an explicit DACL for SYSTEM, Administrators,
+    /// and interactive users; no network or anonymous principals are granted access.
+    pub fn bind(name: &str) -> io::Result<Self> {
+        let name = validate_pipe_name(name)?;
+        // Create the first instance synchronously so ACL/name errors fail service
+        // startup instead of leaving a background accept loop permanently broken.
+        let pending_instance = Some(create_named_pipe_instance(&name, true)?);
+        Ok(Self { name, pending_instance })
+    }
+
+    /// Wait for one client and return a nonblocking byte-stream handle.
+    pub fn accept(&mut self) -> io::Result<NamedPipeStream> {
+        use std::ptr;
+
+        let pipe = match self.pending_instance.take() {
+            Some(pipe) => pipe,
+            None => create_named_pipe_instance(&self.name, false)?,
+        };
+        let handle = pipe.handle;
+        if unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } == 0 {
+            let error = last_os_error();
+            if error.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+                return Err(error);
+            }
+        }
+
+        // Nonblocking reads let the shared stream loop deliver subscribed
+        // events and enforce idle-client limits without a second pipe thread.
+        let mut mode = PIPE_NOWAIT;
+        if unsafe { SetNamedPipeHandleState(handle, &mut mode, ptr::null_mut(), ptr::null_mut()) } == 0 {
+            return Err(last_os_error());
+        }
+        Ok(pipe)
+    }
+}
+
+#[cfg(windows)]
+fn validate_client_session(handle: *mut std::ffi::c_void) -> io::Result<bool> {
+    let mut session_id = 0u32;
+    if unsafe { GetNamedPipeClientSessionId(handle, &mut session_id) } == 0 {
+        return Err(last_os_error());
+    }
+    if session_id == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "named-pipe IPC is restricted to interactive user sessions",
+        ));
+    }
+    if unsafe { ImpersonateNamedPipeClient(handle) } == 0 {
+        return Err(last_os_error());
+    }
+
+    // Verify the connected token itself is an interactive-user token in
+    // addition to relying on the pipe DACL and nonzero Terminal Services ID.
+    let membership = (|| {
+        const WIN_INTERACTIVE_SID: u32 = 11;
+        let mut sid_buffer = [0usize; 9];
+        let mut sid_size = std::mem::size_of_val(&sid_buffer) as u32;
+        if unsafe {
+            CreateWellKnownSid(
+                WIN_INTERACTIVE_SID,
+                std::ptr::null_mut(),
+                sid_buffer.as_mut_ptr().cast(),
+                &mut sid_size,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        let mut is_member = 0i32;
+        if unsafe {
+            CheckTokenMembership(
+                std::ptr::null_mut(),
+                sid_buffer.as_mut_ptr().cast(),
+                &mut is_member,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        if is_member == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "named-pipe IPC requires an Interactive Users token",
+            ));
+        }
+
+        // Policy writes are machine-wide. Require an elevated token whose
+        // Administrators membership is enabled, not merely a filtered UAC token.
+        const WIN_BUILTIN_ADMINISTRATORS_SID: u32 = 26;
+        let mut admin_sid_buffer = [0usize; 9];
+        let mut admin_sid_size = std::mem::size_of_val(&admin_sid_buffer) as u32;
+        if unsafe {
+            CreateWellKnownSid(
+                WIN_BUILTIN_ADMINISTRATORS_SID,
+                std::ptr::null_mut(),
+                admin_sid_buffer.as_mut_ptr().cast(),
+                &mut admin_sid_size,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        let mut is_admin = 0i32;
+        if unsafe {
+            CheckTokenMembership(
+                std::ptr::null_mut(),
+                admin_sid_buffer.as_mut_ptr().cast(),
+                &mut is_admin,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        Ok(is_admin != 0)
+    })();
+
+    if unsafe { RevertToSelf() } == 0 {
+        return Err(last_os_error());
+    }
+    membership
+}
+
+#[cfg(windows)]
+fn create_named_pipe_instance(name: &[u16], first_instance: bool) -> io::Result<NamedPipeStream> {
+    use std::ffi::c_void;
+    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+    const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
+    const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
+    const PIPE_WAIT: u32 = 0x0000_0000;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
+    const PIPE_UNLIMITED_INSTANCES: u32 = 255;
+    const MAX_PIPE_BUFFER: u32 = 65_536;
+    const SDDL_REVISION_1: u32 = 1;
+
+    let sddl: Vec<u16> = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
+        .encode_utf16().chain(std::iter::once(0)).collect();
+    let mut descriptor: *mut c_void = std::ptr::null_mut();
+    let mut descriptor_size = 0u32;
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, &mut descriptor_size,
+        )
+    } == 0 {
+        return Err(last_os_error());
+    }
+    let _descriptor = LocalSecurityDescriptor(descriptor);
+    let mut attributes = SecurityAttributes {
+        length: std::mem::size_of::<SecurityAttributes>() as u32,
+        security_descriptor: descriptor,
+        inherit_handle: 0,
+    };
+    let open_mode = PIPE_ACCESS_DUPLEX
+        | if first_instance { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
+    let handle = unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            open_mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            MAX_PIPE_BUFFER,
+            MAX_PIPE_BUFFER,
+            0,
+            &mut attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(last_os_error());
+    }
+    Ok(NamedPipeStream {
+        handle,
+        peer_auth_pending: true,
+        machine_admin: false,
+    })
+}
+
+#[cfg(windows)]
+pub struct NamedPipeStream {
+    handle: *mut std::ffi::c_void,
+    peer_auth_pending: bool,
+    machine_admin: bool,
+}
+
+#[cfg(windows)]
+impl NamedPipeStream {
+    /// Connect to a local named pipe using nonblocking byte-mode reads.
+    pub fn connect(name: &str) -> io::Result<Self> {
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const GENERIC_WRITE: u32 = 0x4000_0000;
+        const OPEN_EXISTING: u32 = 3;
+        const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+
+        let name = validate_pipe_name(name)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let handle = loop {
+            let handle = unsafe {
+                CreateFileW(
+                    name.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    std::ptr::null_mut(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle != INVALID_HANDLE_VALUE {
+                break handle;
+            }
+            let error = last_os_error();
+            if !matches!(
+                error.raw_os_error(),
+                Some(ERROR_FILE_NOT_FOUND | ERROR_PIPE_BUSY | ERROR_SEM_TIMEOUT)
+            ) || Instant::now() >= deadline
+            {
+                return Err(error);
+            }
+            unsafe { WaitNamedPipeW(name.as_ptr(), 100); }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stream = Self {
+            handle,
+            peer_auth_pending: false,
+            machine_admin: false,
+        };
+        let mut mode = PIPE_NOWAIT;
+        if unsafe { SetNamedPipeHandleState(handle, &mut mode, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
+            return Err(last_os_error());
+        }
+        Ok(stream)
+    }
+}
+
+#[cfg(windows)]
+unsafe impl Send for NamedPipeStream {}
+
+#[cfg(windows)]
+impl IpcStream for NamedPipeStream {
+    fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
+        // PIPE_NOWAIT supplies the polling behavior required by read_header.
+        Ok(())
+    }
+
+    fn is_machine_admin(&self) -> bool {
+        self.machine_admin
+    }
+}
+
+#[cfg(windows)]
+impl Read for NamedPipeStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() { return Ok(0); }
+        let length = buffer.len().min(u32::MAX as usize) as u32;
+        let mut read = 0u32;
+        if unsafe {
+            ReadFile(
+                self.handle,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut read,
+                std::ptr::null_mut(),
+            )
+        } != 0
+        {
+            if read > 0 && self.peer_auth_pending {
+                self.machine_admin = validate_client_session(self.handle)?;
+                self.peer_auth_pending = false;
+            }
+            return Ok(read as usize);
+        }
+        let error = last_os_error();
+        match error.raw_os_error().map(|code| code as u32) {
+            Some(ERROR_NO_DATA) | Some(ERROR_PIPE_LISTENING) => Err(io::ErrorKind::WouldBlock.into()),
+            Some(ERROR_BROKEN_PIPE) | Some(ERROR_PIPE_NOT_CONNECTED) => Ok(0),
+            _ => Err(error),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Write for NamedPipeStream {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.is_empty() { return Ok(0); }
+        let length = buffer.len().min(u32::MAX as usize) as u32;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut written = 0u32;
+            if unsafe {
+                WriteFile(
+                    self.handle,
+                    buffer.as_ptr().cast(),
+                    length,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
+            } != 0
+            {
+                return Ok(written as usize);
+            }
+            let error = last_os_error();
+            match error.raw_os_error().map(|code| code as u32) {
+                Some(ERROR_NO_DATA) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Some(ERROR_NO_DATA) => {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "named-pipe write timed out"));
+                }
+                Some(ERROR_BROKEN_PIPE) | Some(ERROR_PIPE_NOT_CONNECTED) => return Err(error),
+                _ => return Err(error),
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
+#[cfg(windows)]
+impl Drop for NamedPipeStream {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.handle); }
+    }
+}
+
+#[cfg(windows)]
+const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
+#[cfg(windows)]
+const PIPE_NOWAIT: u32 = 0x0000_0001;
+#[cfg(windows)]
+const ERROR_PIPE_CONNECTED: u32 = 535;
+#[cfg(windows)]
+const ERROR_PIPE_LISTENING: u32 = 536;
+#[cfg(windows)]
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+#[cfg(windows)]
+const ERROR_PIPE_BUSY: i32 = 231;
+#[cfg(windows)]
+const ERROR_SEM_TIMEOUT: i32 = 121;
+#[cfg(windows)]
+const ERROR_NO_DATA: u32 = 232;
+#[cfg(windows)]
+const ERROR_BROKEN_PIPE: u32 = 109;
+#[cfg(windows)]
+const ERROR_PIPE_NOT_CONNECTED: u32 = 233;
+
+#[cfg(windows)]
+#[repr(C)]
+struct SecurityAttributes {
+    length: u32,
+    security_descriptor: *mut std::ffi::c_void,
+    inherit_handle: i32,
+}
+
+#[cfg(windows)]
+struct LocalSecurityDescriptor(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl Drop for LocalSecurityDescriptor {
+    fn drop(&mut self) { unsafe { LocalFree(self.0); } }
+}
+
+#[cfg(windows)]
+fn last_os_error() -> io::Error {
+    io::Error::from_raw_os_error(unsafe { GetLastError() } as i32)
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateFileW(
+        name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *mut std::ffi::c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32;
+    fn CreateNamedPipeW(name: *const u16, open_mode: u32, pipe_mode: u32, max_instances: u32,
+        out_buffer_size: u32, in_buffer_size: u32, default_timeout: u32,
+        security_attributes: *mut SecurityAttributes) -> *mut std::ffi::c_void;
+    fn ConnectNamedPipe(pipe: *mut std::ffi::c_void, overlapped: *mut std::ffi::c_void) -> i32;
+    fn GetNamedPipeClientSessionId(pipe: *mut std::ffi::c_void, session_id: *mut u32) -> i32;
+    fn SetNamedPipeHandleState(pipe: *mut std::ffi::c_void, mode: *mut u32,
+        max_collection_count: *mut u32, collect_data_timeout: *mut u32) -> i32;
+    fn ReadFile(handle: *mut std::ffi::c_void, buffer: *mut std::ffi::c_void, bytes_to_read: u32,
+        bytes_read: *mut u32, overlapped: *mut std::ffi::c_void) -> i32;
+    fn WriteFile(handle: *mut std::ffi::c_void, buffer: *const std::ffi::c_void, bytes_to_write: u32,
+        bytes_written: *mut u32, overlapped: *mut std::ffi::c_void) -> i32;
+    fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    fn GetLastError() -> u32;
+    fn LocalFree(memory: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+}
+
+#[cfg(windows)]
+#[link(name = "advapi32")]
+extern "system" {
+    fn ImpersonateNamedPipeClient(pipe: *mut std::ffi::c_void) -> i32;
+    fn RevertToSelf() -> i32;
+    fn ConvertStringSecurityDescriptorToSecurityDescriptorW(string: *const u16, revision: u32,
+        descriptor: *mut *mut std::ffi::c_void, size: *mut u32) -> i32;
+    fn CreateWellKnownSid(sid_type: u32, domain_sid: *mut std::ffi::c_void,
+        sid: *mut std::ffi::c_void, sid_size: *mut u32) -> i32;
+    fn CheckTokenMembership(token: *mut std::ffi::c_void, sid: *mut std::ffi::c_void,
+        is_member: *mut i32) -> i32;
+}
+
 /// Serve request/response frames until the peer closes the stream. Framing is
 /// exact, so TCP fragmentation and pipelined requests are supported.
-pub fn handle_stream<F>(stream: TcpStream, handler: F) -> io::Result<()>
+pub fn handle_stream<S, F>(stream: S, handler: F) -> io::Result<()>
 where
+    S: IpcStream,
     F: FnMut(Request) -> Response,
 {
     handle_stream_inner(stream, handler, || Vec::new(), false)
@@ -62,26 +514,30 @@ where
 /// Serve IPC requests and push subscribed events while the client is idle.
 /// `poll_events` is called at the negotiated subscription rate; event frames
 /// are written on the same connection after the subscription Ack.
-pub fn handle_stream_with_events<F, E>(stream: TcpStream, handler: F, poll_events: E) -> io::Result<()>
+pub fn handle_stream_with_events<S, F, E>(stream: S, handler: F, poll_events: E) -> io::Result<()>
 where
+    S: IpcStream,
     F: FnMut(Request) -> Response,
     E: FnMut() -> Vec<Event>,
 {
     handle_stream_inner(stream, handler, poll_events, true)
 }
 
-fn handle_stream_inner<F, E>(
-    mut stream: TcpStream,
+fn handle_stream_inner<S, F, E>(
+    mut stream: S,
     mut handler: F,
     mut poll_events: E,
     events_enabled: bool,
 ) -> io::Result<()>
 where
+    S: IpcStream,
     F: FnMut(Request) -> Response,
     E: FnMut() -> Vec<Event>,
 {
     const EVENT_READ_POLL: Duration = Duration::from_millis(100);
     const UNSUBSCRIBED_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+    // TCP uses a short socket timeout for event polling; Windows pipes use
+    // PIPE_NOWAIT and are polled by read_header directly.
     if events_enabled {
         stream.set_read_timeout(Some(EVENT_READ_POLL))?;
     }
@@ -109,7 +565,7 @@ where
             return Err(frame_error(FrameError::TooLarge(len)));
         }
         frame.resize(FRAME_HEADER_LEN + len, 0);
-        stream.read_exact(&mut frame[FRAME_HEADER_LEN..])?;
+        read_exact_stream(&mut stream, &mut frame[FRAME_HEADER_LEN..])?;
 
         let (kind, payload, consumed) = decode_frame(&frame)
             .map_err(frame_error)?
@@ -124,6 +580,12 @@ where
             _ => None,
         };
         let response = match request {
+            Some(request) if request.requires_machine_admin() && !stream.is_machine_admin() => {
+                Response::Error {
+                    status: Status::PermissionDenied,
+                    message: "reopen BalanciFy with elevated local administrator privileges to change machine-wide policy".to_string(),
+                }
+            }
             Some(request) => handler(request),
             None => Response::Error {
                 status: Status::BadRequest,
@@ -147,8 +609,8 @@ where
     }
 }
 
-fn read_header<E>(
-    stream: &mut TcpStream,
+fn read_header<S, E>(
+    stream: &mut S,
     header: &mut [u8],
     events_enabled: bool,
     event_interval: Option<Duration>,
@@ -158,6 +620,7 @@ fn read_header<E>(
     poll_events: &mut E,
 ) -> io::Result<bool>
 where
+    S: IpcStream,
     E: FnMut() -> Vec<Event>,
 {
     let mut filled = 0;
@@ -167,10 +630,8 @@ where
             Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated IPC header")),
             Ok(count) => filled += count,
             Err(error)
-                if events_enabled
-                    && filled == 0
-                    && (error.kind() == io::ErrorKind::WouldBlock
-                        || error.kind() == io::ErrorKind::TimedOut) =>
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || (filled == 0 && error.kind() == io::ErrorKind::TimedOut) =>
             {
                 let now = Instant::now();
                 if idle_subscription_expired(last_activity, now, event_interval, idle_timeout) {
@@ -179,19 +640,45 @@ where
                         "IPC client idle without an event subscription",
                     ));
                 }
-                if let Some(interval) = event_interval {
-                    if now >= *next_event {
-                        for event in poll_events() {
-                            stream.write_all(&frame_event(&event))?;
+                if events_enabled {
+                    if let Some(interval) = event_interval {
+                        if now >= *next_event {
+                            for event in poll_events() {
+                                stream.write_all(&frame_event(&event))?;
+                            }
+                            *next_event = now + interval;
                         }
-                        *next_event = now + interval;
                     }
+                }
+                if error.kind() == io::ErrorKind::WouldBlock {
+                    std::thread::sleep(Duration::from_millis(5));
                 }
             }
             Err(error) => return Err(error),
         }
     }
     Ok(true)
+}
+
+fn read_exact_stream<S: IpcStream>(stream: &mut S, buffer: &mut [u8]) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match stream.read(&mut buffer[filled..]) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated IPC frame")),
+            Ok(count) => filled += count,
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "IPC frame read timed out"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn idle_subscription_expired(
@@ -228,6 +715,63 @@ mod tests {
 
     fn read_response(stream: &mut TcpStream) -> Response {
         Response::decode(&read_frame_payload(stream, FrameKind::Response)).unwrap()
+    }
+
+    struct NonAdminStream {
+        input: std::io::Cursor<Vec<u8>>,
+        output: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl Read for NonAdminStream {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.input.read(buffer)
+        }
+    }
+
+    impl Write for NonAdminStream {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.output.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl IpcStream for NonAdminStream {
+        fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn is_machine_admin(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn non_admin_cannot_mutate_machine_policy_over_ipc() {
+        let request_frame = crate::frame_request(&Request::SetBondMode { enabled: false });
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stream = NonAdminStream {
+            input: std::io::Cursor::new(request_frame),
+            output: std::sync::Arc::clone(&output),
+        };
+        let mut handler_called = false;
+        handle_stream(stream, |_| {
+            handler_called = true;
+            Response::Ack
+        }).unwrap();
+
+        assert!(!handler_called, "unauthorized mutation must not reach service policy code");
+        let output = output.lock().unwrap();
+        let response = Response::decode(
+            decode_frame(&output).unwrap().unwrap().1,
+        ).unwrap();
+        assert_eq!(response, Response::Error {
+            status: Status::PermissionDenied,
+            message: "reopen BalanciFy with elevated local administrator privileges to change machine-wide policy".to_string(),
+        });
     }
 
     #[test]

@@ -153,6 +153,22 @@ fn is_handshake_message2(datagram: &[u8]) -> bool {
     datagram.len() >= 2 && datagram[0] == 0xFF && datagram[1] == 0x02
 }
 
+fn parse_relay_address(value: Option<&str>) -> Result<SocketAddr, std::io::Error> {
+    let address = match value {
+        Some(value) => value.parse::<SocketAddr>().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid relay address")
+        })?,
+        None => "127.0.0.1:4430".parse().expect("valid loopback relay default"),
+    };
+    if address.port() == 0 || address.ip().is_unspecified() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "relay address must use a nonzero port and specified IP",
+        ));
+    }
+    Ok(address)
+}
+
 fn is_expected_relay_source(source: SocketAddr, relay_addr: SocketAddr) -> bool {
     source == relay_addr
 }
@@ -187,12 +203,7 @@ fn main() -> std::io::Result<()> {
     if positional.len() > 2 {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "expected at most RELAY_ADDR and PACKET_COUNT"));
     }
-    let relay_addr: SocketAddr = positional
-        .first()
-        .map(|s| s.parse())
-        .transpose()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid relay address"))?
-        .unwrap_or_else(|| "127.0.0.1:4430".parse().unwrap());
+    let relay_addr = parse_relay_address(positional.first().map(String::as_str))?;
     let count: usize = positional
         .get(1)
         .map(|s| s.parse())
@@ -200,27 +211,25 @@ fn main() -> std::io::Result<()> {
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet count must be a non-negative integer"))?
         .unwrap_or(10);
 
-    // Load or generate client static keypair
-    let state_dir = default_state_dir()?;
-    let secret_path = state_dir.join("client_secret.key");
-    let pinned_path = state_dir.join("pinned_relays.keys");
-    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let keypair = store.load_or_generate().map_err(|e| {
-        std::io::Error::other(format!("failed to load or persist client identity: {e}"))
-    })?;
-    let pinned_relays = store.load_pinned().map_err(|e| {
-        std::io::Error::other(format!("failed to load pinned relay identities: {e}"))
-    })?;
-
     let configured_relay = match std::env::var("BALANCIFY_RELAY_PUBLIC_KEY") {
         Ok(encoded) => Some(parse_relay_public_key(&encoded)?),
         Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(std::io::Error::other(format!("invalid relay identity setting: {error}"))),
     };
+    let state_dir = default_state_dir()?;
+    let secret_path = state_dir.join("client_secret.key");
+    let pinned_path = state_dir.join("pinned_relays.keys");
+    let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+    let pinned_relays = store.load_pinned().map_err(|e| {
+        std::io::Error::other(format!("failed to load pinned relay identities: {e}"))
+    })?;
     let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
     let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
     validate_lab_target(mode, relay_addr)?;
     let relay_public = relay_public.unwrap_or([0; 32]);
+    let keypair = store.load_or_generate().map_err(|e| {
+        std::io::Error::other(format!("failed to load or persist client identity: {e}"))
+    })?;
 
     println!("Balancify client -- state_dir={}, relay={}, count={}", state_dir.display(), relay_addr, count);
     println!("  client public: {:02x?}...", &keypair.public_bytes()[..8]);
@@ -386,6 +395,16 @@ mod tests {
             select_connection_mode(true, true, true).unwrap(),
             ConnectionMode::Secure
         );
+    }
+
+    #[test]
+    fn relay_address_parser_rejects_unspecified_ip_and_zero_port() {
+        assert_eq!(parse_relay_address(None).unwrap(), "127.0.0.1:4430".parse().unwrap());
+        assert_eq!(parse_relay_address(Some("192.0.2.1:4430")).unwrap(), "192.0.2.1:4430".parse().unwrap());
+        assert!(parse_relay_address(Some("127.0.0.1:0")).is_err());
+        assert!(parse_relay_address(Some("0.0.0.0:4430")).is_err());
+        assert!(parse_relay_address(Some("[::]:4430")).is_err());
+        assert!(parse_relay_address(Some("not-an-address")).is_err());
     }
 
     #[test]

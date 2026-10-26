@@ -1,0 +1,154 @@
+<Window
+    x:Class="BalanciFy.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="BalanciFy">
+    <NavigationView x:Name="RootNavigation"
+                    PaneDisplayMode="Left"
+                    IsBackButtonVisible="Collapsed"
+                    IsSettingsVisible="False"
+                    SelectionChanged="RootNavigation_SelectionChanged">
+        <NavigationView.MenuItems>
+            <NavigationViewItem Content="Home" Tag="home">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Home" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Rules" Tag="rules">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Setting" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Relay health" Tag="relay">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Globe" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Diagnostics" Tag="diagnostics">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Repair" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="About" Tag="about">
+                <NavigationViewItem.Icon><SymbolIcon Symbol="Help" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+        <NavigationView.Content>
+            <ScrollViewer>
+                <StackPanel Margin="28" Spacing="20" MaxWidth="980">
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                        <StackPanel>
+                            <TextBlock Text="BalanciFy" FontSize="32" FontWeight="SemiBold" />
+                            <TextBlock x:Name="PageSubtitle" Text="Multi-WAN status" Opacity="0.75" />
+                        </StackPanel>
+                        <Button x:Name="RefreshButton" Content="Refresh" Click="RefreshButton_Click" />
+                    </StackPanel>
+
+                    <InfoBar x:Name="ConnectionInfo"
+                             IsOpen="True"
+                             IsClosable="False"
+                             Severity="Informational"
+                             Title="Connecting to the BalanciFy service"
+                             Message="Windows named-pipe IPC" />
+
+                    <Grid ColumnSpacing="16" RowSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Grid.Column="0" Padding="18" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Service" FontSize="20" FontWeight="SemiBold" />
+                                <TextBlock x:Name="ServiceVersionText" Text="Not connected" />
+                                <TextBlock x:Name="SchemaText" Text="IPC schema —" Opacity="0.75" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="0" Grid.Column="1" Padding="18" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Bonding and policy" FontSize="20" FontWeight="SemiBold" />
+                                <ToggleSwitch x:Name="BondToggle" Header="Enable bonding" Toggled="Settings_Toggled" />
+                                <ToggleSwitch x:Name="DuplicateToggle" Header="Duplicate eligible traffic" Toggled="Settings_Toggled" />
+                                <ToggleSwitch x:Name="MeteredToggle" Header="Allow metered uplinks" Toggled="Settings_Toggled" />
+                                <TextBlock x:Name="PolicyText" Text="Policy — · MTU —" Opacity="0.75" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="ApplySettingsButton" Content="Apply settings" IsEnabled="False" Click="ApplySettingsButton_Click" />
+                                    <Button x:Name="DiscardSettingsButton" Content="Discard changes" IsEnabled="False" Click="DiscardSettingsButton_Click" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="ImportLegacyPolicyButton" Content="Import saved policy…" Visibility="Collapsed" Click="ImportLegacyPolicyButton_Click" />
+                                    <Button x:Name="ResetPreferencesButton" Content="Remove legacy snapshot…" Click="ResetPreferencesButton_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Padding="18" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Uplinks" FontSize="20" FontWeight="SemiBold" />
+                                <ItemsControl x:Name="UplinkList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" Margin="0,3" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <StackPanel x:Name="RelayPanel" Visibility="Collapsed" Spacing="10">
+                        <TextBlock Text="Relay and transport health" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock x:Name="RelayStatusText" Text="Waiting for service diagnostics…" TextWrapping="Wrap" />
+                        <TextBlock Text="Relay endpoints and identities are intentionally omitted from this view." Opacity="0.75" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="RulesPanel" Visibility="Collapsed" Spacing="10">
+                        <TextBlock Text="Configured traffic rules" FontSize="20" FontWeight="SemiBold" />
+                        <StackPanel x:Name="RulesList" Spacing="4" />
+                        <Border Padding="16" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Custom rule editor" FontSize="18" FontWeight="SemiBold" />
+                                <TextBox x:Name="RuleNameBox" Header="Name" PlaceholderText="For example: video-call" MaxLength="255" />
+                                <ComboBox x:Name="RuleClassBox" Header="Traffic class" SelectedIndex="0">
+                                    <ComboBoxItem Content="Bulk" Tag="0" />
+                                    <ComboBoxItem Content="Latency-sensitive" Tag="1" />
+                                    <ComboBoxItem Content="Pinned to uplink" Tag="2" />
+                                </ComboBox>
+                                <TextBox x:Name="RulePinnedUplinkBox" Header="Pinned uplink ID" Text="0" MaxLength="3" IsEnabled="False" />
+                                <ComboBox x:Name="RuleProtocolBox" Header="Protocol" SelectedIndex="0">
+                                    <ComboBoxItem Content="Any" Tag="0" />
+                                    <ComboBoxItem Content="ICMP" Tag="1" />
+                                    <ComboBoxItem Content="TCP" Tag="6" />
+                                    <ComboBoxItem Content="UDP" Tag="17" />
+                                </ComboBox>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBox x:Name="RulePortStartBox" Header="First destination port" Text="0" MaxLength="5" Width="180" />
+                                    <TextBox x:Name="RulePortEndBox" Header="Last destination port" Text="0" MaxLength="5" Width="180" />
+                                </StackPanel>
+                                <TextBox x:Name="RulePriorityBox" Header="Priority" Text="100" MaxLength="10" />
+                                <CheckBox x:Name="RuleDuplicateCheckBox" Content="Eligible for packet duplication" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="AddRuleButton" Content="Add rule" IsEnabled="False" HorizontalAlignment="Left" Click="AddRuleButton_Click" />
+                                    <Button x:Name="CancelRuleEditButton" Content="Cancel edit" IsEnabled="False" HorizontalAlignment="Left" Click="CancelRuleEditButton_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="SelfTestButton"
+                                Content="Run service self-test"
+                                Visibility="Collapsed"
+                                HorizontalAlignment="Left"
+                                Click="SelfTestButton_Click" />
+                        <Button x:Name="ExportSupportBundleButton"
+                                Content="Export support bundle…"
+                                Visibility="Collapsed"
+                                HorizontalAlignment="Left"
+                                Click="ExportSupportBundleButton_Click" />
+                    </StackPanel>
+                    <TextBlock x:Name="DiagnosticsStatsText" Visibility="Collapsed" TextWrapping="Wrap" />
+                    <TextBlock x:Name="SelfTestResultText"
+                               Visibility="Collapsed"
+                               TextWrapping="Wrap"
+                               AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock x:Name="PageMessage" Text="" TextWrapping="Wrap" Opacity="0.8" />
+                </StackPanel>
+            </ScrollViewer>
+        </NavigationView.Content>
+    </NavigationView>
+</Window>

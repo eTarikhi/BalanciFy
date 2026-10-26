@@ -7,6 +7,45 @@ and cellular behind one virtual adapter, with every capability embedded in the
 product — no external apps, services or solutions at runtime; the installer
 provisions the whole working environment (dependency policy rev 2.1).
 
+## Quick start — Windows 11 x64
+
+### Required development tools
+
+- Windows 11 x64 and **Developer PowerShell for Visual Studio 2022**.
+- Visual Studio 2022 (17.x) with **Desktop development with C++**, MSVC v143 x64/x86 tools, and MSBuild.
+- Windows SDK **10.0.26100.0** and WDK **10.0.26100.6584** for the driver build (x64 and ARM64 support).
+- Stable Rust for `x86_64-pc-windows-msvc`, including Cargo.
+- **.NET 10 SDK** and WinUI 3/Windows App SDK tooling; the app restores the pinned `Microsoft.WindowsAppSDK` 2.5.1 package.
+- Python **3.10+** with the `py -3` launcher (CI uses Python 3.12).
+- Git for Windows, including Git Bash (`bash.exe`/`sh`). PowerShell is included with Windows.
+
+WSL, Docker, and Node.js are not required for Windows development. GitHub CLI (`gh`) is optional for local work and is only needed for push/PR automation.
+
+### Build and test
+
+Open Developer PowerShell for VS 2022 at the repository root, then run:
+
+```powershell
+# Fast local checks (does not build Rust, WinUI, or the WDK driver)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1 -Quick
+
+# Full native Windows validation: WinUI, Rust, SBOM, and x64/ARM64 WDK builds
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1
+```
+
+To build and run the WinUI app directly:
+
+```powershell
+cd windows\BalanciFy.App
+dotnet restore
+dotnet build -c Debug -r win-x64
+dotnet run -c Debug -r win-x64
+```
+
+### Local deployment limitation
+
+The local WDK build produces an **unsigned** driver. The installer’s driver/service installation steps are still prototypes, so this repository does not yet provide a supported production installation path. Do not install or load the unsigned driver on your everyday PC; driver deployment/runtime testing requires an isolated Windows VM and separate test-signing setup. See [native Windows development and CI](docs/local-development-and-ci.md) for the detailed checklist and validation limits.
+
 ## Technical blueprint
 
 [`docs/technical-blueprint.md`](docs/technical-blueprint.md) — engineering
@@ -17,18 +56,32 @@ environment (§4.8 rev 2.1 / §8.3), security & signing plan, validation plan,
 risk register, sourced assumptions. Diagrams in [`docs/assets/`](docs/assets/).
 Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/phase1/).
 
-## Development status (started 2026-10-17, continuous to 2026-10-21)
+## Development status (audited 2026-10-26)
 
-| Phase | Status |
-|---|---|
-| 1 Feasibility | **PASS** — decision memo, ADRs 0002-0038, cost-model template, G1 owner sign-off claimed via CI 53 runs, 215+ tests, Cargo.lock vetted-only (5491758) |
-| 2 Lab prototype | **PASS** — control plane (health, scoring/capacity, WRH placement, rules, flow affinity, bond auto-disable, MTU/keepalive, coupled per-path CC LIA, pacing 80% cap delay exposed, rate limiting service egress, flow-level capacity on_flow_packet+on_flow_ack, RFC 8439 AEAD, Noise_IK handshake pinning+replay, key management DPAPI FFI TPM-backed, rekey forward secrecy 1h/1M) and first-party datagram lane (wire v2, DRR striping, reorder, reinjection per-flow retx (session,seq) ADR-0029, flow-level lane + explicit flow ACK ADR-0030, bounded alternate-path FlowData repair ADR-0036, backpressure, sleep/resume NAT re-binding) with unit, simulated e2e, fuzz 6x20k rounds (261 Linux / 260 Windows Rust tests passed in CI run 39531428626); relay server-mode lab binary with secure endpoint (pinning, replay, auto_accept=false, establish_secure_session, rate limiting global 1024 per-IP 8 handshake 10/min/IP token bucket 100Mbit/s 10k pps, ECN echo stats, failover); netem rig 11 profiles + analyze.py (delay-gap 40ms, lossy 1%, asymmetric 200M/50M, cellular 100ms+2%+20M, Rig B wired 1Gbps 2ms/Wi-Fi 6 300M 10ms, ECN CE, delay-jump 10->50ms, perflow on/off, aggregate 16 flows, failover <=2s, soak 72h, all) + S1 steering script; NDIS miniport functional stub with WDF control device + NBL pool via NdisAllocateNetBufferListPool(fAllocateNetBuffer=TRUE) + INJECT_NBL via NdisAllocateMdl + NdisAllocateNetBufferAndNetBufferList + NdisMIndicateReceiveNetBufferLists + Return frees MDL chain NdisFreeMdl + vcxproj HVCI flags /integritycheck /DYNAMICBASE /NXCOMPAT /Qspectre PoolTag BlaB Spectre KMDF 1.33 Universal 10.0.22621.0 + INF Universal NDIS 6.8 MTU param WDF verifier attestation signing S15 + README WDK build x64/ARM64 signtool dumpbin Verifier 0x209BB HLK HVCIMemoryIntegrity VBS/MI VM Gen2 Secure Boot vTPM test-signing pnputil msinfo32. **Proven:** S2a datagram lane over bound sockets, striping+reorder across delay gap 0 ooo under 80ms cap, reinjection recovers lost, failover unplugging keeps alive 100/100, flow-level not held up, duplicate delivers once, IPC contract v1, tampered input refused, payload confidentiality RFC 8439, DRR proportionality 3000:1000 exactly 15:5, per-path CC coupled LIA ECN 80% vs loss 50% delay 10%, backpressure, capacity credited to right uplink, sleep/resume abandons dead state, NAT re-binding re-keys one path, session establishment Noise_IK 12 tests, key management 8 tests, replay 5 tests, rekey 3 tests, pacing 7 tests, fuzz 6 tests, secure handshake over real UDP, rekey auto-trigger, abuse controls+rate limiting, dual relay failover, per-flow sessions BTreeMap<FlowKey,u64> session_for_flow, per-class sessions, per-session seq tracking, rate limiting service egress, flow-level capacity, Wintun fallback exception, installer transactional 8 steps journaled with SBOM sidecar, app shell 11 modes IPC client, ETW 200/201/300/400/401/402/500/600 + support bundle per-path ECN/delay cwnd/in_flight/rtt_min/last_ms + failover count+convergence ms, synthetic service-path benchmark with per-call software latency and payload-equivalent work rate only (not network throughput, adapter-added delay, failover convergence, or CPU/Gbit); real Rig B acceptance pending, soak harness G5 72h + random flaps + 100 resume, SPDX 2.3 + 3.0.1 locked-graph inventories generated and validated in CI (reviewed VEX and clean-machine installer verification pending), clean-machine offline test docs. **Not yet proven real hardware:** S2c real netem rig 10 reps median/p95/spread on Linux gateway, S2b real VM test-signed load Verifier 0x209BB + HLK + VBS/MI, Rig B real throughput wired 1Gbps/Wi-Fi 6 300M iperf3 secure pacing 80% per-flow on/off failover <=2s added delay <=3ms CPU/Gbit ETW WPA, HVCI trio real VM, reviewed VEX and clean-machine installer validation remain pending; SPDX 2.3 and 3.0.1 generation/validation pass in CI |
-| 3 Architecture spike | **IN PROGRESS** — IPC v1 request/response and rate-limited event push wired through the loopback service adapter (production named-pipe authentication pending), miniport perf/HVCI/signing dry-run docs ready (hvci-readiness.md), driver WDF control + NBL pool + vcxproj+INF+README, Rust lab CLI mirrors 11 planned Home/Rules/Relay/Diagnostics/tray modes and 1Hz telemetry with last-known-good stale markers; actual WinUI 3/.NET 10 project, accessibility, self-contained packaging, and offline runtime bundle remain pending, lab CLI balancify-app covers contract v1, ETW + support bundle enhanced, throughput + soak harness, SBOM + clean-machine test docs |
-| 4 MVP (bonding) | **IN PROGRESS** — client binary CLI FileKeyStore DPAPI Noise_IK handshake 0xFF framing bonded tunnel send delivery tracking dual relay via env, service handshake wired, relay SecureRelay, tunnel Crypto trait, per-flow retx (session,seq), FlowAck capacity sampling + bounded FlowData selective repair (ADR-0036), driver S2b NBL pool, throughput 10 profiles, soak harness, failover convergence <=2s, lab CLI 11 modes (production WinUI 3 GUI pending), installer 8 steps with transactional SPDX sidecars + JSON rollback journal, Cargo.lock vetted-only, vcxproj HVCI, INF Universal, SPDX 2.3 + 3.0.1 inventories validated in CI (reviewed VEX pending), netem-rig safe dry-run + 7 executable link profiles + analyzer (BalanciFy/Rig B evidence pending), CI green 39669985734 (Ubuntu 24.04 + Windows Rust workspace tests; SPDX 2.3 and 3.0.1 validation) |
-| 5 Hardening | **STARTED** — ETW 200/201/300/400/401/402/500/600, support bundle per-path ECN/delay + failover, relay ECN stats, driver WDF control + NBL pool, app relay & bundle + failover & soak, ECN bench, ETW uplink/bond, flow ACK, per-flow retx, flow ACK+driver S2b, HVCI+SBOM docs, driver packaging vcxproj+INF+README, installer SBOM sidecar, netem-rig safe dry-run + explicit live mode + analyze.py, soak harness, failover convergence tracking, throughput failover profile, crypto bench CPU/Gbit, clean-machine test updated |
-| 6-9 | Planned per roadmap rev 2 — G3 packet-path latency/CPU vs targets, G4 acceptance table on Rig B, G5 soak+Verifier+compat matrix, G6 compat matrix+external review, G7 RC+final attestation+SBOM/VEX+rollback drill, G8 GA+winget+status page |
+BalanciFy remains an engineering prototype, not a supported release. G1 has no
+formal sign-off record in the repository; G2–G8 are open. Source coverage and
+proposed exit criteria are not substitutes for Windows VM, hardware, signing,
+review, or field evidence. See the [completion ledger](docs/completion-ledger.md)
+for the prioritized work list and evidence classes.
 
-The lab `balancify-client` and service adapter fail closed unless a valid relay identity is configured. Their explicitly insecure test modes are debug-build-only and loopback-only. Persistent identities use account-appropriate state roots (`%LOCALAPPDATA%` for the client or `ProgramData` for the Windows service; `$XDG_STATE_HOME` / `$HOME/.local/state` on Unix); `BALANCIFY_STATE_DIR` can override these with an absolute path. The client filters post-handshake datagrams to the configured relay and reports UDP send failures. Neither CLI is a production packet adapter or production Windows service. See [ADR-0035](docs/decisions/ADR-0035-client-transport-fails-closed.md) and [ADR-0038](docs/decisions/ADR-0038-service-transport-fails-closed.md).
+| Area | Implemented / evidenced | Still unproven or incomplete |
+|---|---|---|
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows Rust workspace tests, Linux release build, and SPDX 2.3/3.0.1 generation/validation passed on the source represented by head `331797b`; those jobs do not include the new machine-policy changes in this branch. Authenticated lab transport, IPC contracts, bounded packet handling, simulated path/failover tests and support-bundle redaction have automated coverage. | Production Windows service lifecycle, relay deployment/interoperability, validation of the new service-owned durable machine-policy implementation, and real network behavior. |
+| Windows UI | Native WinUI 3/.NET shell source contains Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and an explicit one-time migration path for old per-user policy snapshots. The in-progress changes remove ongoing per-user policy saves/replay and route settings through service-owned policy. | Hosted runs for `331797b` failed at the WinUI build: XAML compiler WMC0055 rejected `SymbolIcon Symbol="Info"` at `MainWindow.xaml(25,54)`. The current source uses `Help` and has a regression assertion; it also adds the missing `if: always()` so native quick checks run after a failed build. Hosted validation of these fixes and current C# changes is pending. No Windows runtime, tray, accessibility, or usability acceptance is recorded. |
+| Driver and OS integration | Hosted WDK CI compiles/links unsigned x64 and ARM64 drivers and checks PE mitigations/INF contracts; portable C packet/OID tests pass. Driver/service source includes bounded queue and injection paths. | No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
+| Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
+| Performance gates | Blueprint §10.3 defines the thresholds and lab harnesses include safe netem dry-run and software simulations. | No Rig B/hardware measurements. Aggregate/single-flow throughput, ≤3 ms added wired delay, ≤0.1% delivered reordering, ≤2 s failover, 72 h soak, 100 resume cycles and compatibility matrix remain acceptance targets, not results. |
+
+Prior hosted runs `40256260258` and `40256265450` for head `331797b` completed with failure: Ubuntu/Windows Rust tests, Linux release/SPDX, dependency, WSL, lab, and WDK x64/ARM64 jobs passed; native WinUI failed while the following native quick step was skipped. Current push/PR runs `40258355131` and `40258359532` for `c652dd3` are in progress; dependency, WSL and lab jobs passed at last inspection, while Rust, WDK and native MSVC remain unresolved. Local quick CI on the current worktree passed dependency audit, 5 lab Python tests, 70 CI Python tests, netem safety and 12 portable driver tests; it intentionally skips Rust/release/SPDX. Logs: `target/local-ci/logs/20261026T021425Z/`. Targeted machine-policy and WinUI contracts passed 8/8 and 10/10. Hosted runs predate these policy changes and do not validate them. Windows build/runtime and product acceptance remain open.
+
+The current worktree implements ADR-0046 service-owned policy and explicit migration from the historical `%LOCALAPPDATA%` snapshot. The change is not yet validated by Rust/Windows builds; do not treat source presence as runtime evidence.
+
+The client/service binaries and installer remain lab components. Their
+explicitly insecure test modes are debug-only and loopback-only. Persistent
+identities use account-appropriate state roots; ADR-0046 makes the service the
+intended durable machine-policy authority and limits the old per-user file to
+explicit migration. Rust/Windows validation is pending. See ADR-0035, ADR-0038,
+and ADR-0046 for transport and policy behavior.
 
 ## Repository layout
 
@@ -37,20 +90,20 @@ crates/core     control plane: health state machine, link scoring + capacity
                 estimation, WRH placement, classification rules, flow affinity,
                 policy snapshot (§6.1), bond auto-disable, MTU/keepalive,
                 per-path congestion windows coupled after RFC 6356
-crates/tunnel   first-party datagram lane: wire v0 frame kinds, DRR striping,
-                reorder buffer, reinjection, flow-level lane, receiver
-crates/ipc      IPC contract v1 (service ⇄ shell): versioned, length-checked,
-                first-party framing — no serialisation dependency
+crates/tunnel   first-party datagram lane: authenticated wire v2, DRR striping,
+                reorder buffer, bounded FlowData repair/ACK, flow-level lane
+crates/ipc      versioned, length-checked IPC contract v1 and local transports
 crates/service  sans-I/O service core: both schedulers off one policy snapshot,
                 tunnel lane, and the IPC contract served for real
 crates/relay    in-binary cooperating endpoint (server mode), lab form
 driver/         first-party NDIS virtual miniport (WDK/Windows only)
-app/            Rust lab CLI; WinUI 3 / .NET 10 production GUI not implemented
-installer/      transactional offline installer design + WiX skeleton
-tools/lab/      Rig B (netem), Spike S1 steering evidence script
-tools/ci/       dependency + crypto policy audit (ADR-0002, criteria C2/C4)
-docs/           blueprint, ADRs, phase artifacts
-.github/        CI: policy audit + Rust workspace tests on Linux and Windows
+app/            Rust lab CLI
+windows/BalanciFy.App/  native WinUI 3 / .NET 10 product shell preview
+installer/      transactional provisioning prototype; production bundle pending
+tools/lab/      safe netem harness, analyzer, and acceptance tooling
+tools/ci/       local profiles, source-contract tests, audits and SBOM tooling
+docs/           blueprint, ADRs, phase artifacts and completion ledger
+.github/        CI: Linux/Windows Rust, WinUI/MSVC, WDK, SBOM, audits and lab tests
 ```
 
 ## Build & test (core, cross-platform)
@@ -75,8 +128,9 @@ Driver, shell and installer build on Windows only (see their READMEs). For compl
 machine setup, local CI, safe push-after-green behavior, WDK builds, and remote-run
 monitoring, see [Local development and CI/CD](docs/local-development-and-ci.md).
 
-Phase-2 status and the honest list of what is *not* yet proven:
-[`docs/phase2/lab-progress.md`](docs/phase2/lab-progress.md).
+For the prioritized software checklist, evidence ledger and external blockers, see
+[`docs/completion-ledger.md`](docs/completion-ledger.md) and the dated phase notes
+under [`docs/phase2/`](docs/phase2/).
 
 ## Licence
 
