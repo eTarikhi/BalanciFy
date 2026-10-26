@@ -144,6 +144,10 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("actions/setup-dotnet@v5.0.0", workflow)
         self.assertIn("dotnet-version: '10.0.x'", workflow)
         self.assertIn("dotnet build windows/BalanciFy.App/BalanciFy.App.csproj", workflow)
+        self.assertIn("winui-build.txt", workflow)
+        self.assertIn("Tee-Object -FilePath $buildLog", workflow)
+        self.assertIn("Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY", workflow)
+        self.assertIn("target/local-ci-windows/logs/**/*.txt", workflow)
 
 
 if __name__ == "__main__":

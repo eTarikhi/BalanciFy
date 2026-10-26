@@ -150,7 +150,24 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Build native WinUI shell
         shell: pwsh
-        run: dotnet build windows/BalanciFy.App/BalanciFy.App.csproj --configuration Release --runtime win-x64
+        run: |
+          $logDirectory = Join-Path $env:GITHUB_WORKSPACE 'target/local-ci-windows/logs/winui'
+          New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+          $buildLog = Join-Path $logDirectory 'winui-build.txt'
+          & dotnet build windows/BalanciFy.App/BalanciFy.App.csproj --configuration Release --runtime win-x64 2>&1 |
+            Tee-Object -FilePath $buildLog
+          $buildExitCode = $LASTEXITCODE
+          if ($buildExitCode -ne 0) {
+            $tail = Get-Content -LiteralPath $buildLog -Tail 120 | Out-String
+            @"
+          ### WinUI build failed (exit code $buildExitCode)
+
+          ````text
+          $tail
+          ````
+          "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+            exit $buildExitCode
+          }
       - name: Run native Windows quick validation with the MSVC developer environment
         shell: pwsh
         run: |
