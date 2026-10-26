@@ -89,6 +89,7 @@ internal static class IpcClient
         }
         var bundle = reader.ReadString32();
         reader.RequireEnd();
+        SupportBundleValidator.Validate(bundle);
         return bundle;
     }
 

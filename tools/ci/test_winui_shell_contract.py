@@ -10,6 +10,7 @@ CLIENT = (APP_DIR / "IpcClient.cs").read_text(encoding="utf-8")
 PREFERENCES = (APP_DIR / "UiPreferencesStore.cs").read_text(encoding="utf-8")
 WINDOW = (APP_DIR / "MainWindow.xaml.cs").read_text(encoding="utf-8")
 GUIDE = (APP_DIR / "README.md").read_text(encoding="utf-8")
+SUPPORT_VALIDATOR = (APP_DIR / "SupportBundleValidator.cs").read_text(encoding="utf-8")
 IPC_PROTOCOL = (ROOT / "crates" / "ipc" / "src" / "lib.rs").read_text(encoding="utf-8")
 SUPPORT_BUNDLE = (ROOT / "crates" / "service" / "src" / "support" / "mod.rs").read_text(encoding="utf-8")
 CORE_RULES = (ROOT / "crates" / "core" / "src" / "rules.rs").read_text(encoding="utf-8")
@@ -53,6 +54,23 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("RemoveRuleButton_Click", WINDOW)
         self.assertIn("RulePinnedUplinkBox", WINDOW)
         self.assertIn("ApplySettingsButton_Click", WINDOW)
+
+    def test_support_bundle_is_bounded_allowlisted_and_validated_before_export(self):
+        self.assertIn("SupportBundleValidator.Validate(bundle)", CLIENT)
+        self.assertIn("MaxUtf8Bytes = 1 << 20", SUPPORT_VALIDATOR)
+        self.assertIn("MaxUplinks = 256", SUPPORT_VALIDATOR)
+        self.assertIn("duplicate or unsupported field", SUPPORT_VALIDATOR)
+        self.assertIn("Support-bundle warning is not a bounded string", SUPPORT_VALIDATOR)
+        self.assertIn("IsSupportBundleExportFailure(error)", WINDOW)
+        for field in (
+            "timestamp", "service_version", "schema_version", "relay_configured",
+            "relay_failover_count", "counters", "uplinks", "rekey", "congestion", "warnings",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(f'"{field}"', SUPPORT_VALIDATOR)
+        for sensitive_field in ("relay_address", "public_key", "destination_ip", "packet_payload"):
+            with self.subTest(sensitive_field=sensitive_field):
+                self.assertNotIn(sensitive_field, SUPPORT_VALIDATOR)
 
     def test_client_request_codes_match_rust_ipc_contract(self):
         opcodes = {

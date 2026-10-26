@@ -68,6 +68,13 @@ public sealed partial class MainWindow : Window
         error is System.Text.Json.JsonException ||
         error is InvalidDataException;
 
+    private static bool IsSupportBundleExportFailure(Exception error) =>
+        error is IOException ||
+        error is UnauthorizedAccessException ||
+        error is TimeoutException ||
+        error is System.Runtime.InteropServices.COMException ||
+        error is InvalidDataException;
+
     private async Task<UiPreferences> ReconcileSavedRulesAsync(UiPreferences preferences, CancellationToken cancellationToken)
     {
         var serviceRules = await IpcClient.GetFlowRulesAsync(cancellationToken);
@@ -582,7 +589,7 @@ public sealed partial class MainWindow : Window
         {
             ShowDisconnected("Support-bundle request timed out.");
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or TimeoutException or System.Runtime.InteropServices.COMException)
+        catch (Exception error) when (IsSupportBundleExportFailure(error))
         {
             ShowDisconnected($"Could not export support bundle: {error.Message}");
         }
