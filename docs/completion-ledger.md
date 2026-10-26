@@ -45,7 +45,7 @@ Working tree at audit start: clean. This ledger tracks source/test work separate
 
 | Criterion | Change in this worktree | Command/result | Evidence class | Status |
 |---|---|---|---|---|
-| Make Windows WinUI CI failure diagnosable | `.github/workflows/ci.yml` now captures `dotnet build` output at `target/local-ci-windows/logs/winui-build.txt` (the existing upload step includes it) and writes the last 120 lines to the failed GitHub step summary. `tools/ci/test_winui_shell_contract.py` asserts log, summary, and artifact paths. | `python3 -m unittest tools.ci.test_winui_shell_contract -v` passed 9/9; `bash tools/ci/local-ci.sh --quick` passed policy audit, 5 lab Python, 61 CI Python, netem safety, portable driver 12/12; `git diff --check` clean. Full Windows/MSVC/WinUI build cannot run in this Linux workspace. Workflow syntax/behavior and hosted rerun remain pending. | Source | In progress; not yet validated. |
+| Make Windows WinUI CI failure diagnosable | `.github/workflows/ci.yml` captures `dotnet build` output at `target/local-ci-windows/logs/winui/winui-build.txt`, uploads it, writes the last 120 lines to the step summary, and patches the current check-run output through `gh api` so diagnostics are readable without downloading GitHub blob storage. `tools/ci/test_winui_shell_contract.py` asserts the diagnostic path and API permissions. | `python3 -m unittest tools.ci.test_winui_shell_contract -v` passed 9/9; quick profile passed (logs `target/local-ci/logs/20261026T010859Z/`). Hosted run with the check-run output patch is pending. | Source + Unit/CI | In progress; Windows execution remains unverified. |
 
 ## Evidence collection rules
 

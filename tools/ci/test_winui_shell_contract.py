@@ -147,6 +147,9 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("winui-build.txt", workflow)
         self.assertIn("Tee-Object -FilePath $buildLog", workflow)
         self.assertIn("Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY", workflow)
+        self.assertIn("Native MSVC checks (Windows x64)", workflow)
+        self.assertIn("check-runs/$checkRunId", workflow)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)
         self.assertIn("target/local-ci-windows/logs/**/*.txt", workflow)
 
 
