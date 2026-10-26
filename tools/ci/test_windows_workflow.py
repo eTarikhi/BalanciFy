@@ -14,6 +14,11 @@ class WindowsWorkflowTests(unittest.TestCase):
         self.assertIn('MSVC cl.exe was not found. Open Developer PowerShell', WINDOWS_RUNNER)
         self.assertIn('Desktop development with C++ workload', WINDOWS_RUNNER)
 
+    def test_native_runner_uses_launcher_version_probe_without_nested_python_code(self):
+        self.assertIn("Get-NativeText 'py' @('-3', '--version')", WINDOWS_RUNNER)
+        self.assertNotIn("Get-NativeText 'py' @('-3', '-c'", WINDOWS_RUNNER)
+        self.assertIn("Could not parse the Python version reported by 'py -3'", WINDOWS_RUNNER)
+
     def test_native_runner_targets_msvc_and_windows_rust_and_wdk(self):
         self.assertIn('x86_64-pc-windows-msvc', WINDOWS_RUNNER)
         self.assertIn("Invoke-NativeChecked 'cargo' @('test', '--workspace', '--all-targets', '--no-fail-fast')", WINDOWS_RUNNER)

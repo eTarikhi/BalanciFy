@@ -133,9 +133,13 @@ if ($env:PATH -notlike "*$bashDirectory*") {
     $env:PATH = "$bashDirectory;$env:PATH"
 }
 
-$pythonVersion = Get-NativeText 'py' @('-3', '-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-$pythonParts = $pythonVersion -split '\.'
-if ([int]$pythonParts[0] -lt 3 -or ([int]$pythonParts[0] -eq 3 -and [int]$pythonParts[1] -lt 10)) {
+$pythonVersion = Get-NativeText 'py' @('-3', '--version')
+if ($pythonVersion -notmatch '^Python\s+(?<major>\d+)\.(?<minor>\d+)') {
+    throw "Could not parse the Python version reported by 'py -3': $pythonVersion"
+}
+$pythonMajor = [int]$Matches['major']
+$pythonMinor = [int]$Matches['minor']
+if ($pythonMajor -lt 3 -or ($pythonMajor -eq 3 -and $pythonMinor -lt 10)) {
     throw "Python 3.10+ is required; found $pythonVersion."
 }
 if (-not $Quick) {
