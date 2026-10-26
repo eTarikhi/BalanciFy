@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -71,6 +72,9 @@ class WinUiShellContractTests(unittest.TestCase):
         for sensitive_field in ("relay_address", "public_key", "destination_ip", "packet_payload"):
             with self.subTest(sensitive_field=sensitive_field):
                 self.assertNotIn(sensitive_field, SUPPORT_VALIDATOR)
+        service_json_fields = set(re.findall(r'\\"([a-z][a-z0-9_]*)\\"(?=[:,])', SUPPORT_BUNDLE))
+        validator_fields = set(re.findall(r'"([a-z][a-z0-9_]*)"', SUPPORT_VALIDATOR))
+        self.assertEqual(validator_fields, service_json_fields)
 
     def test_client_request_codes_match_rust_ipc_contract(self):
         opcodes = {

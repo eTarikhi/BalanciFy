@@ -36,10 +36,10 @@ for the prioritized work list and evidence classes.
 Hosted CI at `b6f955e` passed dependency/crypto audit, WSL/Linux quick profile,
 lab Python tests, Ubuntu/Windows Rust tests, x64/ARM64 WDK builds and Linux
 release/SBOM jobs; only the native MSVC job failed at the WinUI build, so its
-following native quick profile was skipped. A Linux quick profile run against source HEAD `fcb7d47` with the pending
+following native quick profile was skipped. A Linux quick profile run against source HEAD `44c89e8` with the pending
 support-bundle validation edits in its worktree passed dependency audit, 5 lab
 Python tests, 62 CI Python tests, netem safety and 12 portable driver tests; its
-logs are retained at `target/local-ci/logs/20261026T011630Z/`. It intentionally
+logs are retained at `target/local-ci/logs/20261026T011948Z/`. It intentionally
 skips Rust/release/SPDX validation. These results are CI evidence only, not product acceptance. The
 latest workflow runs for the audit commits were still in progress when this
 status was written.
