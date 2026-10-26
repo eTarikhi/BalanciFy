@@ -4,6 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER = (ROOT / "crates/ipc/src/server.rs").read_text(encoding="utf-8")
+IPC = (ROOT / "crates/ipc/src/lib.rs").read_text(encoding="utf-8")
 APP = (ROOT / "app/src/main.rs").read_text(encoding="utf-8")
 SERVICE = (ROOT / "crates/service/src/bin/balancify-service.rs").read_text(encoding="utf-8")
 
@@ -19,8 +20,15 @@ class NamedPipeContractTests(unittest.TestCase):
         self.assertIn("CheckTokenMembership(", SERVER)
         self.assertIn("RevertToSelf()", SERVER)
         read_impl = SERVER.split("impl Read for NamedPipeStream", 1)[1].split("impl Write for NamedPipeStream", 1)[0]
-        self.assertLess(read_impl.index("validate_client_session(self.handle)?"), read_impl.index("return Ok(read as usize)"))
+        self.assertLess(read_impl.index("self.machine_admin = validate_client_session(self.handle)?"), read_impl.index("return Ok(read as usize)"))
         self.assertIn("GetNamedPipeClientSessionId", SERVER)
+
+    def test_machine_writes_require_an_elevated_admin_token(self):
+        self.assertIn("WIN_BUILTIN_ADMINISTRATORS_SID: u32 = 26", SERVER)
+        self.assertIn("request.requires_machine_admin() && !stream.is_machine_admin()", SERVER)
+        self.assertIn("Status::PermissionDenied", SERVER)
+        self.assertIn("pub const fn requires_machine_admin(&self) -> bool", IPC)
+        self.assertIn("Status::PermissionDenied => 5", IPC)
 
     def test_service_and_lab_shell_share_the_windows_pipe_name(self):
         self.assertIn("WINDOWS_SERVICE_PIPE_NAME", SERVICE)

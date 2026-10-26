@@ -2,8 +2,9 @@
 //!
 //! Windows uses an ACL-protected named pipe; the loopback TCP adapter is for
 //! non-Windows lab and CI. Both transports carry the same binary framing and
-//! message encoding. The server enforces a nonzero client session ID; per-user
-//! identity authorization remains a production hardening requirement beyond the ACL.
+//! message encoding. Windows pipe clients must be in an interactive session;
+//! machine-wide policy mutations additionally require an elevated local
+//! administrator token. Finer-grained per-user roles are not implemented.
 
 use crate::{
     decode_frame, encode_frame, frame_event, Event, FrameError, FrameKind, Request, Response, Status,
@@ -16,11 +17,19 @@ use std::time::{Duration, Instant};
 /// Stream abstraction shared by the loopback CI transport and Windows named pipe.
 pub trait IpcStream: Read + Write {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()>;
+
+    /// Whether the transport authenticated an elevated local administrator.
+    /// Non-Windows TCP is a lab-only adapter; Windows loopback is never trusted.
+    fn is_machine_admin(&self) -> bool;
 }
 
 impl IpcStream for TcpStream {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         TcpStream::set_read_timeout(self, timeout)
+    }
+
+    fn is_machine_admin(&self) -> bool {
+        !cfg!(windows)
     }
 }
 
@@ -121,7 +130,7 @@ impl NamedPipeServer {
 }
 
 #[cfg(windows)]
-fn validate_client_session(handle: *mut std::ffi::c_void) -> io::Result<()> {
+fn validate_client_session(handle: *mut std::ffi::c_void) -> io::Result<bool> {
     let mut session_id = 0u32;
     if unsafe { GetNamedPipeClientSessionId(handle, &mut session_id) } == 0 {
         return Err(last_os_error());
@@ -170,7 +179,35 @@ fn validate_client_session(handle: *mut std::ffi::c_void) -> io::Result<()> {
                 "named-pipe IPC requires an Interactive Users token",
             ));
         }
-        Ok(())
+
+        // Policy writes are machine-wide. Require an elevated token whose
+        // Administrators membership is enabled, not merely a filtered UAC token.
+        const WIN_BUILTIN_ADMINISTRATORS_SID: u32 = 26;
+        let mut admin_sid_buffer = [0usize; 9];
+        let mut admin_sid_size = std::mem::size_of_val(&admin_sid_buffer) as u32;
+        if unsafe {
+            CreateWellKnownSid(
+                WIN_BUILTIN_ADMINISTRATORS_SID,
+                std::ptr::null_mut(),
+                admin_sid_buffer.as_mut_ptr().cast(),
+                &mut admin_sid_size,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        let mut is_admin = 0i32;
+        if unsafe {
+            CheckTokenMembership(
+                std::ptr::null_mut(),
+                admin_sid_buffer.as_mut_ptr().cast(),
+                &mut is_admin,
+            )
+        } == 0
+        {
+            return Err(last_os_error());
+        }
+        Ok(is_admin != 0)
     })();
 
     if unsafe { RevertToSelf() } == 0 {
@@ -229,6 +266,7 @@ fn create_named_pipe_instance(name: &[u16], first_instance: bool) -> io::Result<
     Ok(NamedPipeStream {
         handle,
         peer_auth_pending: true,
+        machine_admin: false,
     })
 }
 
@@ -236,6 +274,7 @@ fn create_named_pipe_instance(name: &[u16], first_instance: bool) -> io::Result<
 pub struct NamedPipeStream {
     handle: *mut std::ffi::c_void,
     peer_auth_pending: bool,
+    machine_admin: bool,
 }
 
 #[cfg(windows)]
@@ -278,6 +317,7 @@ impl NamedPipeStream {
         let stream = Self {
             handle,
             peer_auth_pending: false,
+            machine_admin: false,
         };
         let mut mode = PIPE_NOWAIT;
         if unsafe { SetNamedPipeHandleState(handle, &mut mode, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
@@ -295,6 +335,10 @@ impl IpcStream for NamedPipeStream {
     fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
         // PIPE_NOWAIT supplies the polling behavior required by read_header.
         Ok(())
+    }
+
+    fn is_machine_admin(&self) -> bool {
+        self.machine_admin
     }
 }
 
@@ -315,7 +359,7 @@ impl Read for NamedPipeStream {
         } != 0
         {
             if read > 0 && self.peer_auth_pending {
-                validate_client_session(self.handle)?;
+                self.machine_admin = validate_client_session(self.handle)?;
                 self.peer_auth_pending = false;
             }
             return Ok(read as usize);
@@ -536,6 +580,12 @@ where
             _ => None,
         };
         let response = match request {
+            Some(request) if request.requires_machine_admin() && !stream.is_machine_admin() => {
+                Response::Error {
+                    status: Status::PermissionDenied,
+                    message: "reopen BalanciFy with elevated local administrator privileges to change machine-wide policy".to_string(),
+                }
+            }
             Some(request) => handler(request),
             None => Response::Error {
                 status: Status::BadRequest,
@@ -665,6 +715,63 @@ mod tests {
 
     fn read_response(stream: &mut TcpStream) -> Response {
         Response::decode(&read_frame_payload(stream, FrameKind::Response)).unwrap()
+    }
+
+    struct NonAdminStream {
+        input: std::io::Cursor<Vec<u8>>,
+        output: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl Read for NonAdminStream {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.input.read(buffer)
+        }
+    }
+
+    impl Write for NonAdminStream {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.output.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl IpcStream for NonAdminStream {
+        fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn is_machine_admin(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn non_admin_cannot_mutate_machine_policy_over_ipc() {
+        let request_frame = crate::frame_request(&Request::SetBondMode { enabled: false });
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stream = NonAdminStream {
+            input: std::io::Cursor::new(request_frame),
+            output: std::sync::Arc::clone(&output),
+        };
+        let mut handler_called = false;
+        handle_stream(stream, |_| {
+            handler_called = true;
+            Response::Ack
+        }).unwrap();
+
+        assert!(!handler_called, "unauthorized mutation must not reach service policy code");
+        let output = output.lock().unwrap();
+        let response = Response::decode(
+            decode_frame(&output).unwrap().unwrap().1,
+        ).unwrap();
+        assert_eq!(response, Response::Error {
+            status: Status::PermissionDenied,
+            message: "reopen BalanciFy with elevated local administrator privileges to change machine-wide policy".to_string(),
+        });
     }
 
     #[test]

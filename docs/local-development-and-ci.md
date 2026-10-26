@@ -196,4 +196,4 @@ dotnet build -c Debug -r win-x64
 dotnet run -c Debug -r win-x64
 ```
 
-Use `win-arm64` for ARM64. The preview reads and updates service state over the ACL-protected local named pipe; complete rule editing, advanced Diagnostics, accessibility review, packaging, and clean-machine validation remain in progress.
+Use `win-arm64` for ARM64. The preview reads service state over the ACL-protected local named pipe. Machine-wide policy changes require launching the shell with an elevated local-administrator token; standard interactive users receive a clear permission error, and Windows debug loopback TCP does not bypass this gate. Native Windows authorization/runtime behavior still needs VM validation. Complete rule editing, advanced Diagnostics, accessibility review, packaging, and clean-machine validation remain in progress.

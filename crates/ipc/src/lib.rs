@@ -300,6 +300,7 @@ pub enum Status {
     BadRequest,
     Unavailable,
     Internal,
+    PermissionDenied,
 }
 
 impl Status {
@@ -310,6 +311,7 @@ impl Status {
             Status::BadRequest => 2,
             Status::Unavailable => 3,
             Status::Internal => 4,
+            Status::PermissionDenied => 5,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -319,6 +321,7 @@ impl Status {
             2 => Status::BadRequest,
             3 => Status::Unavailable,
             4 => Status::Internal,
+            5 => Status::PermissionDenied,
             _ => return None,
         })
     }
@@ -449,6 +452,20 @@ pub const WARN_ADAPTER_MTU_BELOW_IPV4_MIN: u8 = 5;
 // ------------------------------------------------------------------ encoding
 
 impl Request {
+    /// Whether this request changes machine-wide policy and therefore requires
+    /// an elevated local administrator on the Windows service pipe.
+    pub const fn requires_machine_admin(&self) -> bool {
+        matches!(
+            self,
+            Request::SetFlowRule(_)
+                | Request::RemoveFlowRule { .. }
+                | Request::SetBondMode { .. }
+                | Request::SetDuplicateMode { .. }
+                | Request::SetAllowMetered { .. }
+                | Request::ApplyMachinePolicy { .. }
+        )
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(64);
         match self {
@@ -1025,6 +1042,7 @@ mod tests {
             Response::SelfTest { passed: true, detail: "loopback ok".to_string() },
             Response::SupportBundle(format!("{{\"diagnostic\":\"{}\"}}", "x".repeat(1024))),
             Response::Error { status: Status::Unavailable, message: "no uplink".to_string() },
+            Response::Error { status: Status::PermissionDenied, message: "admin required".to_string() },
         ];
         for resp in responses {
             assert_eq!(Response::decode(&resp.encode()), Some(resp.clone()));
@@ -1063,8 +1081,37 @@ mod tests {
         assert_eq!(Opcode::all().len(), 13);
         assert_eq!(Opcode::GetSupportBundle.as_u8(), 11);
         assert_eq!(Opcode::from_u8(200), None);
-        for s in 0..=4u8 { assert!(Status::from_u8(s).is_some()); }
-        assert_eq!(Status::from_u8(5), None);
+        for s in 0..=5u8 { assert!(Status::from_u8(s).is_some()); }
+        assert_eq!(Status::from_u8(6), None);
+    }
+
+    #[test]
+    fn only_machine_policy_mutations_require_admin_authority() {
+        let mutations = [
+            Request::SetFlowRule(sample_rule()),
+            Request::RemoveFlowRule { id: 100 },
+            Request::SetBondMode { enabled: true },
+            Request::SetDuplicateMode { enabled: true },
+            Request::SetAllowMetered { allowed: true },
+            Request::ApplyMachinePolicy {
+                bond_enabled: true,
+                duplicate_mode: false,
+                allow_metered: false,
+                custom_rules: vec![sample_rule()],
+            },
+        ];
+        assert!(mutations.iter().all(Request::requires_machine_admin));
+
+        let read_only = [
+            Request::Ping,
+            Request::GetStatus,
+            Request::ListUplinks,
+            Request::ListFlowRules,
+            Request::RunSelfTest,
+            Request::SubscribeEvents { interval_hz: 1 },
+            Request::GetSupportBundle,
+        ];
+        assert!(read_only.iter().all(|request| !request.requires_machine_admin()));
     }
 
     impl StatusSnapshot {
