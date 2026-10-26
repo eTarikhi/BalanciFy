@@ -7,6 +7,45 @@ and cellular behind one virtual adapter, with every capability embedded in the
 product — no external apps, services or solutions at runtime; the installer
 provisions the whole working environment (dependency policy rev 2.1).
 
+## Quick start — Windows 11 x64
+
+### Required development tools
+
+- Windows 11 x64 and **Developer PowerShell for Visual Studio 2022**.
+- Visual Studio 2022 (17.x) with **Desktop development with C++**, MSVC v143 x64/x86 tools, and MSBuild.
+- Windows SDK **10.0.26100.0** and WDK **10.0.26100.6584** for the driver build (x64 and ARM64 support).
+- Stable Rust for `x86_64-pc-windows-msvc`, including Cargo.
+- **.NET 10 SDK** and WinUI 3/Windows App SDK tooling; the app restores the pinned `Microsoft.WindowsAppSDK` 2.5.1 package.
+- Python **3.10+** with the `py -3` launcher (CI uses Python 3.12).
+- Git for Windows, including Git Bash (`bash.exe`/`sh`). PowerShell is included with Windows.
+
+WSL, Docker, and Node.js are not required for Windows development. GitHub CLI (`gh`) is optional for local work and is only needed for push/PR automation.
+
+### Build and test
+
+Open Developer PowerShell for VS 2022 at the repository root, then run:
+
+```powershell
+# Fast local checks (does not build Rust, WinUI, or the WDK driver)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1 -Quick
+
+# Full native Windows validation: WinUI, Rust, SBOM, and x64/ARM64 WDK builds
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1
+```
+
+To build and run the WinUI app directly:
+
+```powershell
+cd windows\BalanciFy.App
+dotnet restore
+dotnet build -c Debug -r win-x64
+dotnet run -c Debug -r win-x64
+```
+
+### Local deployment limitation
+
+The local WDK build produces an **unsigned** driver. The installer’s driver/service installation steps are still prototypes, so this repository does not yet provide a supported production installation path. Do not install or load the unsigned driver on your everyday PC; driver deployment/runtime testing requires an isolated Windows VM and separate test-signing setup. See [native Windows development and CI](docs/local-development-and-ci.md) for the detailed checklist and validation limits.
+
 ## Technical blueprint
 
 [`docs/technical-blueprint.md`](docs/technical-blueprint.md) — engineering
