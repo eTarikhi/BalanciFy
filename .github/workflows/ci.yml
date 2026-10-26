@@ -148,10 +148,8 @@ jobs:
       - uses: actions/setup-dotnet@v5.0.0
         with:
           dotnet-version: '10.0.x'
-      - name: Build native WinUI shell
+      - name: Build native WinUI shell and retain result for reporting
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           $logDirectory = Join-Path $env:GITHUB_WORKSPACE 'target/local-ci-windows/logs/winui'
           New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
@@ -159,8 +157,9 @@ jobs:
           & dotnet build windows/BalanciFy.App/BalanciFy.App.csproj --configuration Release --runtime win-x64 2>&1 |
             Tee-Object -FilePath $buildLog
           $buildExitCode = $LASTEXITCODE
+          "BALANCIFY_WINUI_BUILD_EXIT_CODE=$buildExitCode" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
           if ($buildExitCode -ne 0) {
-            $tail = Get-Content -LiteralPath $buildLog -Tail 120 | Out-String
+            $tail = Get-Content -LiteralPath $buildLog -Tail 120 | Out-String -Width 4096
             @"
           ### WinUI build failed (exit code $buildExitCode)
 
@@ -168,16 +167,8 @@ jobs:
           $tail
           ````
           "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
-            $checkRunQuery = ".check_runs[] | select(.name == 'Native MSVC checks (Windows x64)' and (.details_url | contains('/runs/$env:GITHUB_RUN_ID/'))) | .id"
-            $checkRunId = & gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/check-runs" --jq $checkRunQuery
-            if ($LASTEXITCODE -eq 0 -and $checkRunId) {
-              $summary = "### WinUI build failed (exit code $buildExitCode)`n````text`n$tail`n````"
-              & gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/check-runs/$checkRunId" -f "output[title]=WinUI build failure diagnostics" -f "output[summary]=$summary"
-              if ($LASTEXITCODE -ne 0) { Write-Warning 'Could not publish WinUI diagnostics to the check-run summary.' }
-            } else {
-              Write-Warning 'Could not identify the current native MSVC check run for diagnostic publishing.'
-            }
-            exit $buildExitCode
+            $annotation = $tail -replace '%', '%25' -replace '\r', '%0D' -replace '\n', '%0A' -replace ':', '%3A' -replace ',', '%2C'
+            Write-Output "::error title=WinUI build diagnostics::$annotation"
           }
       - name: Run native Windows quick validation with the MSVC developer environment
         shell: pwsh
@@ -206,6 +197,13 @@ jobs:
           path: target/local-ci-windows/logs/**/*.txt
           if-no-files-found: ignore
           retention-days: 7
+      - name: Enforce WinUI build result
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:BALANCIFY_WINUI_BUILD_EXIT_CODE -and $env:BALANCIFY_WINUI_BUILD_EXIT_CODE -ne '0') {
+            exit [int]$env:BALANCIFY_WINUI_BUILD_EXIT_CODE
+          }
 
   core-tests-windows:
     name: Rust workspace tests (windows)

@@ -1,7 +1,7 @@
 # Test coverage — current inventory: 335 Rust tests, what is covered
 
 Date: 2026-10-26
-Status: hosted run `40252472203` at `2ee7904` passed 335 Rust tests on both Ubuntu and Windows, Linux release build, SPDX 2.3/3.0.1 generation/validation, dependency audit, WSL/Linux quick profile, and lab tool tests. The native MSVC job failed at the WinUI build and skipped the native quick profile; WDK x64/ARM64 jobs were still in progress when last inspected. A separate local quick run at source HEAD `f45e08e` with the preference-recovery fix in its worktree passed 5 lab Python, 61 CI Python, 12 portable driver tests, dependency policy and netem safety (logs: `target/local-ci/logs/20261026T011012Z/`); it skips Rust/release/SPDX. Head `12f26f9` CI runs were queued/in progress. Refer to [`../completion-ledger.md`](../completion-ledger.md) for gate status and evidence classes.
+Status: hosted run `40252472203` at `2ee7904` passed 335 Rust tests on both Ubuntu and Windows, Linux release build, SPDX 2.3/3.0.1 generation/validation, dependency audit, WSL/Linux quick profile, and lab tool tests. The native MSVC job failed at the WinUI build and skipped the native quick profile; WDK x64/ARM64 jobs were still in progress when last inspected. A local quick run at source baseline `8cda8bf` with the preference-recovery and diagnostic-workflow edits in its worktree passed 5 lab Python, 61 CI Python, 12 portable driver tests, dependency policy and netem safety (logs: `target/local-ci/logs/20261026T011351Z/`); it skips Rust/release/SPDX. Hosted runs for `12f26f9` were queued/in progress; the newer workflow revision remains untested on Windows. Refer to [`../completion-ledger.md`](../completion-ledger.md) for gate status and evidence classes.
 
 ## Counts
 

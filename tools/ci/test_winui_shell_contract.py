@@ -149,10 +149,18 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("winui-build.txt", workflow)
         self.assertIn("Tee-Object -FilePath $buildLog", workflow)
         self.assertIn("Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY", workflow)
-        self.assertIn("Native MSVC checks (Windows x64)", workflow)
-        self.assertIn("check-runs/$checkRunId", workflow)
-        self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)
+        self.assertIn("BALANCIFY_WINUI_BUILD_EXIT_CODE", workflow)
+        self.assertIn("GITHUB_STEP_SUMMARY", workflow)
+        self.assertIn("::error title=WinUI build diagnostics::", workflow)
+        self.assertIn("Enforce WinUI build result", workflow)
         self.assertIn("target/local-ci-windows/logs/**/*.txt", workflow)
+        build_step = workflow.index("Build native WinUI shell and retain result for reporting")
+        native_quick_step = workflow.index("Run native Windows quick validation with the MSVC developer environment")
+        upload_step = workflow.index("Upload native Windows validation logs")
+        enforcement_step = workflow.index("Enforce WinUI build result")
+        self.assertLess(build_step, native_quick_step)
+        self.assertLess(native_quick_step, upload_step)
+        self.assertLess(upload_step, enforcement_step)
 
 
 if __name__ == "__main__":
