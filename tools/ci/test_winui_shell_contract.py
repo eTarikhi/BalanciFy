@@ -130,6 +130,8 @@ class WinUiShellContractTests(unittest.TestCase):
         self.assertIn("UiPreferencesStore.Delete()", WINDOW)
         self.assertIn("ContentDialogResult.Primary", WINDOW)
         self.assertIn("_preferencesLoadWarning", WINDOW)
+        self.assertIn("IsPreferenceLoadFailure(error)", WINDOW)
+        self.assertIn("error is InvalidDataException", WINDOW)
         self.assertIn('"Saved preferences were ignored"', WINDOW)
         self.assertIn('x:Name="ResetPreferencesButton"', (APP_DIR / "MainWindow.xaml").read_text(encoding="utf-8"))
         self.assertIn("_serviceDisconnected", WINDOW)

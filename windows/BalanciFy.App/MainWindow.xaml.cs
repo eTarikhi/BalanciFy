@@ -55,12 +55,18 @@ public sealed partial class MainWindow : Window
             _hasPreferencesToRestore = _preferences is not null;
             _preferencesSynchronized = !_hasPreferencesToRestore;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        catch (Exception error) when (IsPreferenceLoadFailure(error))
         {
             _preferencesSynchronized = true;
             _preferencesLoadWarning = $"Saved local preferences were ignored: {error.Message}";
         }
     }
+
+    private static bool IsPreferenceLoadFailure(Exception error) =>
+        error is IOException ||
+        error is UnauthorizedAccessException ||
+        error is System.Text.Json.JsonException ||
+        error is InvalidDataException;
 
     private async Task<UiPreferences> ReconcileSavedRulesAsync(UiPreferences preferences, CancellationToken cancellationToken)
     {
