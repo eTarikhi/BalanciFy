@@ -574,9 +574,11 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        // Stop socket reads when the bounded FIFO is full.
+        // Never read another relay datagram while any receive payload remains
+        // pending. A single receiver release is bounded to at most this FIFO's
+        // capacity, so pausing here prevents batch overflow and preserves order.
         for (uplink_id, sock) in [(UplinkId(0), &sock0), (UplinkId(1), &sock1)] {
-            if pending_driver_rx.len() >= MAX_PENDING_DRIVER_RX {
+            if !pending_driver_rx.is_empty() || pending_driver_rx.len() >= MAX_PENDING_DRIVER_RX {
                 break;
             }
             match sock.recv_from(&mut dg) {

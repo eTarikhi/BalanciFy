@@ -38,6 +38,7 @@ class DriverTxBackpressureTests(unittest.TestCase):
         self.assertLess(polling.index("pending_driver_rx.pop_front()"), polling.index("sock.recv_from"))
         self.assertIn("queue_pending_driver_rx(&mut pending_driver_rx, data)?;", polling)
         self.assertIn("Err(error) if is_driver_not_ready(&error)", polling)
+        self.assertIn("!pending_driver_rx.is_empty()", polling)
         self.assertIn("pending_driver_rx.len() >= MAX_PENDING_DRIVER_RX", polling)
         self.assertIn("fn pending_driver_receive_queue_preserves_fifo_and_fails_closed_at_capacity()", SERVICE_BINARY)
 

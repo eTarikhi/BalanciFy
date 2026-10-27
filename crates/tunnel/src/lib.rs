@@ -772,6 +772,7 @@ impl DeficitRoundRobin {
 pub struct ReorderBuffer {
     next_seq: u64,
     hold: BTreeMap<u64, Vec<u8>>,
+    held_bytes: usize,
     cap: Duration,
     stalled_at: Option<Instant>,
     pub released_out_of_order: u64,
@@ -779,22 +780,36 @@ pub struct ReorderBuffer {
 
 impl ReorderBuffer {
     pub fn new(cap: Duration) -> Self {
-        Self { next_seq: 0, hold: BTreeMap::new(), cap, stalled_at: None, released_out_of_order: 0 }
+        Self {
+            next_seq: 0,
+            hold: BTreeMap::new(),
+            held_bytes: 0,
+            cap,
+            stalled_at: None,
+            released_out_of_order: 0,
+        }
     }
     /// Insert a payload; false when it is a duplicate or too late to matter.
     pub fn push(&mut self, seq: u64, payload: Vec<u8>) -> bool {
-        if seq < self.next_seq { return false; } // duplicate/late beyond window
-        self.hold.insert(seq, payload).is_none()
+        if seq < self.next_seq || self.hold.contains_key(&seq) { return false; }
+        self.held_bytes += payload.len();
+        self.hold.insert(seq, payload);
+        true
     }
     /// Next sequence number the buffer is waiting for.
     pub fn next_expected(&self) -> u64 { self.next_seq }
     pub fn held(&self) -> usize { self.hold.len() }
+    pub fn held_bytes(&self) -> usize { self.held_bytes }
+    fn needs_hold(&self, seq: u64) -> bool {
+        seq > self.next_seq && !self.hold.contains_key(&seq)
+    }
 
     /// Release everything deliverable at `now`.
     pub fn pop_ready(&mut self, now: Instant) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         loop {
             if let Some(p) = self.hold.remove(&self.next_seq) {
+                self.held_bytes -= p.len();
                 self.next_seq += 1;
                 self.stalled_at = None;
                 out.push(p);
@@ -805,6 +820,7 @@ impl ReorderBuffer {
             if now.duration_since(stalled) >= self.cap {
                 // cap expiry: skip the gap, release what we have in seq order
                 let (_, p) = self.hold.pop_first().expect("non-empty");
+                self.held_bytes -= p.len();
                 self.released_out_of_order += 1;
                 self.next_seq = self.hold.keys().next().copied().unwrap_or(self.next_seq + 1);
                 out.push(p);
@@ -831,6 +847,7 @@ pub enum DropReason {
     UnknownSession,
     SessionLimit,
     AuthFailed,
+    ReorderLimit,
 }
 
 /// What the receiver wants the I/O adapter to do next.
@@ -849,6 +866,11 @@ pub enum Event {
 
 const REPLAY_WINDOW: u64 = 1024;
 const MAX_PENDING_FLOW_ACKS: usize = 4096;
+// Bound authenticated-but-not-yet-deliverable Data across all sessions. 1023
+// held packets leave room for the missing in-order packet, so one release batch
+// can never exceed the service's 1024-packet inbound retry FIFO.
+const MAX_REORDER_HELD_PACKETS: usize = 1023;
+const MAX_REORDER_HELD_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Default)]
 struct ReplayWindow {
@@ -938,10 +960,22 @@ impl<C: Crypto> Receiver<C> {
     pub fn counters(&self) -> ReceiverCounters { self.counters }
     pub fn sessions(&self) -> usize { self.sessions.len() }
 
-    /// Payloads held for reordering across every session. Exposed because it
-    /// is the memory a peer can make us occupy (Sec.9.1 adversary (b)); the hold
-    /// cap is what bounds it.
-    pub fn held_packets(&self) -> usize { self.sessions.values().map(|s| s.buf.held()).sum() }
+    /// Authenticated Data payloads held for reordering across every session.
+    /// These are bounded globally so an authenticated peer cannot grow the
+    /// reorder buffer without limit while keeping the missing sequence open.
+    pub fn held_packets(&self) -> usize {
+        self.sessions
+            .values()
+            .map(|state| state.buf.held())
+            .fold(0usize, |total, held| total.saturating_add(held))
+    }
+    /// Bytes retained by the global Data reorder buffer.
+    pub fn held_bytes(&self) -> usize {
+        self.sessions
+            .values()
+            .map(|state| state.buf.held_bytes())
+            .fold(0usize, |total, held| total.saturating_add(held))
+    }
     pub fn config(&self) -> &ReceiverConfig { &self.cfg }
     pub fn crypto(&self) -> &C { &self.crypto }
 
@@ -1148,6 +1182,18 @@ impl<C: Crypto> Receiver<C> {
             return vec![Event::Dropped { reason: DropReason::AuthFailed }];
         };
 
+        let needs_hold = self
+            .sessions
+            .get(&hdr.session)
+            .map(|state| state.buf.needs_hold(hdr.seq))
+            .unwrap_or(hdr.seq > 0);
+        if needs_hold
+            && (self.held_packets() >= MAX_REORDER_HELD_PACKETS
+                || plain.len() > MAX_REORDER_HELD_BYTES.saturating_sub(self.held_bytes()))
+        {
+            self.counters.dropped += 1;
+            return vec![Event::Dropped { reason: DropReason::ReorderLimit }];
+        }
         self.accept_authenticated_session(hdr.session, now);
         {
             let state = self.sessions.get_mut(&hdr.session).expect("session accepted above");
@@ -1269,6 +1315,13 @@ mod tests {
         assert_eq!(d.next_with_cost(1400), None, "zero quanta => no path, not a spin");
     }
 
+    fn plain_data_frame(session: u64, seq: u64, payload: &[u8]) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
+        Header::new(FrameKind::Data, 0, session, seq).encode(&mut frame);
+        frame.extend_from_slice(payload);
+        frame
+    }
+
     #[test]
     fn reorder_releases_in_order_and_waits() {
         let mut rb = ReorderBuffer::new(Duration::from_millis(80));
@@ -1282,9 +1335,11 @@ mod tests {
         rb.push(3, b"three".to_vec());
         assert!(rb.pop_ready(t0).is_empty());
         assert_eq!(rb.held(), 1);
+        assert_eq!(rb.held_bytes(), b"three".len());
         rb.push(2, b"two".to_vec());
         let r = rb.pop_ready(t0);
         assert_eq!(r, vec![b"two".to_vec(), b"three".to_vec()]);
+        assert_eq!(rb.held_bytes(), 0);
         assert_eq!(rb.released_out_of_order, 0);
     }
 
@@ -1306,10 +1361,10 @@ mod tests {
     fn reorder_flags_duplicates() {
         let mut rb = ReorderBuffer::new(Duration::from_millis(40));
         let t0 = Instant::now();
-        assert!(rb.push(0, b"a".to_vec()));
-        assert!(!rb.push(0, b"a".to_vec()), "duplicate of a held packet");
-        rb.pop_ready(t0);
-        assert!(!rb.push(0, b"a".to_vec()), "duplicate of a delivered packet");
+        assert!(rb.push(0, b"original".to_vec()));
+        assert!(!rb.push(0, b"replacement".to_vec()), "duplicate of a held packet");
+        assert_eq!(rb.pop_ready(t0), vec![b"original".to_vec()], "a duplicate cannot replace first-seen data");
+        assert!(!rb.push(0, b"late".to_vec()), "duplicate of a delivered packet");
     }
 
     #[test]
@@ -1783,6 +1838,64 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e, Event::Payload { .. })));
         let flow_events = rx.ingest(&flow.bytes, t0);
         assert!(flow_events.iter().any(|e| matches!(e, Event::Payload { data, .. } if data.as_slice() == b"flow")));
+    }
+
+    #[test]
+    fn receiver_bounds_authenticated_reorder_memory_and_keeps_gap_recovery() {
+        let t0 = Instant::now();
+        let mut rx = Receiver::with_defaults(PassThrough);
+        for seq in 1..=MAX_REORDER_HELD_PACKETS as u64 {
+            assert!(rx.ingest(&plain_data_frame(72, seq, b"x"), t0).is_empty());
+        }
+        assert_eq!(rx.held_packets(), MAX_REORDER_HELD_PACKETS);
+        let overflow = rx.ingest(
+            &plain_data_frame(72, MAX_REORDER_HELD_PACKETS as u64 + 1, b"x"),
+            t0,
+        );
+        assert_eq!(overflow, vec![Event::Dropped { reason: DropReason::ReorderLimit }]);
+        assert_eq!(rx.counters().dropped, 1);
+        assert_eq!(rx.held_packets(), MAX_REORDER_HELD_PACKETS);
+
+        // The expected packet bypasses the holding cap, drains the bounded
+        // backlog in order, and produces at most 1024 deliveries for the I/O layer.
+        let recovered = rx.ingest(&plain_data_frame(72, 0, b"gap"), t0);
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|event| matches!(*event, Event::Payload { .. }))
+                .count(),
+            MAX_REORDER_HELD_PACKETS + 1
+        );
+        assert_eq!(rx.held_packets(), 0);
+        assert_eq!(rx.held_bytes(), 0);
+    }
+
+    #[test]
+    fn receiver_bounds_reorder_bytes_across_sessions() {
+        let t0 = Instant::now();
+        let mut rx = Receiver::with_defaults(PassThrough);
+        let half_limit = MAX_REORDER_HELD_BYTES / 2;
+        let payload = vec![0x5a; half_limit];
+        assert!(rx.ingest(&plain_data_frame(73, 1, &payload), t0).is_empty());
+        assert!(rx.ingest(&plain_data_frame(74, 1, &payload), t0).is_empty());
+        assert_eq!(rx.held_bytes(), MAX_REORDER_HELD_BYTES);
+        assert_eq!(
+            rx.ingest(&plain_data_frame(75, 1, b"overflow"), t0),
+            vec![Event::Dropped { reason: DropReason::ReorderLimit }]
+        );
+        assert_eq!(rx.held_packets(), 2);
+        assert_eq!(rx.held_bytes(), MAX_REORDER_HELD_BYTES);
+
+        // Delivering the missing sequence is always allowed and releases bytes.
+        let events = rx.ingest(&plain_data_frame(73, 0, b"gap"), t0);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(*event, Event::Payload { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(rx.held_bytes(), half_limit);
     }
 
     #[test]
