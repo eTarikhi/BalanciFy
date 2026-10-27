@@ -59,32 +59,35 @@ Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/
 ## Development status (audited 2026-10-27)
 
 BalanciFy remains an engineering prototype, not a supported release. PR #20 is
-merged; the active continuation branch is `arena/fb5e8c41-balancify`. The last
-fully green hosted code revision is [`e3e406b`](https://github.com/eTarikhi/BalanciFy/commit/e3e406b0c4e5b5625b9cf614a96389dcb3f9cd6f),
-whose [CI run 40433764565](https://github.com/eTarikhi/BalanciFy/actions/runs/40433764565)
-passed all eight jobs. Code revision [`13c58ff`](https://github.com/eTarikhi/BalanciFy/commit/13c58ff17a3fdd827ac7bf2b5bd406d1f57577ac)
-adds a global authenticated tunnel reorder-memory ceiling. The latest pushed
-code revision [`725693a`](https://github.com/eTarikhi/BalanciFy/commit/725693ae5cd2686a3555a2d9a92f34d099059466)
-prevents Data, FlowData, keepalive, and probe nonce counters from wrapping and
-reusing AEAD nonces. The latest source revision [`773a514`](https://github.com/eTarikhi/BalanciFy/commit/773a514f8e6f999c8215a1ffb73dd4b168780397)
-fixes Data reorder cursor advancement after hold-cap release and reserves the
-terminal sequence. The latest source revision [`2ecd0a6`](https://github.com/eTarikhi/BalanciFy/commit/2ecd0a6eef4534c4f9a827d2cf5d1edd5c1933e4)
-re-emits the latest cumulative ACK for duplicate Data without redelivering it;
-its hosted run `40446661918` was queued at the latest query. Run `40446397772`
-for `773a514` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab,
-dependency checks, and native MSVC; WDK x64/ARM64 were still running. Run `40444831104` for
-`725693a` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab,
-dependency checks, and native MSVC; WDK x64/ARM64 were still in progress. Runs
-`40444227523` and `40444543045` passed Rust tests, Linux release/SPDX, native
-MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress for
-both. Source coverage and proposed exit criteria are
-not substitutes for Windows VM, hardware, signing, review, or field evidence.
-See the [completion ledger](docs/completion-ledger.md) for prioritized work and
-evidence classes.
+merged; the active continuation branch is `arena/fb5e8c41-balancify`. The fully
+green hosted code revision [`2ecd0a6`](https://github.com/eTarikhi/BalanciFy/commit/2ecd0a6eef4534c4f9a827d2cf5d1edd5c1933e4)
+passed all eight jobs in [run 40446661918](https://github.com/eTarikhi/BalanciFy/actions/runs/40446661918).
+The next baseline, `d362369`, passed Ubuntu/Windows Rust tests, Linux
+release/SPDX, native MSVC, WSL, lab, and dependency/crypto checks in run
+`40454112278`; WDK x64/ARM64 were still in progress at the latest query.
+
+The latest pushed source revision
+[`be0cdb0`](https://github.com/eTarikhi/BalanciFy/commit/be0cdb02bdb91f18564c47de95a0b79bcc6325c2)
+fixes bonded Data rate-limit admission ordering: a rejected send no longer
+consumes an ordered Data sequence or leaves retransmission state for a packet
+returned as held. Regression tests cover rejected admission, unchanged sequence
+and in-flight state, then retry on the next sequence. The local quick profile
+passed dependency audit, 5 lab tests, 77 CI Python tests, netem safety, and 12
+portable C tests with strict warnings/ASan/UBSan. That profile skips Rust; Cargo
+and rustfmt are unavailable in this shell. Hosted run `40454764313` has passed
+Ubuntu/Windows Rust workspace tests, WSL, lab, and dependency/crypto jobs;
+native MSVC and WDK x64/ARM64 remain in progress. The run is not complete yet.
+
+Earlier fixes include authenticated reorder-memory bounding (`13c58ff`), nonce
+sequence exhaustion guards (`725693a`), hold-cap release/cursor correctness
+(`773a514`), and cumulative re-ACK of duplicate Data (`2ecd0a6`). Source and
+hosted CI are not substitutes for Windows VM, driver-runtime, hardware, signing,
+review, or field evidence. See the [completion ledger](docs/completion-ledger.md)
+for prioritized work and evidence classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; `13c58ff` bounds authenticated reorder retention. Runs `40444227523` (`13c58ff`) and `40444543045` (`fcfe3f9`) passed Rust tests on Ubuntu and Windows, release/SPDX, native MSVC, WSL, lab and dependency checks. `725693a` adds fail-closed nonce sequence exhaustion guards; run `40444831104` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab and dependency checks, and native MSVC. `773a514` advances the reorder cursor after hold-cap release and rejects the terminal Data sequence; run `40446397772` passed Ubuntu/Windows Rust, Linux release/SPDX, WSL, lab and dependency checks. `2ecd0a6` re-ACKs duplicate Data frames; its run `40446661918` was queued. | WDK x64/ARM64 remained in progress for runs `40444227523`, `40444543045`, `40444831104`, and `40446397772`; native MSVC passed for `40446397772`. No hosted result is yet inferred for `2ecd0a6`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. `13c58ff` bounds authenticated reorder retention; `725693a` prevents nonce sequence wraparound; `773a514` fixes hold-cap reorder cursor advancement and terminal-sequence rejection; `2ecd0a6` re-ACKs duplicate Data, with all eight jobs green in run `40446661918`. Run `40454112278` at `d362369` passed Ubuntu/Windows Rust tests, release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 were still in progress at the latest query. `be0cdb0` moves bonded Data rate-limit admission before sequence/retransmission allocation; local quick CI passed; Ubuntu/Windows Rust workspace, WSL, lab, and dependency/crypto jobs passed in run `40454764313`, while native MSVC and WDK remain in progress. | Run `40454764313` is still in progress; its Ubuntu/Windows Rust, WSL, lab, and dependency/crypto jobs passed, while native MSVC and WDK remain in progress. WDK x64/ARM64 were still running on `40454112278`; production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
