@@ -59,21 +59,21 @@ Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/
 ## Development status (audited 2026-10-27)
 
 BalanciFy remains an engineering prototype, not a supported release. PR #20 is
-merged; the active continuation branch is `arena/fb5e8c41-balancify`. The last
-fully green hosted revision is [`e3e406b`](https://github.com/eTarikhi/BalanciFy/commit/e3e406b0c4e5b5625b9cf614a96389dcb3f9cd6f),
+merged; the active continuation branch is `arena/fb5e8c41-balancify`. The last fully green hosted code revision is [`e3e406b`](https://github.com/eTarikhi/BalanciFy/commit/e3e406b0c4e5b5625b9cf614a96389dcb3f9cd6f),
 whose [CI run 40433764565](https://github.com/eTarikhi/BalanciFy/actions/runs/40433764565)
-passed all eight jobs. The newer pushed revision [`13c58ff`](https://github.com/eTarikhi/BalanciFy/commit/13c58ff17a3fdd827ac7bf2b5bd406d1f57577ac)
-adds a global authenticated tunnel reorder-memory ceiling. In its CI run
-`40444227523`, Linux/Windows Rust tests, release build/SPDX checks, WSL, lab, and
-dependency audit have passed; native MSVC and WDK x64/ARM64 were still running at
-the latest query. Source coverage and proposed exit criteria
+passed all eight jobs. Code revision [`13c58ff`](https://github.com/eTarikhi/BalanciFy/commit/13c58ff17a3fdd827ac7bf2b5bd406d1f57577ac)
+adds a global authenticated tunnel reorder-memory ceiling. In run
+`40444227523`, Linux/Windows Rust tests, release/SPDX checks, native MSVC, WSL,
+lab, and dependency audit passed; WDK x64/ARM64 were still running at the latest
+query. Current branch tip `4471048` only refreshes status documentation; its CI
+run was queued at the latest query. Source coverage and proposed exit criteria
 are not substitutes for Windows VM, hardware, signing, review, or field
 evidence. See the [completion ledger](docs/completion-ledger.md) for prioritized
 work and evidence classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; the current `13c58ff` patch bounds authenticated reorder retention. In run `40444227523`, Rust tests passed on Ubuntu and Windows, as did release/SPDX, WSL, lab and dependency checks. | At the latest query native MSVC and WDK x64/ARM64 were still running for `13c58ff`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; the current `13c58ff` patch bounds authenticated reorder retention. In run `40444227523`, Rust tests passed on Ubuntu and Windows, as did release/SPDX, native MSVC, WSL, lab and dependency checks. | At the latest query WDK x64/ARM64 remained in progress for `13c58ff`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
@@ -87,8 +87,9 @@ Actions (HTTP 404); deployment is not claimed. Latest local quick CI on the
 portable C tests with strict warnings, ASan, and UBSan. The quick profile skips
 Rust tests, release build, and SPDX validation; local Cargo/Rust tools are not
 available here. For `13c58ff`, the hosted Linux/Windows Rust and release/SPDX
-checks passed, while native MSVC and WDK x64/ARM64 were still in progress at the
-latest query.
+checks and native MSVC passed, while WDK x64/ARM64 were still in progress at
+the latest query. The documentation-only tip `4471048` had a new workflow run
+queued.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
