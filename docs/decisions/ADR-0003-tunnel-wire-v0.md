@@ -73,7 +73,12 @@ that never asked to be bonded.
   is removed on ACK, path loss, sleep/resume, or local rate-limit hold.
 - Every finite per-kind nonce sequence (Data, FlowData, Keepalive, Probe) must
   fail closed before integer wrap. Exhaustion cannot reset or reuse a sequence;
-  the sender stops emitting that frame kind under the current key.
+  the sender stops emitting that frame kind under the current key. Data sequence
+  `u64::MAX` is reserved because the ordered receiver must represent the next
+  expected value; receivers reject it after authentication.
+- When hold-cap expiry releases a gap-delayed Data packet, the receiver advances
+  past that packet's actual sequence even if no later packet is buffered. This
+  prevents a later retransmission from being delivered twice.
 - The service authenticates and replay-checks FlowAck before recording the
   acknowledged payload bytes for capacity estimation. Wire version 2 explicitly
   rejects v1 peers rather than silently losing ACK-based capacity samples.

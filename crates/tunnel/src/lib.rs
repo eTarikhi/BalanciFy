@@ -792,9 +792,11 @@ impl ReorderBuffer {
             released_out_of_order: 0,
         }
     }
-    /// Insert a payload; false when it is a duplicate or too late to matter.
+    /// Insert a payload; false for a duplicate, late, or reserved terminal sequence.
     pub fn push(&mut self, seq: u64, payload: Vec<u8>) -> bool {
-        if seq < self.next_seq || self.hold.contains_key(&seq) { return false; }
+        // The terminal value is reserved: the receiver must always be able to
+        // represent the next expected sequence without wrapping.
+        if seq == u64::MAX || seq < self.next_seq || self.hold.contains_key(&seq) { return false; }
         self.held_bytes += payload.len();
         self.hold.insert(seq, payload);
         true
@@ -822,10 +824,15 @@ impl ReorderBuffer {
             let stalled = *self.stalled_at.get_or_insert(now);
             if now.duration_since(stalled) >= self.cap {
                 // cap expiry: skip the gap, release what we have in seq order
-                let (_, p) = self.hold.pop_first().expect("non-empty");
+                let (released_seq, p) = self.hold.pop_first().expect("non-empty");
                 self.held_bytes -= p.len();
                 self.released_out_of_order += 1;
-                self.next_seq = self.hold.keys().next().copied().unwrap_or(self.next_seq + 1);
+                self.next_seq = self
+                    .hold
+                    .keys()
+                    .next()
+                    .copied()
+                    .unwrap_or_else(|| released_seq.saturating_add(1));
                 out.push(p);
                 self.stalled_at = None;
                 continue;
@@ -851,6 +858,7 @@ pub enum DropReason {
     SessionLimit,
     AuthFailed,
     ReorderLimit,
+    SequenceExhausted,
 }
 
 /// What the receiver wants the I/O adapter to do next.
@@ -1184,6 +1192,12 @@ impl<C: Crypto> Receiver<C> {
             self.counters.dropped += 1;
             return vec![Event::Dropped { reason: DropReason::AuthFailed }];
         };
+        // The receiver cannot advance past u64::MAX without wrapping. Sender
+        // counters reserve this value; reject it here as a final guard for peers.
+        if hdr.seq == u64::MAX {
+            self.counters.dropped += 1;
+            return vec![Event::Dropped { reason: DropReason::SequenceExhausted }];
+        }
 
         let needs_hold = self
             .sessions
@@ -1358,6 +1372,20 @@ mod tests {
         assert_eq!(r, vec![b"one".to_vec(), b"two".to_vec()]);
         assert_eq!(rb.released_out_of_order, 1);
         assert!(rb.pop_ready(t0 + Duration::from_millis(46)).is_empty());
+    }
+
+    #[test]
+    fn hold_cap_release_advances_past_released_packet_and_suppresses_replay() {
+        let mut rb = ReorderBuffer::new(Duration::from_millis(40));
+        let t0 = Instant::now();
+        assert!(rb.push(5, b"five".to_vec()));
+        assert!(rb.pop_ready(t0).is_empty());
+
+        assert_eq!(rb.pop_ready(t0 + Duration::from_millis(45)), vec![b"five".to_vec()]);
+        assert_eq!(rb.next_expected(), 6, "the delivered out-of-order sequence is retired");
+        assert!(!rb.push(5, b"replay".to_vec()), "a released packet cannot be delivered again");
+        assert!(!rb.push(u64::MAX, b"terminal".to_vec()), "the terminal sequence is reserved");
+        assert!(rb.pop_ready(t0 + Duration::from_millis(90)).is_empty());
     }
 
     #[test]
@@ -1828,6 +1856,39 @@ mod tests {
         let (ph, _) = Header::decode(&echoed[0]).unwrap();
         assert_eq!(ph.kind, FrameKind::ProbeReply);
         assert_eq!(ph.seq, probe.seq);
+    }
+
+    #[test]
+    fn receiver_does_not_redeliver_last_packet_released_by_hold_cap() {
+        let cfg = ReceiverConfig { hold_cap: Duration::from_millis(40), ..ReceiverConfig::default() };
+        let mut rx = Receiver::new(PassThrough, cfg);
+        let now = Instant::now();
+        let mut tx = Sender::new(87, PassThrough, vec![(0, 1000)]);
+        let _lost = tx.send(b"lost zero", now).unwrap();
+        let delayed = tx.send(b"delayed one", now).unwrap();
+
+        assert!(rx.ingest(&delayed.bytes, now).is_empty());
+        let released = rx.drain(now + Duration::from_millis(45));
+        assert!(released.iter().any(|event| matches!(event, Event::Payload { data, .. } if data.as_slice() == b"delayed one")));
+        assert_eq!(rx.counters().delivered, 1);
+
+        let replay = rx.ingest(&delayed.bytes, now + Duration::from_millis(46));
+        assert!(!replay.iter().any(|event| matches!(event, Event::Payload { .. })), "a cap-released frame cannot reach the inner stack twice");
+        assert_eq!(rx.counters().delivered, 1);
+        assert_eq!(rx.counters().duplicates, 1);
+    }
+
+    #[test]
+    fn receiver_rejects_terminal_data_sequence_without_allocating_session() {
+        let mut rx = Receiver::with_defaults(PassThrough);
+        let now = Instant::now();
+        let terminal = plain_data_frame(88, u64::MAX, b"reserved");
+        assert_eq!(
+            rx.ingest(&terminal, now),
+            vec![Event::Dropped { reason: DropReason::SequenceExhausted }],
+        );
+        assert_eq!(rx.sessions(), 0, "terminal sequence cannot allocate receiver state");
+        assert_eq!(rx.counters().dropped, 1);
     }
 
     #[test]
