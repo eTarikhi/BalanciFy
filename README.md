@@ -66,17 +66,18 @@ passed all eight jobs. Code revision [`13c58ff`](https://github.com/eTarikhi/Bal
 adds a global authenticated tunnel reorder-memory ceiling. The latest pushed
 code revision [`725693a`](https://github.com/eTarikhi/BalanciFy/commit/725693ae5cd2686a3555a2d9a92f34d099059466)
 prevents Data, FlowData, keepalive, and probe nonce counters from wrapping and
-reusing AEAD nonces; hosted run `40444831104` was queued at the latest query.
-Runs `40444227523` and `40444543045` passed Rust tests, Linux release/SPDX,
-native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress
-for both. Source coverage and proposed exit criteria are not substitutes for
+reusing AEAD nonces. Its hosted run `40444831104` passed Ubuntu/Windows Rust
+tests, Linux release/SPDX, WSL, lab, and dependency checks; native MSVC and WDK
+x64/ARM64 were still in progress at the latest query. Runs `40444227523` and
+`40444543045` passed Rust tests, Linux release/SPDX, native MSVC, WSL, lab, and
+dependency checks; WDK x64/ARM64 remained in progress for both. Source coverage and proposed exit criteria are not substitutes for
 Windows VM, hardware, signing, review, or field evidence. See the
 [completion ledger](docs/completion-ledger.md) for prioritized work and evidence
 classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; `13c58ff` bounds authenticated reorder retention. Runs `40444227523` (`13c58ff`) and `40444543045` (`fcfe3f9`) passed Rust tests on Ubuntu and Windows, release/SPDX, native MSVC, WSL, lab and dependency checks. `725693a` adds fail-closed nonce sequence exhaustion guards; its CI run `40444831104` was queued at the latest query. | WDK x64/ARM64 remained in progress for runs `40444227523` and `40444543045`; no results are inferred for queued run `40444831104`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; `13c58ff` bounds authenticated reorder retention. Runs `40444227523` (`13c58ff`) and `40444543045` (`fcfe3f9`) passed Rust tests on Ubuntu and Windows, release/SPDX, native MSVC, WSL, lab and dependency checks. `725693a` adds fail-closed nonce sequence exhaustion guards; run `40444831104` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab and dependency checks. | WDK x64/ARM64 remained in progress for runs `40444227523` and `40444543045`; native MSVC and WDK x64/ARM64 were still running for `40444831104`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
@@ -92,8 +93,10 @@ exhaustion change, `python3 -m unittest discover -s tools/ci -v` passed all 77
 Python tests and `git diff --check` passed; local Cargo/Rust tools are not
 available here. For `13c58ff` and documentation tip `fcfe3f9`, hosted Ubuntu and
 Windows Rust tests, Linux release/SPDX, native MSVC, WSL, lab and dependency
-audits passed; WDK x64/ARM64 remained in progress at the latest query. CI for
-code tip `725693a` was queued as run `40444831104`.
+audits passed for the earlier revisions; WDK x64/ARM64 remained in progress at
+the latest query. For code tip `725693a`, run `40444831104` passed Ubuntu and
+Windows Rust tests, Linux release/SPDX, WSL, lab and dependency checks; native
+MSVC and WDK x64/ARM64 were still running.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
