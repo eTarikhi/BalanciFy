@@ -68,19 +68,21 @@ code revision [`725693a`](https://github.com/eTarikhi/BalanciFy/commit/725693ae5
 prevents Data, FlowData, keepalive, and probe nonce counters from wrapping and
 reusing AEAD nonces. The latest source revision [`773a514`](https://github.com/eTarikhi/BalanciFy/commit/773a514f8e6f999c8215a1ffb73dd4b168780397)
 fixes Data reorder cursor advancement after hold-cap release and reserves the
-terminal sequence; its hosted run `40446397772` was queued at the latest query.
-Run `40444831104` for `725693a` passed Ubuntu/Windows Rust tests, Linux
-release/SPDX, WSL, lab, dependency checks, and native MSVC; WDK x64/ARM64 were
-still in progress. Runs `40444227523` and `40444543045` passed Rust tests, Linux
-release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64
-remained in progress for both. Source coverage and proposed exit criteria are
+terminal sequence. Its hosted run `40446397772` passed Ubuntu/Windows Rust tests,
+Linux release/SPDX, WSL, lab, and dependency checks; native MSVC and WDK
+x64/ARM64 were still running at the latest query. Run `40444831104` for
+`725693a` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab,
+dependency checks, and native MSVC; WDK x64/ARM64 were still in progress. Runs
+`40444227523` and `40444543045` passed Rust tests, Linux release/SPDX, native
+MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress for
+both. Source coverage and proposed exit criteria are
 not substitutes for Windows VM, hardware, signing, review, or field evidence.
 See the [completion ledger](docs/completion-ledger.md) for prioritized work and
 evidence classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; `13c58ff` bounds authenticated reorder retention. Runs `40444227523` (`13c58ff`) and `40444543045` (`fcfe3f9`) passed Rust tests on Ubuntu and Windows, release/SPDX, native MSVC, WSL, lab and dependency checks. `725693a` adds fail-closed nonce sequence exhaustion guards; run `40444831104` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab and dependency checks, and native MSVC. `773a514` advances the reorder cursor after hold-cap release and rejects the terminal Data sequence; its run `40446397772` was queued at the latest query. | WDK x64/ARM64 remained in progress for runs `40444227523`, `40444543045`, and `40444831104`; no validation result is yet inferred for `773a514`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; `13c58ff` bounds authenticated reorder retention. Runs `40444227523` (`13c58ff`) and `40444543045` (`fcfe3f9`) passed Rust tests on Ubuntu and Windows, release/SPDX, native MSVC, WSL, lab and dependency checks. `725693a` adds fail-closed nonce sequence exhaustion guards; run `40444831104` passed Ubuntu/Windows Rust tests, Linux release/SPDX, WSL, lab and dependency checks, and native MSVC. `773a514` advances the reorder cursor after hold-cap release and rejects the terminal Data sequence; run `40446397772` passed Ubuntu/Windows Rust, Linux release/SPDX, WSL, lab and dependency checks. | WDK x64/ARM64 remained in progress for runs `40444227523`, `40444543045`, `40444831104`, and `40446397772`; native MSVC was still running for `40446397772`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
@@ -102,8 +104,9 @@ Windows Rust tests, Linux release/SPDX, WSL, lab and dependency checks, plus
 native MSVC; WDK x64/ARM64 were still running. After the reorder-cursor fix,
 all 77 local CI Python tests and the quick profile passed (5 lab tests, netem
 safety, and 12 portable C tests with strict warnings/ASan/UBSan); the quick
-profile does not compile Rust, and hosted run `40446397772` was queued for the
-new Rust tests.
+profile does not compile Rust. Hosted run `40446397772` passed Ubuntu/Windows
+Rust, Linux release/SPDX, WSL, lab, and dependency checks; native MSVC and WDK
+x64/ARM64 were still in progress.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
