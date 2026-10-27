@@ -37,7 +37,9 @@ static inline int BalancifyTxQueueCanEnqueue(
     size_t packetCount) {
     return queue && queue->head < BALANCIFY_TX_QUEUE_CAPACITY &&
         queue->count <= BALANCIFY_TX_QUEUE_CAPACITY &&
-        packetCount <= BALANCIFY_TX_QUEUE_CAPACITY - queue->count;
+        packetCount <= BALANCIFY_TX_QUEUE_CAPACITY - queue->count &&
+        queue->nextSequence != 0 &&
+        (unsigned long long)packetCount <= (~0ULL - queue->nextSequence);
 }
 
 static inline BALANCIFY_TX_PACKET_SLOT *BalancifyTxQueueReserveSlot(

@@ -102,9 +102,44 @@ static void test_reject_invalid_batch_sizes(void) {
     assert(queue.count == 0);
 }
 
+static void test_sequence_exhaustion_fails_closed(void) {
+    BALANCIFY_TX_PACKET_QUEUE queue;
+    BALANCIFY_TX_PACKET_SLOT *slot;
+    const BALANCIFY_TX_PACKET_SLOT *head;
+
+    BalancifyTxQueueInitialize(&queue);
+    queue.nextSequence = UINT64_MAX - 1u;
+    assert(!BalancifyTxQueueCanEnqueue(&queue, 2));
+    assert(!BalancifyTxQueueCommit(&queue, 2));
+    assert(BalancifyTxQueueCanEnqueue(&queue, 1));
+    slot = BalancifyTxQueueReserveSlot(&queue, 0, 1);
+    assert(slot != NULL);
+    slot->length = 1;
+    slot->bytes[0] = 0x45;
+    slot->sequence = queue.nextSequence;
+    assert(BalancifyTxQueueCommit(&queue, 1));
+    head = BalancifyTxQueuePeek(&queue);
+    assert(head != NULL && head->sequence == UINT64_MAX - 1u);
+    assert(queue.nextSequence == UINT64_MAX);
+
+    // Exhaustion must reject new records rather than wrap IDs back to zero.
+    assert(!BalancifyTxQueueCanEnqueue(&queue, 1));
+    assert(BalancifyTxQueueReserveSlot(&queue, 0, 1) == NULL);
+    assert(!BalancifyTxQueueCommit(&queue, 1));
+    assert(queue.count == 1);
+    assert(BalancifyTxQueuePop(&queue));
+    assert(queue.count == 0);
+    assert(!BalancifyTxQueueCanEnqueue(&queue, 1));
+
+    // A zero next-sequence value is an invalid/corrupt queue state as well.
+    queue.nextSequence = 0;
+    assert(!BalancifyTxQueueCanEnqueue(&queue, 1));
+}
+
 int main(void) {
     test_empty_and_atomic_batch();
     test_capacity_and_fifo_wraparound();
     test_reject_invalid_batch_sizes();
+    test_sequence_exhaustion_fails_closed();
     return 0;
 }

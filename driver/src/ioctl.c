@@ -137,6 +137,16 @@ VOID BalancifyEvtIoDeviceControl(
     PVOID inputBuffer = NULL;
     PVOID outputBuffer = NULL;
 
+    // WDF exposes the named control device before NDIS initialization finishes.
+    // Reject requests until the miniport has published all general attributes.
+    NdisAcquireSpinLock(&adapter->lock);
+    if (!adapter->initialized) {
+        NdisReleaseSpinLock(&adapter->lock);
+        WdfRequestCompleteWithInformation(request, STATUS_DEVICE_NOT_READY, 0);
+        return;
+    }
+    NdisReleaseSpinLock(&adapter->lock);
+
     // Length validation: all IOCTLs use METHOD_BUFFERED, so buffers are in request
     switch (ioControlCode) {
     case IOCTL_BALANCIFY_SET_MTU: {
@@ -190,16 +200,18 @@ VOID BalancifyEvtIoDeviceControl(
     }
     case IOCTL_BALANCIFY_INJECT_NBL: {
         ULONG mtu;
+        ULONG packetFilter;
         BOOLEAN paused;
         BOOLEAN canIndicate;
 
-        // The public miniport MTU is the maximum raw IP packet length. Snapshot
-        // it under the same lock used by SET_MTU and the miniport OID callbacks.
+        // Snapshot MTU, pause state and the receive filter together. A zero
+        // packet filter means NDIS has not enabled receive traffic yet.
         NdisAcquireSpinLock(&adapter->lock);
         mtu = adapter->mtu;
+        packetFilter = adapter->packetFilter;
         paused = (BOOLEAN)adapter->pauseState.paused;
         NdisReleaseSpinLock(&adapter->lock);
-        if (paused) {
+        if (paused || packetFilter == 0) {
             status = STATUS_DEVICE_NOT_READY;
             break;
         }
@@ -269,7 +281,9 @@ VOID BalancifyEvtIoDeviceControl(
 
         NdisAcquireSpinLock(&adapter->lock);
         paused = (BOOLEAN)adapter->pauseState.paused;
-        canIndicate = BalancifyTrackReceiveIndication(&adapter->pauseState) ? TRUE : FALSE;
+        packetFilter = adapter->packetFilter;
+        canIndicate = (packetFilter != 0 &&
+            BalancifyTrackReceiveIndication(&adapter->pauseState)) ? TRUE : FALSE;
         if (canIndicate) {
             adapter->rxPackets++;
             adapter->rxBytes += inputBufferLength;
@@ -280,7 +294,9 @@ VOID BalancifyEvtIoDeviceControl(
             NdisFreeNetBufferList(nbl);
             NdisFreeMdl(mdl);
             NdisFreeMemory(packetCopy, (ULONG)inputBufferLength, 0);
-            status = paused ? STATUS_DEVICE_NOT_READY : STATUS_INSUFFICIENT_RESOURCES;
+            status = (paused || packetFilter == 0)
+                ? STATUS_DEVICE_NOT_READY
+                : STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
 

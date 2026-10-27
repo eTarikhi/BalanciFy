@@ -9,12 +9,12 @@ RUNNER = ROOT / "tools/ci/local-ci.sh"
 class LocalCiRunnerTests(unittest.TestCase):
     def test_help_documents_full_quick_and_push_modes(self):
         result = subprocess.run(
-            ["bash", str(RUNNER), "--help"],
+            ["bash", "tools/ci/local-ci.sh", "--help"],
             cwd=ROOT,
             capture_output=True,
             text=True,
-            check=True,
         )
+        self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
         self.assertIn("--quick", result.stdout)
         self.assertIn("--push", result.stdout)
         self.assertIn("Does not create commits or force-push", result.stdout)

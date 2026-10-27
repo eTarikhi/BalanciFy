@@ -28,10 +28,13 @@ class LinkCollector(HTMLParser):
 
 class DocsSiteTests(unittest.TestCase):
     def test_pages_artifact_contains_expected_site_and_visuals(self):
-        with tempfile.TemporaryDirectory(prefix="balancify-site-test-") as temporary:
+        temporary_root = ROOT / "target"
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="balancify-site-test-", dir=temporary_root) as temporary:
             output = Path(temporary) / "published"
+            output_argument = output.relative_to(ROOT).as_posix()
             subprocess.run(
-                ["sh", str(ROOT / "tools/ci/build-docs-site.sh"), str(output)],
+                ["sh", "tools/ci/build-docs-site.sh", output_argument],
                 cwd=ROOT,
                 check=True,
             )

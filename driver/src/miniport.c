@@ -80,7 +80,13 @@ static ULONG MiniportReadConfiguredMtu(NDIS_HANDLE miniportAdapterHandle) {
 static VOID MiniportFreeAdapter(PBALANCIFY_ADAPTER adapter) {
     if (!adapter) return;
     if (adapter->controlDevice) {
-        WDFQUEUE queue = WdfDeviceGetDefaultQueue(adapter->controlDevice);
+        WDFQUEUE queue;
+        // The named control device can be opened as soon as WDF finishes it.
+        // Disable its gate before purging so no request starts new adapter work.
+        NdisAcquireSpinLock(&adapter->lock);
+        adapter->initialized = FALSE;
+        NdisReleaseSpinLock(&adapter->lock);
+        queue = WdfDeviceGetDefaultQueue(adapter->controlDevice);
         // Halt and failed initialization run at PASSIVE_LEVEL. Stop dispatch and
         // wait for any active control request before releasing its adapter.
         if (queue) WdfIoQueuePurgeSynchronously(queue);
@@ -290,6 +296,12 @@ NDIS_STATUS MiniportInitializeEx(
         goto InitializeFailure;
     }
 
+    // The WDF control device is visible before general attributes are set.
+    // Publish readiness only after NDIS accepts the complete adapter contract.
+    NdisAcquireSpinLock(&adapter->lock);
+    adapter->initialized = TRUE;
+    NdisReleaseSpinLock(&adapter->lock);
+
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
         "Balancify: MiniportInitializeEx mtu=%lu\n", adapter->mtu));
     return NDIS_STATUS_SUCCESS;
@@ -436,8 +448,13 @@ VOID MiniportSendNetBufferLists(
 
         // A successful completion means the raw-IP packets were atomically
         // accepted into the bounded service queue. Full or malformed batches
-        // fail without exposing a partial NBL chain to user mode.
-        NET_BUFFER_LIST_STATUS(curr) = MiniportQueueNetBufferList(adapter, curr);
+        // fail without exposing a partial NBL chain to user mode. If pause
+        // accounting saturated, fail closed without publishing untracked work.
+        if (tracked) {
+            NET_BUFFER_LIST_STATUS(curr) = MiniportQueueNetBufferList(adapter, curr);
+        } else {
+            NET_BUFFER_LIST_STATUS(curr) = NDIS_STATUS_RESOURCES;
+        }
 
         if (sendFlags & NDIS_SEND_FLAGS_DISPATCH_LEVEL) {
             NdisMSendNetBufferListsComplete(adapter->miniportAdapterHandle, curr, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);

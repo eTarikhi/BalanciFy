@@ -34,6 +34,7 @@ typedef struct _BALANCIFY_ADAPTER {
     WDFDEVICE controlDevice;
     NDIS_SPIN_LOCK lock;
     BALANCIFY_NDIS_PAUSE_STATE pauseState;
+    BOOLEAN initialized;
     ULONG mtu;
     ULONG lookaheadSize;
     ULONG packetFilter;

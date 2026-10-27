@@ -9,12 +9,12 @@ WORKFLOW = ROOT / "tools/ci/pr-workflow.sh"
 class PrWorkflowTests(unittest.TestCase):
     def test_help_describes_validation_pr_and_opt_in_merge(self):
         result = subprocess.run(
-            ["bash", str(WORKFLOW), "--help"],
+            ["bash", "tools/ci/pr-workflow.sh", "--help"],
             cwd=ROOT,
             capture_output=True,
             text=True,
-            check=True,
         )
+        self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
         self.assertIn("--merge", result.stdout)
         self.assertIn("leave the PR open", result.stdout)
         self.assertIn("local software CI suite", result.stdout)
