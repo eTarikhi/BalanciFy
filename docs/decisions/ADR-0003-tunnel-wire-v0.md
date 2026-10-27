@@ -37,7 +37,9 @@ that never asked to be bonded.
    counted as loss on the original path, which is what feeds the §6.3 score.
 5. **Duplicate mode (§6.4 rule 5)** reuses the same sequence number on a second
    path with `FLAG_DUPLICATE`; the receiver deduplicates by sequence, so the
-   inner stack sees one packet.
+   inner stack sees one packet. If a previously delivered Data sequence is
+   received again, the receiver repeats its latest cumulative ACK without
+   redelivering the payload, covering loss of the original ACK.
 6. **Verification before buffering:** a frame that fails the AEAD check is
    dropped before it can occupy reorder-buffer memory (§9.1 adversary (b)).
 7. **Hold-cap release needs a timer tick.** `Receiver::drain(now)` is part of

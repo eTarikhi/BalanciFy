@@ -1222,7 +1222,12 @@ impl<C: Crypto> Receiver<C> {
             // packet twice, once here and once in the reorder buffer.)
             if !state.buf.push(hdr.seq, plain) {
                 self.counters.duplicates += 1;
-                return Vec::new(); // duplicate of a held or already-delivered packet
+                // A duplicate may be a reinjection after the original ACK was
+                // lost. Repeat the latest cumulative edge without redelivering.
+                return state
+                    .last_acked
+                    .map(|seq| vec![Event::Ack { session: hdr.session, path: hdr.path, seq }])
+                    .unwrap_or_default();
             }
             state.last_activity = now;
             state.last_path = hdr.path;
@@ -1856,6 +1861,29 @@ mod tests {
         let (ph, _) = Header::decode(&echoed[0]).unwrap();
         assert_eq!(ph.kind, FrameKind::ProbeReply);
         assert_eq!(ph.seq, probe.seq);
+    }
+
+    #[test]
+    fn receiver_reacks_duplicate_data_without_redelivering() {
+        let mut tx = Sender::new(86, PassThrough, vec![(0, 1000), (1, 1000)]);
+        let mut rx = Receiver::with_defaults(PassThrough);
+        let now = Instant::now();
+        let original = tx.send(b"ack recovery", now).unwrap();
+        let duplicate_path = if original.path == 0 { 1 } else { 0 };
+        let duplicate = tx.duplicate(b"ack recovery", original.seq, duplicate_path).unwrap();
+
+        let original_events = rx.ingest(&original.bytes, now);
+        assert!(original_events.iter().any(|event| matches!(event, Event::Payload { .. })));
+        assert!(original_events.iter().any(|event| matches!(event, Event::Ack { seq, .. } if *seq == original.seq)));
+
+        let replay_events = rx.ingest(&duplicate.bytes, now + Duration::from_millis(1));
+        assert_eq!(
+            replay_events,
+            vec![Event::Ack { session: 86, path: duplicate_path, seq: original.seq }],
+            "duplicate data repeats the last cumulative ACK but is not delivered twice",
+        );
+        assert_eq!(rx.counters().delivered, 1);
+        assert_eq!(rx.counters().duplicates, 1);
     }
 
     #[test]
