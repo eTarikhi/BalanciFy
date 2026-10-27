@@ -59,21 +59,24 @@ Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/
 ## Development status (audited 2026-10-27)
 
 BalanciFy remains an engineering prototype, not a supported release. PR #20 is
-merged; the active continuation branch is `arena/fb5e8c41-balancify`. The last fully green hosted code revision is [`e3e406b`](https://github.com/eTarikhi/BalanciFy/commit/e3e406b0c4e5b5625b9cf614a96389dcb3f9cd6f),
+merged; the active continuation branch is `arena/fb5e8c41-balancify`. The last
+fully green hosted code revision is [`e3e406b`](https://github.com/eTarikhi/BalanciFy/commit/e3e406b0c4e5b5625b9cf614a96389dcb3f9cd6f),
 whose [CI run 40433764565](https://github.com/eTarikhi/BalanciFy/actions/runs/40433764565)
 passed all eight jobs. Code revision [`13c58ff`](https://github.com/eTarikhi/BalanciFy/commit/13c58ff17a3fdd827ac7bf2b5bd406d1f57577ac)
-adds a global authenticated tunnel reorder-memory ceiling. In run
-`40444227523`, Linux/Windows Rust tests, release/SPDX checks, native MSVC, WSL,
-lab, and dependency audit passed; WDK x64/ARM64 were still running at the latest
-query. Current branch tip `4471048` only refreshes status documentation; its CI
-run was queued at the latest query. Source coverage and proposed exit criteria
-are not substitutes for Windows VM, hardware, signing, review, or field
-evidence. See the [completion ledger](docs/completion-ledger.md) for prioritized
-work and evidence classes.
+adds a global authenticated tunnel reorder-memory ceiling. The latest pushed
+code revision [`725693a`](https://github.com/eTarikhi/BalanciFy/commit/725693ae5cd2686a3555a2d9a92f34d099059466)
+prevents Data, FlowData, keepalive, and probe nonce counters from wrapping and
+reusing AEAD nonces; hosted run `40444831104` was queued at the latest query.
+Runs `40444227523` and `40444543045` passed Rust tests, Linux release/SPDX,
+native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress
+for both. Source coverage and proposed exit criteria are not substitutes for
+Windows VM, hardware, signing, review, or field evidence. See the
+[completion ledger](docs/completion-ledger.md) for prioritized work and evidence
+classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; the current `13c58ff` patch bounds authenticated reorder retention. In run `40444227523`, Rust tests passed on Ubuntu and Windows, as did release/SPDX, native MSVC, WSL, lab and dependency checks. | At the latest query WDK x64/ARM64 remained in progress for `13c58ff`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; `13c58ff` bounds authenticated reorder retention. Runs `40444227523` (`13c58ff`) and `40444543045` (`fcfe3f9`) passed Rust tests on Ubuntu and Windows, release/SPDX, native MSVC, WSL, lab and dependency checks. `725693a` adds fail-closed nonce sequence exhaustion guards; its CI run `40444831104` was queued at the latest query. | WDK x64/ARM64 remained in progress for runs `40444227523` and `40444543045`; no results are inferred for queued run `40444831104`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
@@ -82,14 +85,15 @@ work and evidence classes.
 The former native-Windows Python path failures are resolved in hosted CI run
 `40433764565`. The Pages workflow's site build passed in run `40377552901`, but
 GitHub's `Setup Pages` step reported that Pages is not enabled/configured for
-Actions (HTTP 404); deployment is not claimed. Latest local quick CI on the
+Actions (HTTP 404); deployment is not claimed. Local quick CI on the
 `13c58ff` worktree passed 5 lab tests, 77 CI Python tests, netem safety, and 12
-portable C tests with strict warnings, ASan, and UBSan. The quick profile skips
-Rust tests, release build, and SPDX validation; local Cargo/Rust tools are not
-available here. For `13c58ff`, the hosted Linux/Windows Rust and release/SPDX
-checks and native MSVC passed, while WDK x64/ARM64 were still in progress at
-the latest query. The documentation-only tip `4471048` had a new workflow run
-queued.
+portable C tests with strict warnings, ASan, and UBSan. After the nonce
+exhaustion change, `python3 -m unittest discover -s tools/ci -v` passed all 77
+Python tests and `git diff --check` passed; local Cargo/Rust tools are not
+available here. For `13c58ff` and documentation tip `fcfe3f9`, hosted Ubuntu and
+Windows Rust tests, Linux release/SPDX, native MSVC, WSL, lab and dependency
+audits passed; WDK x64/ARM64 remained in progress at the latest query. CI for
+code tip `725693a` was queued as run `40444831104`.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
