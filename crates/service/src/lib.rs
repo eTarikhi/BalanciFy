@@ -610,11 +610,16 @@ impl<C: Crypto + Clone> Service<C> {
                 self.cfg.session
             };
             let use_custom = self.per_flow_sessions || self.per_class_sessions;
-            let sent_opt = if use_custom {
-                self.tx.send_excluding_with_session(payload, sess, now, &blocked)
-            } else {
-                self.tx.send_excluding(payload, now, &blocked)
-            };
+            // Admit the complete frame against the selected path before the
+            // sender allocates its ordered Data sequence or retx entry.
+            let rate_limiter = &mut self.rate_limiter;
+            let sent_opt = self.tx.send_excluding_with_session_if(
+                payload,
+                sess,
+                now,
+                &blocked,
+                |path, wire_len| rate_limiter.try_send(path, wire_len as u64, now),
+            );
             let Some(sent) = sent_opt else {
                 if self.tx.paths().is_empty() {
                     self.counters.refused += 1;
@@ -624,12 +629,6 @@ impl<C: Crypto + Clone> Service<C> {
                 self.counters.held += 1;
                 return vec![Action::Hold { flow: flow.clone(), data: payload.to_vec() }];
             };
-            // Rate limiting check (service egress)
-            if !self.rate_limiter.try_send(sent.path, sent.bytes.len() as u64, now) {
-                // Rate limited: hold
-                self.counters.held += 1;
-                return vec![Action::Hold { flow: flow.clone(), data: payload.to_vec() }];
-            }
             self.cc.on_send(sent.path, payload.len() as u64);
             self.pacing.on_send(sent.path, payload.len() as u64, now);
             self.counters.packets_stripped += 1;
@@ -2877,9 +2876,24 @@ mod tests {
         // Second packet immediately should be held (rate limited)
         let actions2 = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
         assert!(actions2.iter().any(|a| matches!(a, Action::Hold { .. })), "second should be held due to rate limit");
+        assert_eq!(svc.tx.next_seq(), 1, "a rate-limited bonded Data packet must not leave a sequence gap");
+        assert_eq!(svc.tx.in_flight(), 1, "a held packet must not remain eligible for retransmission");
+        assert_eq!(svc.tx.retx_bytes(), 1000, "only the transmitted packet should occupy retransmission memory");
 
-        svc.handle(ipc::Request::SetBondMode { enabled: false }, now);
-        let flow_actions = svc.send_app_packet(&flow, None, &[0u8; 1000], now);
+        // Once tokens refill, the held payload can be offered again and must
+        // occupy the very next ordered sequence.
+        let retry_at = now + Duration::from_secs(1);
+        let retried = svc.send_app_packet(&flow, None, &[0u8; 1000], retry_at);
+        let retried_frame = retried.iter().find_map(|action| match action {
+            Action::Send { bytes, .. } => Some(bytes),
+            _ => None,
+        }).expect("held packet should send after the bucket refills");
+        let (retried_header, _) = Header::decode(retried_frame).expect("valid Data frame");
+        assert_eq!(retried_header.kind, FrameKind::Data);
+        assert_eq!(retried_header.seq, 1, "retry must continue the ordered Data sequence without a gap");
+
+        svc.handle(ipc::Request::SetBondMode { enabled: false }, retry_at);
+        let flow_actions = svc.send_app_packet(&flow, None, &[0u8; 1000], retry_at);
         assert!(flow_actions.iter().any(|a| matches!(a, Action::Hold { .. })), "flow-lane packet should be held too");
         assert_eq!(svc.tx.flow_pending_bytes(), 0, "a held FlowData frame must not remain pending for an ACK");
     }

@@ -130,6 +130,10 @@ impl Header {
 pub trait Crypto: Send + Sync {
     fn seal(&self, path: u8, seq: u64, aad: &[u8], plain: &[u8], out: &mut Vec<u8>);
     fn open(&self, path: u8, seq: u64, aad: &[u8], cipher: &[u8]) -> Option<Vec<u8>>;
+    /// Exact number of body bytes `seal` appends for this plaintext length.
+    /// Identity/test ciphers may use the default; authenticated ciphers with a
+    /// tag or other framing overhead must override it for accurate preflight.
+    fn sealed_len(&self, plain_len: usize) -> Option<usize> { Some(plain_len) }
     /// Optional one-way key derivation primitive. This does not coordinate a
     /// live peer update; callers must not activate the returned cipher until
     /// both endpoints have authenticated the same key epoch. Default returns None.
@@ -429,7 +433,34 @@ impl<C: Crypto> Sender<C> {
     }
 
     pub fn send_excluding_with_session(&mut self, plain: &[u8], session: u64, now: Instant, blocked: &[u8]) -> Option<Sent> {
+        self.send_excluding_with_session_if(plain, session, now, blocked, |_, _| true)
+    }
+
+    /// Select a path and ask `permit` to admit the complete wire-frame length
+    /// before consuming a Data sequence or recording retransmission state.
+    /// A rejected admission returns `None` without creating an ordered-lane
+    /// sequence gap or a retransmission entry for a frame that was never sent.
+    pub fn send_excluding_with_session_if<F>(
+        &mut self,
+        plain: &[u8],
+        session: u64,
+        now: Instant,
+        blocked: &[u8],
+        mut permit: F,
+    ) -> Option<Sent>
+    where
+        F: FnMut(u8, usize) -> bool,
+    {
+        // Check exhaustion before admission so a failed sequence allocation
+        // can never consume a rate-limit token.
+        if self.session_seqs.get(&session).copied().unwrap_or(0) == u64::MAX {
+            return None;
+        }
         let path = self.drr.next_filtered(plain.len().max(1) as u64, blocked)?;
+        let wire_len = HEADER_LEN.checked_add(self.crypto.sealed_len(plain.len())?)?;
+        if !permit(path, wire_len) {
+            return None;
+        }
         let seq = self.next_seq_for(session)?;
         let bytes = self.frame_with_session(FrameKind::Data, path, session, seq, 0, plain);
         self.counters.data_frames += 1;
@@ -1542,6 +1573,37 @@ mod tests {
         for _ in 0..50 { s.send(&vec![0u8; 100], t0).unwrap(); }
         assert!(s.retx_bytes() <= 1000, "window stays within its ceiling, got {}", s.retx_bytes());
         assert!(s.counters().retx_evictions > 0);
+    }
+
+    #[test]
+    fn rejected_data_admission_leaves_sequence_and_retx_state_untouched() {
+        let mut sender = Sender::new(17, PassThrough, vec![(0, 1000)]);
+        let now = Instant::now();
+
+        let rejected = sender.send_excluding_with_session_if(
+            b"blocked",
+            17,
+            now,
+            &[],
+            |path, wire_len| {
+                assert_eq!(path, 0);
+                assert_eq!(wire_len, HEADER_LEN + b"blocked".len());
+                false
+            },
+        );
+        assert!(rejected.is_none());
+        assert_eq!(sender.next_seq_for_session(17), 0, "rejection must not create an ordered Data gap");
+        assert_eq!(sender.in_flight(), 0, "a rejected frame must not enter retransmission state");
+
+        let accepted = sender.send_excluding_with_session_if(
+            b"retry",
+            17,
+            now,
+            &[],
+            |_, _| true,
+        ).expect("retry should be admitted");
+        assert_eq!(accepted.seq, 0, "the next admitted frame uses the still-next sequence");
+        assert_eq!(sender.in_flight(), 1);
     }
 
     #[test]

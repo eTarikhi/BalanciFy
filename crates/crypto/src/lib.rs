@@ -182,6 +182,10 @@ impl Crypto for TunnelCipher {
         self.inner.decrypt(&nonce, Payload { msg: cipher, aad }).ok()
     }
 
+    fn sealed_len(&self, plain_len: usize) -> Option<usize> {
+        plain_len.checked_add(TAG_LEN)
+    }
+
     fn rekey(&self) -> Option<Self> {
         self.rekey()
     }
