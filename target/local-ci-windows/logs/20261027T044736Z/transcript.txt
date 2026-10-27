@@ -1,0 +1,54 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261027081738
+Username: ETARIKHI\Administrator
+RunAs User: ETARIKHI\Administrator
+Configuration Name: 
+Machine: ETARIKHI (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\ci\local-ci-windows.ps1
+Process ID: 13968
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+BalanciFy native Windows CI · branch=arena/fb5e8c41-balancify · HEAD=f9dbe1e068f7e1f274110297aca7fca9186524bd
+Logs: C:\Users\Administrator\Desktop\Git-Clones\BalanciFy\target\local-ci-windows\logs\20261027T044736Z
+
+===== dependency-policy =====
+>> C:\Users\Administrator\AppData\Local\Microsoft\WindowsApps\bash.exe --noprofile --norc -c sh tools/ci/audit-deps.sh
+1/6  runtime dependencies are first-party, or vetted and exactly pinned
+  every non-path dependency is allowlisted and exactly pinned
+2/6  the lock file resolves nothing that is not allowlisted
+  every locked package is a workspace member or on the allowlist
+3/6  the null cipher cannot reach a shipped build (ADR-0002)
+  PassThrough is compiled only for tests / the lab-crypto feature
+4/6  the lab relay cannot be started in the clear
+  a release build of balancify-relay refuses to start (exit 2)
+5/6  driver control access and injected-packet lifetime are guarded
+  privileged ACL, operation access bits, and deferred packet-buffer ownership are enforced
+6/6  Windows key storage defaults to DPAPI and uses private atomic files
+  DPAPI is enabled by default; key files use create_new, Unix 0600, atomic rename, and zeroized plaintext copies
+
+policy audit passed
+PASS  dependency-policy
+
+===== lab-python-tests =====
+>> py -3 -m unittest discover -s tools/lab -p test_*.py -v
+
+PASS  lab-python-tests
+
+===== ci-python-tests =====
+>> py -3 -m unittest discover -s tools/ci -p test_*.py -v
+
+PS>TerminatingError(): "Command failed with exit code 1: py -3 -m unittest discover -s tools/ci -p test_*.py -v"
+>> TerminatingError(): "Command failed with exit code 1: py -3 -m unittest discover -s tools/ci -p test_*.py -v"
+>> TerminatingError(): "Command failed with exit code 1: py -3 -m unittest discover -s tools/ci -p test_*.py -v"
+**********************
+Windows PowerShell transcript end
+End time: 20261027081759
+**********************
