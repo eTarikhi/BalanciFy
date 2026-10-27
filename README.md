@@ -56,32 +56,47 @@ environment (§4.8 rev 2.1 / §8.3), security & signing plan, validation plan,
 risk register, sourced assumptions. Diagrams in [`docs/assets/`](docs/assets/).
 Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/phase1/).
 
-## Development status (audited 2026-10-26)
+## Development status (audited 2026-10-27)
 
-BalanciFy remains an engineering prototype, not a supported release. G1 has no
-formal sign-off record in the repository; G2–G8 are open. Source coverage and
-proposed exit criteria are not substitutes for Windows VM, hardware, signing,
-review, or field evidence. See the [completion ledger](docs/completion-ledger.md)
-for the prioritized work list and evidence classes.
+BalanciFy remains an engineering prototype, not a supported release. PR #20 is
+merged; the active continuation branch is `arena/fb5e8c41-balancify`. The last
+fully green hosted revision is [`e3e406b`](https://github.com/eTarikhi/BalanciFy/commit/e3e406b0c4e5b5625b9cf614a96389dcb3f9cd6f),
+whose [CI run 40433764565](https://github.com/eTarikhi/BalanciFy/actions/runs/40433764565)
+passed all eight jobs. The newer pushed revision [`13c58ff`](https://github.com/eTarikhi/BalanciFy/commit/13c58ff17a3fdd827ac7bf2b5bd406d1f57577ac)
+adds a global authenticated tunnel reorder-memory ceiling. In its CI run
+`40444227523`, Linux/Windows Rust tests, release build/SPDX checks, WSL, lab, and
+dependency audit have passed; native MSVC and WDK x64/ARM64 were still running at
+the latest query. Source coverage and proposed exit criteria
+are not substitutes for Windows VM, hardware, signing, review, or field
+evidence. See the [completion ledger](docs/completion-ledger.md) for prioritized
+work and evidence classes.
 
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows Rust workspace tests, Linux release build, and SPDX 2.3/3.0.1 generation/validation passed on the source represented by head `331797b`; those jobs do not include the new machine-policy changes in this branch. Authenticated lab transport, IPC contracts, bounded packet handling, simulated path/failover tests and support-bundle redaction have automated coverage. | Production Windows service lifecycle, relay deployment/interoperability, validation of the new service-owned durable machine-policy implementation, and real network behavior. |
-| Windows UI | Native WinUI 3/.NET shell source contains Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and an explicit one-time migration path for old per-user policy snapshots. The in-progress changes remove ongoing per-user policy saves/replay and route settings through service-owned policy. | Hosted runs for `331797b` failed at the WinUI build: XAML compiler WMC0055 rejected `SymbolIcon Symbol="Info"` at `MainWindow.xaml(25,54)`. The current source uses `Help` and has a regression assertion; it also adds the missing `if: always()` so native quick checks run after a failed build. Hosted validation of these fixes and current C# changes is pending. No Windows runtime, tray, accessibility, or usability acceptance is recorded. |
-| Driver and OS integration | Hosted WDK CI compiles/links unsigned x64 and ARM64 drivers and checks PE mitigations/INF contracts; portable C packet/OID tests pass. Driver/service source includes bounded queue and injection paths. | No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
+| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. The service retains and retries transient inbound miniport-not-ready packets; the current `13c58ff` patch bounds authenticated reorder retention. In run `40444227523`, Rust tests passed on Ubuntu and Windows, as did release/SPDX, WSL, lab and dependency checks. | At the latest query native MSVC and WDK x64/ARM64 were still running for `13c58ff`. Production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
+| Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
-| Performance gates | Blueprint §10.3 defines the thresholds and lab harnesses include safe netem dry-run and software simulations. | No Rig B/hardware measurements. Aggregate/single-flow throughput, ≤3 ms added wired delay, ≤0.1% delivered reordering, ≤2 s failover, 72 h soak, 100 resume cycles and compatibility matrix remain acceptance targets, not results. |
+| Performance gates | Blueprint §10.3 defines the thresholds; lab tooling includes safe netem dry-run and software simulations. | No Rig B/hardware measurements. Aggregate/single-flow throughput, ≤3 ms added wired delay, ≤0.1% delivered reordering, ≤2 s failover, 72-hour soak, 100 resume cycles, and compatibility targets are not results. |
 
-Prior hosted runs `40256260258` and `40256265450` for head `331797b` completed with failure: Ubuntu/Windows Rust tests, Linux release/SPDX, dependency, WSL, lab, and WDK x64/ARM64 jobs passed; native WinUI failed while the following native quick step was skipped. Current push/PR runs `40258355131` and `40258359532` for `c652dd3` are in progress; dependency, WSL and lab jobs passed at last inspection, while Rust, WDK and native MSVC remain unresolved. Local quick CI on the current worktree passed dependency audit, 5 lab Python tests, 70 CI Python tests, netem safety and 12 portable driver tests; it intentionally skips Rust/release/SPDX. Logs: `target/local-ci/logs/20261026T021425Z/`. Targeted machine-policy and WinUI contracts passed 8/8 and 10/10. Hosted runs predate these policy changes and do not validate them. Windows build/runtime and product acceptance remain open.
-
-The current worktree implements ADR-0046 service-owned policy and explicit migration from the historical `%LOCALAPPDATA%` snapshot. The change is not yet validated by Rust/Windows builds; do not treat source presence as runtime evidence.
+The former native-Windows Python path failures are resolved in hosted CI run
+`40433764565`. The Pages workflow's site build passed in run `40377552901`, but
+GitHub's `Setup Pages` step reported that Pages is not enabled/configured for
+Actions (HTTP 404); deployment is not claimed. Latest local quick CI on the
+`13c58ff` worktree passed 5 lab tests, 77 CI Python tests, netem safety, and 12
+portable C tests with strict warnings, ASan, and UBSan. The quick profile skips
+Rust tests, release build, and SPDX validation; local Cargo/Rust tools are not
+available here. For `13c58ff`, the hosted Linux/Windows Rust and release/SPDX
+checks passed, while native MSVC and WDK x64/ARM64 were still in progress at the
+latest query.
 
 The client/service binaries and installer remain lab components. Their
 explicitly insecure test modes are debug-only and loopback-only. Persistent
 identities use account-appropriate state roots; ADR-0046 makes the service the
 intended durable machine-policy authority and limits the old per-user file to
-explicit migration. Rust/Windows validation is pending. See ADR-0035, ADR-0038,
-and ADR-0046 for transport and policy behavior.
+explicit migration. Rust and Windows hosted checks passed at `e3e406b`, but
+policy authorization/ACL runtime behavior still requires an isolated Windows
+VM. See ADR-0035, ADR-0038, and ADR-0046 for transport and policy behavior.
 
 ## Repository layout
 
