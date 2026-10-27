@@ -806,9 +806,10 @@ impl<C: Crypto + Clone> Service<C> {
         // re-establishing (Sec.6.6).
         for path in self.keepalives.paths() {
             if self.keepalives.due(path, now) {
-                let k = self.tx.keepalive(path);
-                self.counters.keepalives += 1;
-                out.push(Action::Send { uplink: UplinkId(path), bytes: k.bytes });
+                if let Some(k) = self.tx.keepalive(path) {
+                    self.counters.keepalives += 1;
+                    out.push(Action::Send { uplink: UplinkId(path), bytes: k.bytes });
+                }
             }
         }
 
@@ -826,10 +827,11 @@ impl<C: Crypto + Clone> Service<C> {
         }
 
         if let Some((id, bytes)) = self.policy.request_idle_probe(self.cfg.idle_probe_bytes, now) {
-            let probe = self.tx.probe(id.0, bytes as usize);
-            self.probes.insert((id.0, probe.seq), (now, bytes));
-            self.counters.probes += 1;
-            out.push(Action::Send { uplink: id, bytes: probe.bytes });
+            if let Some(probe) = self.tx.probe(id.0, bytes as usize) {
+                self.probes.insert((id.0, probe.seq), (now, bytes));
+                self.counters.probes += 1;
+                out.push(Action::Send { uplink: id, bytes: probe.bytes });
+            }
         }
 
         for ev in self.rx.drain(now) {

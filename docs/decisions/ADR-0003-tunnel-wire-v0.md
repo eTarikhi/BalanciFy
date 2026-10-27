@@ -71,6 +71,9 @@ that never asked to be bonded.
   for authenticated duplicates. Send-side byte/path accounting is session-scoped,
   capped by the existing retransmission byte budget and a 4096-entry limit, and
   is removed on ACK, path loss, sleep/resume, or local rate-limit hold.
+- Every finite per-kind nonce sequence (Data, FlowData, Keepalive, Probe) must
+  fail closed before integer wrap. Exhaustion cannot reset or reuse a sequence;
+  the sender stops emitting that frame kind under the current key.
 - The service authenticates and replay-checks FlowAck before recording the
   acknowledged payload bytes for capacity estimation. Wire version 2 explicitly
   rejects v1 peers rather than silently losing ACK-based capacity samples.

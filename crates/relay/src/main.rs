@@ -1166,7 +1166,7 @@ mod tests {
     fn endpoint_answers_probes() {
         let mut send = Sender::new(3, PassThrough, vec![(0, 1000)]);
         let t0 = Instant::now();
-        let probe = send.probe(0, 48);
+        let probe = send.probe(0, 48).expect("fresh probe sequence");
         let mut ep = Endpoint::new(PassThrough, ReceiverConfig::default());
         let (payloads, replies) = ep.ingest(&probe.bytes, t0);
         assert!(payloads.is_empty());

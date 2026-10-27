@@ -295,19 +295,20 @@ impl<C: Crypto> Sender<C> {
         }
     }
 
-    fn next_seq_for(&mut self, session: u64) -> u64 {
-        // Per-session ordered Data sequence (ADR-0011).
+    fn next_seq_for(&mut self, session: u64) -> Option<u64> {
+        // Per-session ordered Data sequence (ADR-0011). Refuse to wrap: the
+        // same (key, kind, path, seq) would repeat an AEAD nonce.
         let entry = self.session_seqs.entry(session).or_insert(0);
         let cur = *entry;
-        *entry += 1;
-        cur
+        *entry = cur.checked_add(1)?;
+        Some(cur)
     }
 
-    fn next_flow_seq_for(&mut self, session: u64) -> u64 {
+    fn next_flow_seq_for(&mut self, session: u64) -> Option<u64> {
         let entry = self.flow_seqs.entry(session).or_insert(0);
         let cur = *entry;
-        *entry += 1;
-        cur
+        *entry = cur.checked_add(1)?;
+        Some(cur)
     }
 
     /// Update path quanta when the control plane republishes weights (Sec.6.1).
@@ -414,7 +415,7 @@ impl<C: Crypto> Sender<C> {
 
     pub fn send_flow_with_session(&mut self, plain: &[u8], path: u8, session: u64, now: Instant) -> Option<Sent> {
         if !self.paths().contains(&path) { return None; }
-        let seq = self.next_flow_seq_for(session);
+        let seq = self.next_flow_seq_for(session)?;
         let bytes = self.frame_with_session(FrameKind::FlowData, path, session, seq, 0, plain);
         self.counters.flow_packets += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
@@ -429,7 +430,7 @@ impl<C: Crypto> Sender<C> {
 
     pub fn send_excluding_with_session(&mut self, plain: &[u8], session: u64, now: Instant, blocked: &[u8]) -> Option<Sent> {
         let path = self.drr.next_filtered(plain.len().max(1) as u64, blocked)?;
-        let seq = self.next_seq_for(session);
+        let seq = self.next_seq_for(session)?;
         let bytes = self.frame_with_session(FrameKind::Data, path, session, seq, 0, plain);
         self.counters.data_frames += 1;
         self.counters.bytes_sealed += bytes.len() as u64;
@@ -439,25 +440,27 @@ impl<C: Crypto> Sender<C> {
     }
 
     /// Per-path NAT keepalive (Sec.6.6). Uses its own nonce sequence, separate
-    /// from ordered application Data.
-    pub fn keepalive(&mut self, path: u8) -> Sent {
+    /// from ordered application Data. Returns `None` rather than reusing a
+    /// nonce if the sequence space is exhausted.
+    pub fn keepalive(&mut self, path: u8) -> Option<Sent> {
         let seq = self.keepalive_seq;
-        self.keepalive_seq += 1;
+        self.keepalive_seq = seq.checked_add(1)?;
         let bytes = self.frame(FrameKind::Keepalive, path, seq, 0, &[]);
         self.counters.keepalives += 1;
-        Sent { path, seq, session: self.session, kind: FrameKind::Keepalive, bytes }
+        Some(Sent { path, seq, session: self.session, kind: FrameKind::Keepalive, bytes })
     }
 
     /// Health / capacity probe (Sec.6.5 probes are tunnel control messages;
     /// Sec.6.3b bounded idle probes). `pad` is the probe size the control plane
-    /// granted from the probe budget.
-    pub fn probe(&mut self, path: u8, pad: usize) -> Sent {
+    /// granted from the probe budget. Returns `None` rather than reusing a
+    /// nonce if the sequence space is exhausted.
+    pub fn probe(&mut self, path: u8, pad: usize) -> Option<Sent> {
         let id = self.next_probe_id;
-        self.next_probe_id += 1;
+        self.next_probe_id = id.checked_add(1)?;
         let bytes = self.frame(FrameKind::Probe, path, id, 0, &vec![0u8; pad]);
         self.counters.probes += 1;
         self.stat(path).probes += 1;
-        Sent { path, seq: id, session: self.session, kind: FrameKind::Probe, bytes }
+        Some(Sent { path, seq: id, session: self.session, kind: FrameKind::Probe, bytes })
     }
 
     /// Answer to a probe; the peer measures RTT from it.
@@ -1545,13 +1548,41 @@ mod tests {
     }
 
     #[test]
+    fn sender_stops_before_any_nonce_sequence_wraps() {
+        let mut sender = Sender::new(77, PassThrough, vec![(0, 1000)]);
+        let now = Instant::now();
+
+        sender.session_seqs.insert(77, u64::MAX - 1);
+        let last_data = sender.send(b"last data", now).expect("last non-wrapping Data nonce");
+        assert_eq!(last_data.seq, u64::MAX - 1);
+        assert!(sender.send(b"must stop", now).is_none());
+        assert_eq!(sender.next_seq(), u64::MAX, "Data sequence remains exhausted without wrapping");
+
+        sender.flow_seqs.insert(77, u64::MAX - 1);
+        let last_flow = sender.send_flow(b"last flow", 0, now).expect("last non-wrapping FlowData nonce");
+        assert_eq!(last_flow.seq, u64::MAX - 1);
+        assert!(sender.send_flow(b"must stop", 0, now).is_none());
+        assert_eq!(sender.flow_seqs[&77], u64::MAX, "FlowData sequence remains exhausted without wrapping");
+
+        sender.keepalive_seq = u64::MAX - 1;
+        assert_eq!(sender.keepalive(0).unwrap().seq, u64::MAX - 1);
+        assert!(sender.keepalive(0).is_none(), "keepalive must not reuse its nonce");
+        assert_eq!(sender.keepalive_seq, u64::MAX);
+
+        sender.next_probe_id = u64::MAX - 1;
+        assert_eq!(sender.probe(0, 0).unwrap().seq, u64::MAX - 1);
+        assert!(sender.probe(0, 0).is_none(), "probe must not reuse its nonce");
+        assert_eq!(sender.next_probe_id, u64::MAX);
+    }
+
+    #[test]
     fn control_frames_carry_no_data_sequence() {
         let mut s = Sender::new(5, PassThrough, vec![(0, 1000)]);
         let t0 = Instant::now();
         s.send(b"data".as_ref(), t0).unwrap();
-        let k = s.keepalive(0);
-        let k2 = s.keepalive(0);
-        let p = s.probe(0, 64);
+        let k = s.keepalive(0).unwrap();
+        let k2 = s.keepalive(0).unwrap();
+        let p = s.probe(0, 64).unwrap();
         let r = s.probe_reply(0, p.seq);
         let a = s.ack(0, 0);
         assert_ne!(k.seq, k2.seq, "successive keepalives must not reuse a nonce");
@@ -1700,7 +1731,7 @@ mod tests {
         assert_eq!(strict_flow_ack.verify_control_frame(&flow_ack.bytes, now), Err(DropReason::AuthFailed));
         assert_eq!(strict_flow_ack.sessions(), 0, "an unauthenticated FlowAck cannot allocate a session");
 
-        let probe = tx.probe(0, 24);
+        let probe = tx.probe(0, 24).unwrap();
         let mut rx = Receiver::with_defaults(PassThrough);
         assert!(rx.ingest(&probe.bytes, now).iter().any(|event| matches!(event, Event::ProbeEcho { .. })));
         assert!(rx.ingest(&probe.bytes, now).is_empty(), "a replayed probe cannot cause another response");
@@ -1765,12 +1796,12 @@ mod tests {
         let mut s = Sender::new(13, PassThrough, vec![(0, 1000)]);
         let mut rx = Receiver::with_defaults(PassThrough);
         let t0 = Instant::now();
-        let probe = s.probe(0, 32);
+        let probe = s.probe(0, 32).unwrap();
         let events = rx.ingest(&probe.bytes, t0);
         assert_eq!(events, vec![Event::ProbeEcho { session: 13, path: 0, seq: probe.seq }]);
         let reply = s.probe_reply(0, probe.seq);
         assert!(rx.ingest(&reply.bytes, t0).is_empty(), "the sender handles its own replies");
-        let k = s.keepalive(0);
+        let k = s.keepalive(0).unwrap();
         assert!(rx.ingest(&k.bytes, t0).is_empty());
         assert_eq!(rx.counters().probes, 1);
         assert_eq!(rx.counters().keepalives, 1);
@@ -1792,7 +1823,7 @@ mod tests {
         assert_eq!(s.on_ack(h.seq, t0), vec![(h.path, 5)], "five payload bytes acknowledged");
         assert_eq!(s.in_flight(), 0);
 
-        let probe = s.probe(0, 16);
+        let probe = s.probe(0, 16).unwrap();
         let echoed: Vec<Vec<u8>> = rx.ingest(&probe.bytes, t0).iter().filter_map(|e| rx.reply_for(e)).collect();
         let (ph, _) = Header::decode(&echoed[0]).unwrap();
         assert_eq!(ph.kind, FrameKind::ProbeReply);
