@@ -1,3 +1,4 @@
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ WORKFLOW = ROOT / "tools/ci/pr-workflow.sh"
 
 
 class PrWorkflowTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX shell CLI execution is covered by the WSL CI path")
     def test_help_describes_validation_pr_and_opt_in_merge(self):
         result = subprocess.run(
             ["bash", "tools/ci/pr-workflow.sh", "--help"],
@@ -19,9 +21,10 @@ class PrWorkflowTests(unittest.TestCase):
         self.assertIn("leave the PR open", result.stdout)
         self.assertIn("local software CI suite", result.stdout)
 
+    @unittest.skipIf(os.name == "nt", "POSIX shell CLI execution is covered by the WSL CI path")
     def test_unknown_option_fails_before_side_effects(self):
         result = subprocess.run(
-            ["bash", str(WORKFLOW), "--force"],
+            ["bash", "tools/ci/pr-workflow.sh", "--force"],
             cwd=ROOT,
             capture_output=True,
             text=True,

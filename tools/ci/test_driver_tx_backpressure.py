@@ -25,6 +25,22 @@ class DriverTxBackpressureTests(unittest.TestCase):
         self.assertIn("if pending_driver_tx.is_none()", polling)
         self.assertIn("let mut budget = 64;", polling)
 
+    def test_not_ready_driver_receive_is_queued_in_order_and_backpressures_reads(self):
+        self.assertIn("is_driver_not_ready", DRIVER_DEVICE)
+        self.assertIn("const MAX_PENDING_DRIVER_RX: usize = 1024;", SERVICE_BINARY)
+        self.assertIn("let mut pending_driver_rx: VecDeque<Vec<u8>> = VecDeque::new();", SERVICE_BINARY)
+        self.assertIn("queue.push_back(packet);", SERVICE_BINARY)
+        self.assertIn("queue.pop_front()", SERVICE_BINARY)
+        self.assertIn("pending_driver_rx.push_front(packet);", SERVICE_BINARY)
+        self.assertIn("bounded inbound driver retry queue is full", SERVICE_BINARY)
+        polling = SERVICE_BINARY.split("// Retry retained payloads in FIFO order", 1)[1]
+        polling = polling.split("// Retry only after the full failure-detection interval", 1)[0]
+        self.assertLess(polling.index("pending_driver_rx.pop_front()"), polling.index("sock.recv_from"))
+        self.assertIn("queue_pending_driver_rx(&mut pending_driver_rx, data)?;", polling)
+        self.assertIn("Err(error) if is_driver_not_ready(&error)", polling)
+        self.assertIn("pending_driver_rx.len() >= MAX_PENDING_DRIVER_RX", polling)
+        self.assertIn("fn pending_driver_receive_queue_preserves_fifo_and_fails_closed_at_capacity()", SERVICE_BINARY)
+
 
 if __name__ == "__main__":
     unittest.main()

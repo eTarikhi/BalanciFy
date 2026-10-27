@@ -9,11 +9,12 @@
 
 use balancify_core::UplinkId;
 use balancify_crypto::{FileKeyStore, KeyStore, PinnedKeys, TunnelCipher};
-use balancify_service::driver_device::{should_retry_driver_tx, DriverDevice};
+use balancify_service::driver_device::{is_driver_not_ready, should_retry_driver_tx, DriverDevice};
 use balancify_service::ipc::server::{IpcServer, IpcStream};
 use balancify_service::ipc::{Event as IpcEvent, Request, Response, Status};
 use balancify_service::machine_policy::MachinePolicyStore;
 use balancify_service::{Service, ServiceConfig, Action};
+use std::collections::VecDeque;
 use std::net::{UdpSocket, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -21,6 +22,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const RELAY_FAILOVER_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_PENDING_DRIVER_RX: usize = 1024;
+
+fn queue_pending_driver_rx(queue: &mut VecDeque<Vec<u8>>, packet: Vec<u8>) -> std::io::Result<()> {
+    if queue.len() >= MAX_PENDING_DRIVER_RX {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "bounded inbound driver retry queue is full; refusing to discard tunnel payload",
+        ));
+    }
+    queue.push_back(packet);
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectionMode {
@@ -476,6 +489,10 @@ fn main() -> std::io::Result<()> {
     // the service reports Hold/Refused so temporary congestion or link loss
     // cannot turn a successful miniport send completion into a silent drop.
     let mut pending_driver_tx: Option<Vec<u8>> = None;
+    // Retain authenticated inbound payloads in order if the miniport is paused
+    // or has not enabled its receive filter yet. The bounded FIFO applies
+    // backpressure to relay reads; overflow is a loud error, never a silent drop.
+    let mut pending_driver_rx: VecDeque<Vec<u8>> = VecDeque::new();
 
     loop {
         let now = Instant::now();
@@ -537,8 +554,31 @@ fn main() -> std::io::Result<()> {
             last_stats = now;
         }
 
-        // Poll both sockets
+        // Retry retained payloads in FIFO order before reading more relay
+        // datagrams. If the adapter is still not ready, preserve the head and
+        // apply socket backpressure; service ticks and IPC continue to run.
+        while let Some(packet) = pending_driver_rx.pop_front() {
+            let Some(device) = driver_device.as_ref() else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "pending driver receive exists without an open control device",
+                ));
+            };
+            match device.inject_nbl(&packet) {
+                Ok(()) => println!("Injected {} retained tunnel bytes into the NDIS miniport", packet.len()),
+                Err(error) if is_driver_not_ready(&error) => {
+                    pending_driver_rx.push_front(packet);
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        // Stop socket reads when the bounded FIFO is full.
         for (uplink_id, sock) in [(UplinkId(0), &sock0), (UplinkId(1), &sock1)] {
+            if pending_driver_rx.len() >= MAX_PENDING_DRIVER_RX {
+                break;
+            }
             match sock.recv_from(&mut dg) {
                 Ok((n, from)) => {
                     let expected_relay = svc.relay_current().unwrap_or(relay_primary);
@@ -569,8 +609,17 @@ fn main() -> std::io::Result<()> {
                                 match act {
                                     Action::Deliver { data } => {
                                         if let Some(device) = &driver_device {
-                                            device.inject_nbl(&data)?;
-                                            println!("Injected {} received tunnel bytes into the NDIS miniport", data.len());
+                                            if !pending_driver_rx.is_empty() {
+                                                queue_pending_driver_rx(&mut pending_driver_rx, data)?;
+                                            } else {
+                                                match device.inject_nbl(&data) {
+                                                    Ok(()) => println!("Injected {} received tunnel bytes into the NDIS miniport", data.len()),
+                                                    Err(error) if is_driver_not_ready(&error) => {
+                                                        queue_pending_driver_rx(&mut pending_driver_rx, data)?;
+                                                    }
+                                                    Err(error) => return Err(error),
+                                                }
+                                            }
                                         } else {
                                             println!("Received {} tunnel bytes from {} (not injected; pass --driver-device to use the miniport)", data.len(), from);
                                         }
@@ -893,6 +942,23 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod ipc_capacity_tests {
     use super::*;
+
+    #[test]
+    fn pending_driver_receive_queue_preserves_fifo_and_fails_closed_at_capacity() {
+        let mut queue = VecDeque::new();
+        queue_pending_driver_rx(&mut queue, vec![1]).unwrap();
+        queue_pending_driver_rx(&mut queue, vec![2]).unwrap();
+        assert_eq!(queue.pop_front(), Some(vec![1]));
+        assert_eq!(queue.pop_front(), Some(vec![2]));
+
+        for _ in 0..MAX_PENDING_DRIVER_RX {
+            queue_pending_driver_rx(&mut queue, vec![3]).unwrap();
+        }
+        let error = queue_pending_driver_rx(&mut queue, vec![4]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(queue.len(), MAX_PENDING_DRIVER_RX);
+        assert!(queue.iter().all(|packet| packet == &[3]));
+    }
 
     #[test]
     fn service_requires_authenticated_transport_by_default() {

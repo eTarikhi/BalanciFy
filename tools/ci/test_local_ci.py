@@ -1,3 +1,4 @@
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ RUNNER = ROOT / "tools/ci/local-ci.sh"
 
 
 class LocalCiRunnerTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX shell CLI execution is covered by the WSL CI path")
     def test_help_documents_full_quick_and_push_modes(self):
         result = subprocess.run(
             ["bash", "tools/ci/local-ci.sh", "--help"],
@@ -19,9 +21,10 @@ class LocalCiRunnerTests(unittest.TestCase):
         self.assertIn("--push", result.stdout)
         self.assertIn("Does not create commits or force-push", result.stdout)
 
+    @unittest.skipIf(os.name == "nt", "POSIX shell CLI execution is covered by the WSL CI path")
     def test_quick_profile_cannot_push(self):
         result = subprocess.run(
-            ["bash", str(RUNNER), "--quick", "--push"],
+            ["bash", "tools/ci/local-ci.sh", "--quick", "--push"],
             cwd=ROOT,
             capture_output=True,
             text=True,

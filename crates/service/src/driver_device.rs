@@ -16,8 +16,15 @@ const IOCTL_FUNCTION_DEQUEUE_TX: u32 = 0x804;
 const FILE_READ_ACCESS: u32 = 0x1;
 const TX_PACKET_HEADER_LEN: usize = 16;
 const TX_PACKET_VERSION: u32 = 1;
+const ERROR_NOT_READY: i32 = 21; // Win32 mapping for STATUS_DEVICE_NOT_READY
 #[cfg(windows)]
 const TX_PACKET_OUTPUT_LEN: usize = TX_PACKET_HEADER_LEN + MAX_INNER_PACKET_LEN;
+
+/// `INJECT_NBL` can temporarily return STATUS_DEVICE_NOT_READY while the
+/// adapter is paused or its NDIS receive filter is still disabled.
+pub fn is_driver_not_ready(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_NOT_READY)
+}
 
 /// A dequeued miniport packet must remain in user mode while the service says
 /// it is held or has no eligible route. In those cases the driver queue has
@@ -269,6 +276,16 @@ pub use platform::DriverDevice;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_only_the_windows_device_not_ready_error_for_retry() {
+        assert!(is_driver_not_ready(&io::Error::from_raw_os_error(ERROR_NOT_READY)));
+        assert!(!is_driver_not_ready(&io::Error::from_raw_os_error(5)));
+        assert!(!is_driver_not_ready(&io::Error::new(
+            io::ErrorKind::Unsupported,
+            "not a Windows device readiness error",
+        )));
+    }
 
     #[test]
     fn driver_tx_retries_when_the_service_did_not_schedule_a_send() {
