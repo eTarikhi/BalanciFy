@@ -74,7 +74,7 @@ dependency audit, 5 lab tests, 77 CI Python tests, netem safety, and 12 portable
 C tests with strict warnings/ASan/UBSan; it skips Rust because Cargo and rustfmt
 are unavailable here. Hosted run `40609617883` is in progress: Ubuntu/Windows Rust
 tests, release/SPDX, native MSVC, WSL, lab, and dependency checks passed; WDK
-x64/ARM64 remain in progress. The latest source change, [`6a3b633`](https://github.com/eTarikhi/BalanciFy/commit/6a3b633d6503156d7ae4d76974156dc53f325094), bounds idle and stalled IPC reads in both stream modes. Run `40610109227` is in progress: Ubuntu/Windows Rust workspace tests, WSL, lab, dependency/crypto, Linux release, and SPDX 2.3 passed; SPDX 3, native MSVC, and WDK x64/ARM64 remain in progress.
+x64/ARM64 remain in progress. The latest source change, [`6a3b633`](https://github.com/eTarikhi/BalanciFy/commit/6a3b633d6503156d7ae4d76974156dc53f325094), bounds idle and stalled IPC reads in both stream modes. Run `40610109227` is in progress: Ubuntu/Windows Rust workspace tests, WSL, lab, dependency/crypto, Linux release, and SPDX 2.3/3.0.1 passed; native MSVC and WDK x64/ARM64 remain in progress.
 
 Run `40608725414` at `e101441` passed Ubuntu/Windows Rust, Linux release/SPDX,
 native MSVC, WSL, lab, and dependency/crypto jobs; WDK x64/ARM64 were still in
