@@ -56,38 +56,37 @@ environment (§4.8 rev 2.1 / §8.3), security & signing plan, validation plan,
 risk register, sourced assumptions. Diagrams in [`docs/assets/`](docs/assets/).
 Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/phase1/).
 
-## Development status (audited 2026-10-27)
+## Development status (audited 2026-10-28)
 
 BalanciFy remains an engineering prototype, not a supported release. PR #20 is
-merged; the active continuation branch is `arena/fb5e8c41-balancify`. The fully
-green hosted code revision [`2ecd0a6`](https://github.com/eTarikhi/BalanciFy/commit/2ecd0a6eef4534c4f9a827d2cf5d1edd5c1933e4)
-passed all eight jobs in [run 40446661918](https://github.com/eTarikhi/BalanciFy/actions/runs/40446661918).
-The next baseline, `d362369`, passed Ubuntu/Windows Rust tests, Linux
-release/SPDX, native MSVC, WSL, lab, and dependency/crypto checks in run
-`40454112278`; WDK x64/ARM64 were still in progress at the latest query.
+merged; the active continuation branch is `arena/fb5e8c41-balancify`. Hosted
+run [`40454764313`](https://github.com/eTarikhi/BalanciFy/actions/runs/40454764313)
+for `be0cdb0` completed successfully across all eight jobs, including Ubuntu
+and Windows Rust workspace tests, native MSVC, WSL, lab, dependency/crypto, and
+WDK x64/ARM64.
 
-The latest pushed source revision
-[`be0cdb0`](https://github.com/eTarikhi/BalanciFy/commit/be0cdb02bdb91f18564c47de95a0b79bcc6325c2)
-fixes bonded Data rate-limit admission ordering: a rejected send no longer
-consumes an ordered Data sequence or leaves retransmission state for a packet
-returned as held. Regression tests cover rejected admission, unchanged sequence
-and in-flight state, then retry on the next sequence. The local quick profile
-passed dependency audit, 5 lab tests, 77 CI Python tests, netem safety, and 12
-portable C tests with strict warnings/ASan/UBSan. That profile skips Rust; Cargo
-and rustfmt are unavailable in this shell. Hosted run `40454764313` has passed
-Ubuntu/Windows Rust workspace tests, WSL, lab, and dependency/crypto jobs;
-native MSVC and WDK x64/ARM64 remain in progress. The run is not complete yet.
+The latest source revision
+[`5c866ea`](https://github.com/eTarikhi/BalanciFy/commit/5c866ea5bf8d501d2a939c8377d65bb463f79cde)
+rejects non-contributory (all-zero) X25519 shared secrets at every Noise_IK DH
+step. Initiator flight 1 now propagates failure rather than emitting a frame;
+regressions cover low-order static and ephemeral inputs. Local quick CI passed
+dependency audit, 5 lab tests, 77 CI Python tests, netem safety, and 12 portable
+C tests with strict warnings/ASan/UBSan; it skips Rust because Cargo and rustfmt
+are unavailable here. Hosted run `40609617883` was queued at the latest query,
+so no Rust result is yet claimed for `5c866ea`.
 
-Earlier fixes include authenticated reorder-memory bounding (`13c58ff`), nonce
-sequence exhaustion guards (`725693a`), hold-cap release/cursor correctness
-(`773a514`), and cumulative re-ACK of duplicate Data (`2ecd0a6`). Source and
-hosted CI are not substitutes for Windows VM, driver-runtime, hardware, signing,
-review, or field evidence. See the [completion ledger](docs/completion-ledger.md)
+Run `40608725414` at `e101441` passed Ubuntu/Windows Rust, Linux release/SPDX,
+native MSVC, WSL, lab, and dependency/crypto jobs; WDK x64/ARM64 were still in
+progress. Earlier hosted-green fixes include bonded Data rate-limit admission
+(`be0cdb0`, all eight jobs green in `40454764313`), authenticated reorder-memory
+bounding (`13c58ff`), nonce sequence exhaustion guards (`725693a`), hold-cap
+release/cursor correctness (`773a514`), and duplicate Data re-ACK (`2ecd0a6`).
+No source or hosted CI result substitutes for Windows VM, driver-runtime,
+hardware, signing, review, or field evidence. See the [completion ledger](docs/completion-ledger.md)
 for prioritized work and evidence classes.
-
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | Hosted Ubuntu and Windows workspace tests, Linux release build, SPDX 2.3/3.0.1 validation, native Windows quick checks, WSL parity, lab/dependency audits, and WDK x64/ARM64 builds passed at `e3e406b` in run `40433764565`. `13c58ff` bounds authenticated reorder retention; `725693a` prevents nonce sequence wraparound; `773a514` fixes hold-cap reorder cursor advancement and terminal-sequence rejection; `2ecd0a6` re-ACKs duplicate Data, with all eight jobs green in run `40446661918`. Run `40454112278` at `d362369` passed Ubuntu/Windows Rust tests, release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 were still in progress at the latest query. `be0cdb0` moves bonded Data rate-limit admission before sequence/retransmission allocation; local quick CI passed; Ubuntu/Windows Rust workspace, WSL, lab, and dependency/crypto jobs passed in run `40454764313`, while native MSVC and WDK remain in progress. | Run `40454764313` is still in progress; its Ubuntu/Windows Rust, WSL, lab, and dependency/crypto jobs passed, while native MSVC and WDK remain in progress. WDK x64/ARM64 were still running on `40454112278`; production Windows service lifecycle, relay deployment/interoperability, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | `be0cdb0` passed all eight hosted jobs in run `40454764313`, including Rust tests on Ubuntu/Windows and WDK x64/ARM64. `5c866ea` adds fail-closed X25519 contributory checks and low-order regressions; run `40609617883` was queued at the latest query. Run `40608725414` at `e101441` passed software tests, release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress. | No hosted Rust result is claimed yet for `5c866ea`; WDK on `40608725414` was still running. Production Windows service lifecycle, relay deployment/interoperability, driver runtime, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
