@@ -534,13 +534,13 @@ where
     F: FnMut(Request) -> Response,
     E: FnMut() -> Vec<Event>,
 {
-    const EVENT_READ_POLL: Duration = Duration::from_millis(100);
+    const STREAM_READ_POLL: Duration = Duration::from_millis(100);
     const UNSUBSCRIBED_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-    // TCP uses a short socket timeout for event polling; Windows pipes use
-    // PIPE_NOWAIT and are polled by read_header directly.
-    if events_enabled {
-        stream.set_read_timeout(Some(EVENT_READ_POLL))?;
-    }
+    // TCP uses a short socket timeout for bounded idle/header reads and event
+    // polling; Windows pipes use PIPE_NOWAIT and are polled by read_header.
+    // Set this even without events so handle_stream cannot retain idle clients
+    // indefinitely. NamedPipeStream intentionally implements this as a no-op.
+    stream.set_read_timeout(Some(STREAM_READ_POLL))?;
     let mut event_interval = None;
     let mut next_event = Instant::now();
     let mut last_activity = Instant::now();
@@ -650,7 +650,9 @@ where
                         }
                     }
                 }
-                if error.kind() == io::ErrorKind::WouldBlock {
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut
+                {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
@@ -668,7 +670,8 @@ fn read_exact_stream<S: IpcStream>(stream: &mut S, buffer: &mut [u8]) -> io::Res
             Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated IPC frame")),
             Ok(count) => filled += count,
             Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock =>
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
             {
                 if Instant::now() >= deadline {
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "IPC frame read timed out"));
@@ -720,6 +723,7 @@ mod tests {
     struct NonAdminStream {
         input: std::io::Cursor<Vec<u8>>,
         output: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        read_timeout: std::sync::Arc<std::sync::Mutex<Option<Duration>>>,
     }
 
     impl Read for NonAdminStream {
@@ -740,7 +744,8 @@ mod tests {
     }
 
     impl IpcStream for NonAdminStream {
-        fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
+        fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            *self.read_timeout.lock().unwrap() = timeout;
             Ok(())
         }
 
@@ -750,12 +755,14 @@ mod tests {
     }
 
     #[test]
-    fn non_admin_cannot_mutate_machine_policy_over_ipc() {
+    fn unsubscribed_stream_sets_read_poll_timeout_and_rejects_non_admin_mutations() {
         let request_frame = crate::frame_request(&Request::SetBondMode { enabled: false });
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read_timeout = std::sync::Arc::new(std::sync::Mutex::new(None));
         let stream = NonAdminStream {
             input: std::io::Cursor::new(request_frame),
             output: std::sync::Arc::clone(&output),
+            read_timeout: std::sync::Arc::clone(&read_timeout),
         };
         let mut handler_called = false;
         handle_stream(stream, |_| {
@@ -764,6 +771,7 @@ mod tests {
         }).unwrap();
 
         assert!(!handler_called, "unauthorized mutation must not reach service policy code");
+        assert_eq!(*read_timeout.lock().unwrap(), Some(Duration::from_millis(100)));
         let output = output.lock().unwrap();
         let response = Response::decode(
             decode_frame(&output).unwrap().unwrap().1,
