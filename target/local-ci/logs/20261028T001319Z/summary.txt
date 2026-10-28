@@ -1,0 +1,13 @@
+BalanciFy local CI · profile=full · branch=arena/fb5e8c41-balancify · HEAD=7a9978c2123a64844a8b8c4bb74aebe69f32f5ce
+PASS  dependency-policy
+PASS  lab-python-tests
+PASS  ci-python-tests
+PASS  netem-syntax-and-safety
+PASS  portable-driver-tests
+PASS  rust-workspace-tests
+PASS  rust-release-build
+PASS  spdx-validator-install
+PASS  generate-spdx-2
+PASS  validate-spdx-2
+PASS  generate-spdx-3
+PASS  validate-spdx-3

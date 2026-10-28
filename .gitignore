@@ -11,9 +11,6 @@ sbom.vex.json
 /target/release
 target/.rustc_info.json
 
-# Local CI evidence logs are generated artifacts, not source changes
-target/local-ci/logs/
-
 # Native Windows UI build output
 .vs/
 **/bin/
