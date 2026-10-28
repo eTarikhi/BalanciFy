@@ -1525,7 +1525,7 @@ impl Service<balancify_crypto::TunnelCipher> {
 
         // Need mutable initiator to write
         let mut init = initiator;
-        let msg1 = init.write_message(eph, &session_bytes);
+        let msg1 = init.write_message(eph, &session_bytes)?;
 
         self.handshake_initiator = Some(init);
 

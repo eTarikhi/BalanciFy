@@ -200,8 +200,15 @@ impl SymmetricState {
     }
 }
 
-fn dh(secret: &x25519_dalek::StaticSecret, public: &x25519_dalek::PublicKey) -> [u8; DH_LEN] {
-    *secret.diffie_hellman(public).as_bytes()
+fn dh(
+    secret: &x25519_dalek::StaticSecret,
+    public: &x25519_dalek::PublicKey,
+) -> Result<[u8; DH_LEN], HandshakeError> {
+    let shared = secret.diffie_hellman(public);
+    if !shared.was_contributory() {
+        return Err(HandshakeError::AuthFailed);
+    }
+    Ok(*shared.as_bytes())
 }
 
 /// The handshake nonce. Handshake keys are replaced by every `MixKey`, so the
@@ -274,24 +281,33 @@ impl Initiator {
         Ok(Self::new(static_secret, responder_static, prologue))
     }
 
-    /// Flight 1: `e, es, s, ss` then the encrypted payload.
-    pub fn write_message(&mut self, ephemeral_secret: [u8; 32], payload: &[u8]) -> Vec<u8> {
+    /// Flight 1: `e, es, s, ss` then the encrypted payload. Returns `AuthFailed`
+    /// if either DH result is non-contributory (all zero), before changing the
+    /// transcript or emitting a flight.
+    pub fn write_message(
+        &mut self,
+        ephemeral_secret: [u8; 32],
+        payload: &[u8],
+    ) -> Result<Vec<u8>, HandshakeError> {
         let e = x25519_dalek::StaticSecret::from(ephemeral_secret);
         let e_public = x25519_dalek::PublicKey::from(&e);
+        // Compute and validate all DH terms before mutating the handshake state.
+        let es = dh(&e, &self.rs)?;
+        let ss = dh(&self.s, &self.rs)?;
 
         let mut out = Vec::with_capacity(MSG1_MIN_LEN + payload.len());
         out.extend_from_slice(e_public.as_bytes());
         self.state.mix_hash(e_public.as_bytes());
-        self.state.mix_key(&dh(&e, &self.rs)); // es
+        self.state.mix_key(&es); // es
 
         let s_public = x25519_dalek::PublicKey::from(&self.s);
         out.extend_from_slice(&self.state.encrypt_and_hash(s_public.as_bytes()));
-        self.state.mix_key(&dh(&self.s, &self.rs)); // ss
+        self.state.mix_key(&ss); // ss
         out.extend_from_slice(&self.state.encrypt_and_hash(payload));
 
         self.e = Some(e);
         self.written = true;
-        out
+        Ok(out)
     }
 
     /// Flight 2: `e, ee, se`, returning the peer's payload and the transport
@@ -306,9 +322,12 @@ impl Initiator {
         let e = self.e.as_ref().ok_or(HandshakeError::BadOrder)?;
 
         let re = x25519_dalek::PublicKey::from(<[u8; DH_LEN]>::try_from(&message[..DH_LEN]).map_err(|_| HandshakeError::Truncated)?);
+        // Validate both peer-dependent DH terms before altering the transcript.
+        let ee = dh(e, &re)?;
+        let se = dh(&self.s, &re)?;
         self.state.mix_hash(re.as_bytes());
-        self.state.mix_key(&dh(e, &re)); // ee
-        self.state.mix_key(&dh(&self.s, &re)); // se
+        self.state.mix_key(&ee); // ee
+        self.state.mix_key(&se); // se
 
         let payload = self.state.decrypt_and_hash(&message[DH_LEN..])?;
         self.done = true;
@@ -369,9 +388,11 @@ impl Responder {
         let re = x25519_dalek::PublicKey::from(
             <[u8; DH_LEN]>::try_from(&message[..DH_LEN]).map_err(|_| HandshakeError::Truncated)?,
         );
+        // Reject a low-order initiator ephemeral before touching transcript state.
+        let es = dh(&self.s, &re)?;
         self.state.mix_hash(re.as_bytes());
         // es, responder side: DH(s, re).
-        self.state.mix_key(&dh(&self.s, &re));
+        self.state.mix_key(&es);
 
         // The initiator's static key, encrypted under a key that only the holder
         // of the pinned identity could have derived.
@@ -383,8 +404,18 @@ impl Responder {
         let rs = x25519_dalek::PublicKey::from(
             <[u8; DH_LEN]>::try_from(rs_bytes.as_slice()).map_err(|_| HandshakeError::AuthFailed)?,
         );
-        // ss.
-        self.state.mix_key(&dh(&self.s, &rs));
+        // ss. The encrypted peer key is now authenticated, but a low-order
+        // point still yields a known shared secret and must not be accepted.
+        let ss = match dh(&self.s, &rs) {
+            Ok(shared) => shared,
+            Err(error) => {
+                // The static ciphertext already advanced this transcript; make
+                // this responder single-use after the invalid DH result.
+                self.done = true;
+                return Err(error);
+            }
+        };
+        self.state.mix_key(&ss);
 
         let payload = self.state.decrypt_and_hash(&message[DH_LEN + static_len..])?;
         self.rs = Some(rs);
@@ -444,14 +475,17 @@ impl Responder {
         let rs = self.rs.ok_or(HandshakeError::BadOrder)?;
         let e = x25519_dalek::StaticSecret::from(ephemeral_secret);
         let e_public = x25519_dalek::PublicKey::from(&e);
+        // Validate every DH before changing transcript state or emitting flight 2.
+        let ee = dh(&e, &re)?;
+        let se = dh(&e, &rs)?;
 
         let mut out = Vec::with_capacity(MSG2_MIN_LEN + payload.len());
         out.extend_from_slice(e_public.as_bytes());
         self.state.mix_hash(e_public.as_bytes());
         // ee.
-        self.state.mix_key(&dh(&e, &re));
+        self.state.mix_key(&ee);
         // se, responder side: DH(e, rs).
-        self.state.mix_key(&dh(&e, &rs));
+        self.state.mix_key(&se);
         out.extend_from_slice(&self.state.encrypt_and_hash(payload));
 
         self.done = true;
@@ -486,7 +520,7 @@ mod tests {
 
     fn complete() -> (TransportKeys, TransportKeys) {
         let (mut i, mut r) = pair();
-        let m1 = i.write_message(INIT_EPH, b"client says hello");
+        let m1 = i.write_message(INIT_EPH, b"client says hello").expect("valid initiator flight 1");
         let p1 = r.read_message(&m1).expect("flight 1 verifies");
         assert_eq!(p1, b"client says hello");
         let (m2, resp) = r.write_message(RESP_EPH, b"relay says hello").expect("flight 2");
@@ -505,13 +539,63 @@ mod tests {
     }
 
     #[test]
+    fn noncontributory_dh_is_rejected_on_initiator_and_peer_ephemeral_paths() {
+        let low_order = x25519_dalek::PublicKey::from([0u8; DH_LEN]);
+        let secret = x25519_dalek::StaticSecret::from(INIT_STATIC);
+        assert_eq!(dh(&secret, &low_order), Err(HandshakeError::AuthFailed));
+
+        // A misconfigured low-order pinned relay key must fail before flight 1
+        // changes state or emits bytes.
+        let mut initiator = Initiator::new(INIT_STATIC, [0u8; DH_LEN], PROLOGUE);
+        assert_eq!(initiator.write_message(INIT_EPH, b"hello"), Err(HandshakeError::AuthFailed));
+
+        // A peer can supply arbitrary Montgomery u-coordinates in either flight;
+        // reject the all-zero DH result before transcript advancement.
+        let mut responder = Responder::new(RESP_STATIC, PROLOGUE);
+        assert_eq!(responder.read_message(&vec![0u8; MSG1_MIN_LEN]), Err(HandshakeError::AuthFailed));
+        assert_eq!(responder.peer_ephemeral(), None);
+
+        let (mut initiator, _) = pair();
+        initiator.write_message(INIT_EPH, b"hello").expect("valid flight 1");
+        assert_eq!(initiator.read_message(&vec![0u8; MSG2_MIN_LEN]), Err(HandshakeError::AuthFailed));
+    }
+
+    #[test]
+    fn responder_rejects_noncontributory_initiator_static_and_poisoned_transcript() {
+        // Construct a validly encrypted IK first flight whose claimed initiator
+        // static is the low-order all-zero point. Its ss term is therefore zero.
+        let responder_secret = x25519_dalek::StaticSecret::from(RESP_STATIC);
+        let responder_public = x25519_dalek::PublicKey::from(&responder_secret);
+        let ephemeral = x25519_dalek::StaticSecret::from(INIT_EPH);
+        let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral);
+        let mut state = SymmetricState::new(PROTOCOL_NAME);
+        state.mix_hash(PROLOGUE);
+        state.mix_hash(responder_public.as_bytes());
+        state.mix_hash(ephemeral_public.as_bytes());
+        let es = ephemeral.diffie_hellman(&responder_public);
+        state.mix_key(es.as_bytes());
+        let encrypted_static = state.encrypt_and_hash(&[0u8; DH_LEN]);
+        state.mix_key(&[0u8; DH_LEN]);
+        let encrypted_payload = state.encrypt_and_hash(b"session");
+        let mut message = Vec::new();
+        message.extend_from_slice(ephemeral_public.as_bytes());
+        message.extend_from_slice(&encrypted_static);
+        message.extend_from_slice(&encrypted_payload);
+
+        let mut responder = Responder::new(RESP_STATIC, PROLOGUE);
+        assert_eq!(responder.read_message(&message), Err(HandshakeError::AuthFailed));
+        assert_eq!(responder.peer_static(), None, "a non-contributory identity is never published");
+        assert_eq!(responder.read_message(&message), Err(HandshakeError::BadOrder), "a partially advanced invalid transcript is single-use");
+    }
+
+    #[test]
     fn the_pinned_identity_is_what_authenticates_the_relay() {
         // The client pins the wrong relay key: flight 1 still goes out (it cannot
         // know better), but the relay rejects it, because es and ss differ.
         let bogus = public_of([0x99u8; 32]);
         let mut i = Initiator::new(INIT_STATIC, bogus, PROLOGUE);
         let mut r = Responder::new(RESP_STATIC, PROLOGUE);
-        let m1 = i.write_message(INIT_EPH, b"hello");
+        let m1 = i.write_message(INIT_EPH, b"hello").expect("valid initiator flight 1");
         assert_eq!(r.read_message(&m1), Err(HandshakeError::AuthFailed));
         assert_eq!(r.peer_static(), None, "no identity is learned from a bad flight");
     }
@@ -519,7 +603,7 @@ mod tests {
     #[test]
     fn every_part_of_the_first_flight_is_authenticated() {
         let (mut i, _) = pair();
-        let m1 = i.write_message(INIT_EPH, b"abcd");
+        let m1 = i.write_message(INIT_EPH, b"abcd").expect("valid initiator flight 1");
         assert!(m1.len() > 90, "the test must index real bytes");
         // One bit in the ephemeral, in the encrypted static, and in the payload.
         for idx in [0usize, 40, m1.len() - 1] {
@@ -534,14 +618,14 @@ mod tests {
     fn the_prologue_binds_the_handshake_to_its_context() {
         let mut i = Initiator::new(INIT_STATIC, public_of(RESP_STATIC), b"session A");
         let mut r = Responder::new(RESP_STATIC, b"session B");
-        let m1 = i.write_message(INIT_EPH, b"hello");
+        let m1 = i.write_message(INIT_EPH, b"hello").expect("valid initiator flight 1");
         assert!(r.read_message(&m1).is_err(), "a mismatched prologue must not complete");
     }
 
     #[test]
     fn the_initiator_identity_travels_encrypted() {
         let (mut i, mut r) = pair();
-        let m1 = i.write_message(INIT_EPH, b"hello");
+        let m1 = i.write_message(INIT_EPH, b"hello").expect("valid initiator flight 1");
         let init_public = public_of(INIT_STATIC);
         assert!(
             !m1.windows(32).any(|w| w == init_public),
@@ -554,9 +638,9 @@ mod tests {
     #[test]
     fn a_fresh_ephemeral_gives_a_fresh_session() {
         let (mut i, _) = pair();
-        let first = i.write_message(INIT_EPH, b"hello");
+        let first = i.write_message(INIT_EPH, b"hello").expect("valid initiator flight 1");
         let (mut i2, mut r2) = pair();
-        let second = i2.write_message([0x55u8; 32], b"hello");
+        let second = i2.write_message([0x55u8; 32], b"hello").expect("valid initiator flight 1");
         assert_ne!(first, second, "reusing an ephemeral would reuse the nonce");
 
         let (_, keys_b) = {
@@ -587,7 +671,7 @@ mod tests {
             assert_eq!(r.read_message(&vec![0u8; len]), Err(HandshakeError::Truncated));
         }
         let mut i = Initiator::new(INIT_STATIC, public_of(RESP_STATIC), PROLOGUE);
-        i.write_message(INIT_EPH, b"x");
+        i.write_message(INIT_EPH, b"x").expect("valid initiator flight 1");
         for len in 0..MSG2_MIN_LEN {
             assert_eq!(i.read_message(&vec![0u8; len]), Err(HandshakeError::Truncated));
         }
@@ -627,7 +711,7 @@ mod tests {
     fn pinning_enforced_on_responder() {
         use crate::keys::PinnedKeys;
         let (mut i, _) = pair();
-        let m1 = i.write_message(INIT_EPH, b"hello");
+        let m1 = i.write_message(INIT_EPH, b"hello").expect("valid initiator flight 1");
 
         // No pinning set => accepts any.
         let mut r2 = Responder::new(RESP_STATIC, PROLOGUE);
@@ -654,7 +738,7 @@ mod tests {
     fn replay_cache_rejects_second_flight() {
         use crate::replay::ReplayCache;
         let (mut i, _) = pair();
-        let m1 = i.write_message(INIT_EPH, b"hello");
+        let m1 = i.write_message(INIT_EPH, b"hello").expect("valid initiator flight 1");
         let mut cache = ReplayCache::with_defaults();
         let now = Instant::now();
 

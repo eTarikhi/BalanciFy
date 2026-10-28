@@ -1235,7 +1235,7 @@ mod tests {
             PROLOGUE,
         );
         let eph_c = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
-        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes());
+        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes()).expect("valid initiator flight 1");
         let now = Instant::now();
         let peer = "127.0.0.1:1234".parse().unwrap();
         let (msg2, sid) = relay.handle_msg1(&msg1, peer, now).expect("handshake ok");
@@ -1259,7 +1259,7 @@ mod tests {
         let msg1 = initiator.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &session_id.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         let peer = "127.0.0.1:1234".parse().unwrap();
         relay.handle_msg1(&msg1, peer, Instant::now()).expect("handshake establishes session");
 
@@ -1287,7 +1287,7 @@ mod tests {
         let first_msg = first.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &session_id.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         relay.handle_msg1(&first_msg, peer, now).expect("first handshake succeeds");
 
         let mut second = balancify_crypto::Initiator::new(
@@ -1298,7 +1298,7 @@ mod tests {
         let second_msg = second.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &session_id.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         assert!(
             relay.handle_msg1(&second_msg, peer, now + Duration::from_secs(1)).is_err(),
             "a fresh handshake must not reuse an active session id"
@@ -1327,7 +1327,7 @@ mod tests {
                 PROLOGUE,
             );
             let eph = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
-            let msg1 = initiator.write_message(eph, &payload);
+            let msg1 = initiator.write_message(eph, &payload).expect("valid initiator flight 1");
             assert!(
                 relay.handle_msg1(&msg1, peer, now + Duration::from_secs(offset as u64)).is_err(),
                 "noncanonical session payload length {} must be rejected",
@@ -1354,7 +1354,7 @@ mod tests {
             PROLOGUE,
         );
         let eph_c = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
-        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes());
+        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes()).expect("valid initiator flight 1");
         let now = Instant::now();
         let peer = "127.0.0.1:1234".parse().unwrap();
         assert!(relay.handle_msg1(&msg1, peer, now).is_err());
@@ -1374,7 +1374,7 @@ mod tests {
             PROLOGUE,
         );
         let eph = [0x11u8; 32];
-        let msg1 = initiator.write_message(eph, &session_id.to_be_bytes());
+        let msg1 = initiator.write_message(eph, &session_id.to_be_bytes()).expect("valid initiator flight 1");
         let now = Instant::now();
         let peer = "127.0.0.1:1234".parse().unwrap();
         assert!(relay.handle_msg1(&msg1, peer, now).is_ok());
@@ -1383,7 +1383,7 @@ mod tests {
             relay_kp.public_bytes(),
             PROLOGUE,
         );
-        let msg1_replay = initiator2.write_message(eph, &session_id.to_be_bytes());
+        let msg1_replay = initiator2.write_message(eph, &session_id.to_be_bytes()).expect("valid initiator flight 1");
         assert!(relay.handle_msg1(&msg1_replay, peer, now + Duration::from_secs(1)).is_err());
         assert_eq!(relay.total_rejected, 1);
     }
@@ -1402,7 +1402,7 @@ mod tests {
         let msg1 = initiator.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &session_id.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         let now = Instant::now();
         let original_peer = "127.0.0.1:1234".parse().unwrap();
         let spoofed_peer = "127.0.0.2:2345".parse().unwrap();
@@ -1447,7 +1447,7 @@ mod tests {
             PROLOGUE,
         );
         let eph_c = balancify_crypto::EphemeralKeypair::generate().secret_bytes();
-        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes());
+        let msg1 = initiator.write_message(eph_c, &session_id.to_be_bytes()).expect("valid initiator flight 1");
         let now = Instant::now();
         let peer = "127.0.0.1:1234".parse().unwrap();
         let (msg2, _) = relay.handle_msg1(&msg1, peer, now).expect("handshake");
@@ -1490,7 +1490,7 @@ mod tests {
         let msg1_1 = initiator1.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &1u64.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         assert!(relay.handle_msg1(&msg1_1, peer1, now).is_ok());
 
         // Second handshake from same IP should fail (per-IP cap 1)
@@ -1503,7 +1503,7 @@ mod tests {
         let msg1_2 = initiator2.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &2u64.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         assert!(relay.handle_msg1(&msg1_2, peer2, now).is_err(), "per-IP cap should reject");
 
         // From different IP should succeed (global cap 2)
@@ -1516,7 +1516,7 @@ mod tests {
         let msg1_3 = initiator3.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &3u64.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         assert!(relay.handle_msg1(&msg1_3, peer3, now).is_ok());
 
         // Third IP now exceeds global cap
@@ -1530,7 +1530,7 @@ mod tests {
         let msg1_4 = initiator4.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &4u64.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         assert!(relay.handle_msg1(&msg1_4, peer4, now).is_err(), "global cap should reject");
 
         let (sessions, handshakes, rejected, _, _, _) = relay.stats();
@@ -1632,7 +1632,7 @@ mod tests {
             let msg1 = initiator.write_message(
                 balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
                 &(100 + i as u64).to_be_bytes(),
-            );
+            ).expect("valid initiator flight 1");
             assert!(relay.handle_msg1(&msg1, peer, now).is_ok(), "handshake {} should ok", i);
         }
         // 11th in same minute should be rate limited
@@ -1645,7 +1645,7 @@ mod tests {
         let msg1 = initiator.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &999u64.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         let global_tokens_before_over_quota_attempt = relay.global_handshake_limiter.tokens;
         assert!(relay.handle_msg1(&msg1, peer, now).is_err(), "11th should be rate limited");
         assert_eq!(relay.global_handshake_limiter.tokens, global_tokens_before_over_quota_attempt,
@@ -1662,7 +1662,7 @@ mod tests {
         let msg1_later = initiator2.write_message(
             balancify_crypto::EphemeralKeypair::generate().secret_bytes(),
             &1000u64.to_be_bytes(),
-        );
+        ).expect("valid initiator flight 1");
         assert!(relay.handle_msg1(&msg1_later, peer, later).is_ok(), "after window should ok");
     }
 }
