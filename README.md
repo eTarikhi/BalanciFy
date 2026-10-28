@@ -65,7 +65,7 @@ for `be0cdb0` completed successfully across all eight jobs, including Ubuntu
 and Windows Rust workspace tests, native MSVC, WSL, lab, dependency/crypto, and
 WDK x64/ARM64.
 
-The latest source revision
+The X25519 hardening in
 [`5c866ea`](https://github.com/eTarikhi/BalanciFy/commit/5c866ea5bf8d501d2a939c8377d65bb463f79cde)
 rejects non-contributory (all-zero) X25519 shared secrets at every Noise_IK DH
 step. Initiator flight 1 now propagates failure rather than emitting a frame;
@@ -74,7 +74,7 @@ dependency audit, 5 lab tests, 77 CI Python tests, netem safety, and 12 portable
 C tests with strict warnings/ASan/UBSan; it skips Rust because Cargo and rustfmt
 are unavailable here. Hosted run `40609617883` is in progress: Ubuntu/Windows Rust
 tests, release/SPDX, native MSVC, WSL, lab, and dependency checks passed; WDK
-x64/ARM64 remain in progress.
+x64/ARM64 remain in progress. The latest source change, [`6a3b633`](https://github.com/eTarikhi/BalanciFy/commit/6a3b633d6503156d7ae4d76974156dc53f325094), bounds idle and stalled IPC reads in both stream modes; run `40610109227` was queued at latest query.
 
 Run `40608725414` at `e101441` passed Ubuntu/Windows Rust, Linux release/SPDX,
 native MSVC, WSL, lab, and dependency/crypto jobs; WDK x64/ARM64 were still in
@@ -87,7 +87,7 @@ hardware, signing, review, or field evidence. See the [completion ledger](docs/c
 for prioritized work and evidence classes.
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | `be0cdb0` passed all eight hosted jobs in run `40454764313`, including Rust tests on Ubuntu/Windows and WDK x64/ARM64. `5c866ea` adds fail-closed X25519 contributory checks and low-order regressions; Ubuntu and Windows Rust tests plus native MSVC passed in run `40609617883`; WDK x64/ARM64 remained in progress at the latest query. Run `40608725414` at `e101441` passed software tests, release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress. | Ubuntu/Windows Rust tests and native MSVC for `5c866ea` passed in `40609617883`; WDK x64/ARM64 were still running, as were WDK jobs on `40608725414`. Production Windows service lifecycle, relay deployment/interoperability, driver runtime, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | `be0cdb0` passed all eight hosted jobs in run `40454764313`, including Rust tests on Ubuntu/Windows and WDK x64/ARM64. `5c866ea` adds fail-closed X25519 contributory checks and low-order regressions; Ubuntu and Windows Rust tests plus native MSVC passed in run `40609617883`; WDK x64/ARM64 remained in progress at the latest query. `6a3b633` bounds IPC idle/stalled reads; its run `40610109227` was queued. Run `40608725414` at `e101441` passed software tests, release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress. | Ubuntu/Windows Rust tests and native MSVC for `5c866ea` passed in `40609617883`; WDK x64/ARM64 were still running, as were WDK jobs on `40608725414`. Rust validation of IPC timeout fix `6a3b633` is pending run `40610109227`. Production Windows service lifecycle, relay deployment/interoperability, driver runtime, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
