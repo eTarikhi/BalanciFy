@@ -4,9 +4,11 @@
 
 The user supplied a Windows 11 local full-CI summary for HEAD `e63e1439b1ac2ad763e426e7dec249b6d013ee80`: all 12 listed CI stages passed. Those checks are separate from the IPC harness; portable driver tests are not driver install/runtime acceptance.
 
-The user then supplied the actual elevated-admin IPC command and PowerShell parser output. It reports two **script bugs** in `Test-IpcAcceptance.ps1`: interpolating `$session:` in strings at lines 253 and 256 is parsed as a scoped variable reference and fails with `InvalidVariableReferenceWithDrive`. I fixed both as `${session}:`. A repository-wide scan found the same parse defect in `Invoke-RigBMeasurements.ps1` (`$exit:` in an interpolated error message); I fixed it as `${exit}:` because CI parses every `.ps1`. These are harness syntax bugs, not product/IPC bugs. The parser stops before the script body runs, so no admin test case or policy mutation occurred; no case is accepted.
+The user then supplied the Admin and Standard harness output after pulling commit `b147226`. This confirms the PowerShell syntax fixes worked. The Admin command reached `execution-context` but failed because the caller was not elevated: `ETARIKHI\\Administrator`, session 1, `elevatedAdmin=False`, while `-Role Admin` requires `IsInRole(Administrator)` to be true. That is a **test setup/context failure**, not a product bug; no Admin mutations or further Admin cases ran.
 
-The separate hosted Actions runs [41019982666](https://github.com/eTarikhi/BalanciFy/actions/runs/41019982666), [41020076222](https://github.com/eTarikhi/BalanciFy/actions/runs/41020076222), and [41028177906](https://github.com/eTarikhi/BalanciFy/actions/runs/41028177906) failed at `Parse-check every repository PowerShell script`, before PSScriptAnalyzer, service build, or IPC. The user-supplied parse errors explain the acceptance-script failure; the `$exit:` defect was another repository-wide parse failure candidate. Both syntax fixes are in this branch update; rerun the parser job to confirm. PSScriptAnalyzer and hosted IPC results remain unavailable.
+The Standard command passed `execution-context`, but `permitted-ping`, `permitted-get-status`, `machine-policy-write`, `idle-connection-timeout`, `partial-ipc-header-timeout`, and `stalled-ipc-payload-timeout` all failed on `NamedPipeClientStream.Connect()` timing out after 5 seconds. The harness could not connect to the local pipe; therefore it sent no IPC request and did not test authorization or frame/idle deadlines. Classify these as **service/pipe prerequisite not met (likely service absent, not ready, or wrong pipe) pending evidence**, not as six separate product bugs. If the service was confirmed running and the expected pipe existed, its service logs are needed to assess a product listener failure. No case is accepted from these attempts; verify no service-side mutation occurred.
+
+The syntax fixes are in pushed commit `b147226`. Hosted run [41038076670](https://github.com/eTarikhi/BalanciFy/actions/runs/41038076670) passed the repository-wide PowerShell parser, but PSScriptAnalyzer failed and the service-build/IPC steps were skipped. Analyzer findings are not available at this inspection.
 
 The additive `-Role Auto -ReadOnlyOnly` mode is solely for hosted CI. It does not change standard-user/admin authorization logic.
 
@@ -24,7 +26,15 @@ Do not send signing keys, relay secrets, user credentials, raw packet payloads o
 
 ## Exact IPC reruns if an earlier symptom remains
 
-The 12 local CI PASS checks do not need rerunning based on the supplied report. They are not IPC acceptance cases. Since the earlier IPC failure was not accompanied by a case ID or case log, if that symptom still needs investigation, rerun the full role-specific group below; do not rerun an unrelated group, and do not mark any IPC case accepted until its JSON and transcript are reviewed.
+The 12 local CI PASS checks do not need rerunning. The supplied Standard transcript names the timed-out IPC cases, but there is no case JSON or service log. Because each failed at `Connect()` before sending a request, first start the intended service build and confirm the process and local pipe `BalanciFy.Service.v1` are present. Follow RUNBOOK setup: use the approved test service, or in a disposable VM run the debug test host in a separate window with a unique temporary state directory and `--insecure-lab` (never add `--driver-device`):
+
+```powershell
+$env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
+cargo build -p balancify-service --bin balancify-service
+.\target\debug\balancify-service.exe --insecure-lab
+```
+
+Leave that process running while testing. Do not start a second listener if the approved service already owns the pipe. If the process is running but the named pipe is absent, stop and capture service stdout/stderr rather than treating downstream timeouts as IPC case results. Then rerun both role groups below. For Admin, launch a new **Run as administrator** PowerShell and verify `WindowsPrincipal.IsInRole(Administrator)` is `True`; the account name alone is insufficient. Do not mark a case accepted until its evidence JSON and transcript are reviewed.
 
 ### A. Standard-user authorization + transport group
 

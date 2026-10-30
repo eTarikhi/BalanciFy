@@ -6,7 +6,15 @@ This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Ri
 
 ### Setup
 
-1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using your approved test package; start the service and confirm its local pipe is `BalanciFy.Service.v1`.
+1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using your approved test package; start the service and confirm its local pipe is `BalanciFy.Service.v1`. If using the debug IPC test host instead of an installed service, in a separate PowerShell window set a unique temporary state directory, build and run the service with `--insecure-lab`, and leave it running while tests execute:
+
+   ```powershell
+   $env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
+   cargo build -p balancify-service --bin balancify-service
+   .\target\debug\balancify-service.exe --insecure-lab
+   ```
+
+   Use this only in the disposable VM, without relay credentials or `--driver-device`; do not start a second listener if the approved service already owns the pipe.
 2. The IPC harness emits **one JSON evidence file per invocation**. It contains the structured evidence records and a `transcriptLog` array. Default output is ignored `target\acceptance-evidence\ipc\`. Hosted CI uses `-Role Auto -ReadOnlyOnly` to exercise permitted requests and frame/idle deadlines without policy mutation; it is hosted-runner evidence, not isolated-VM acceptance, and cannot establish standard-user authorization or admin write behavior.
 3. The standard-user invocation takes roughly 3 minutes because idle, partial-header, and stalled-payload tests exercise the service's 60-second timeouts. `-TimeoutSeconds` is a client observation ceiling (65–300s), not a server setting.
 
