@@ -330,7 +330,36 @@ fn default_state_dir() -> std::io::Result<std::path::PathBuf> {
     choose_state_dir(override_dir, program_data, xdg_state_home, home, cfg!(windows))
 }
 
+fn startup_step<T>(
+    name: &str,
+    operation: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    eprintln!("[startup] {name}: starting");
+    match operation() {
+        Ok(value) => {
+            eprintln!("[startup] {name}: OK");
+            Ok(value)
+        }
+        Err(error) => {
+            eprintln!("[startup] {name}: FAILED: {error}");
+            Err(error)
+        }
+    }
+}
+
+fn machine_policy_open_error(path: &std::path::Path, source: std::io::Error) -> std::io::Error {
+    let kind = source.kind();
+    std::io::Error::new(
+        kind,
+        format!(
+            "failed to open machine-policy store at {}: {source}. Run under the intended service identity (preferably LocalSystem), or elevated with SeRestorePrivilege enabled; setting SYSTEM as owner/group requires SeRestorePrivilege. Do not weaken the ACL.",
+            path.display()
+        ),
+    )
+}
+
 fn main() -> std::io::Result<()> {
+    eprintln!("[startup] parse command-line options: starting");
     let mut positional = Vec::new();
     let mut insecure_lab_requested = false;
     let mut simulate_app_traffic_requested = false;
@@ -346,57 +375,106 @@ fn main() -> std::io::Result<()> {
                 println!("For a secondary relay with a distinct identity, set BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY; otherwise it uses the primary identity.");
                 println!("Synthetic app traffic is opt-in and restricted to --insecure-lab mode.");
                 println!("--driver-device opens the Windows control device, injects received tunnel packets, and polls outbound raw-IP packets; it requires the driver and appropriate access.");
+                eprintln!("[startup] parse command-line options: OK (help requested)");
                 return Ok(());
             }
-            _ if arg.starts_with('-') => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unknown option: {arg}"))),
+            _ if arg.starts_with('-') => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unknown option: {arg}"),
+                );
+                eprintln!("[startup] parse command-line options: FAILED: {error}");
+                return Err(error);
+            }
             _ => positional.push(arg),
         }
     }
     if positional.len() > 2 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "expected at most primary and secondary relay addresses"));
-    }
-    let (relay_primary, relay_secondary) = parse_relay_addresses(
-        positional.first().map(String::as_str),
-        positional.get(1).map(String::as_str),
-    )?;
-    let configured_relay = configured_relay_public_key("BALANCIFY_RELAY_PUBLIC_KEY")?;
-    let configured_secondary_relay = configured_relay_public_key("BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY")?;
-    if relay_secondary.is_none() && configured_secondary_relay.is_some() {
-        return Err(std::io::Error::new(
+        let error = std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY requires a secondary relay address",
-        ));
+            "expected at most primary and secondary relay addresses",
+        );
+        eprintln!("[startup] parse command-line options: FAILED: {error}");
+        return Err(error);
     }
+    eprintln!("[startup] parse command-line options: OK");
+    let (relay_primary, relay_secondary) = startup_step("parse relay addresses", || {
+        parse_relay_addresses(
+            positional.first().map(String::as_str),
+            positional.get(1).map(String::as_str),
+        )
+    })?;
+    let configured_relay = startup_step("read primary relay identity", || {
+        configured_relay_public_key("BALANCIFY_RELAY_PUBLIC_KEY")
+    })?;
+    let configured_secondary_relay = startup_step("read secondary relay identity", || {
+        configured_relay_public_key("BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY")
+    })?;
+    startup_step("validate secondary relay configuration", || {
+        if relay_secondary.is_none() && configured_secondary_relay.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY requires a secondary relay address",
+            ));
+        }
+        Ok(())
+    })?;
 
-    let state_dir = default_state_dir()?;
+    let state_dir = startup_step("resolve service state directory", default_state_dir)?;
     let secret_path = state_dir.join("client_secret.key");
     let pinned_path = state_dir.join("pinned_relays.keys");
     let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-    let pinned_relays = store.load_pinned().map_err(|error| std::io::Error::other(format!("failed to load pinned relay identities: {error}")))?;
-    let relay_public = resolve_relay_public(configured_relay, &pinned_relays)?;
+    let pinned_relays = startup_step("load pinned relay identities", || {
+        store.load_pinned().map_err(|error| {
+            std::io::Error::other(format!("failed to load pinned relay identities: {error}"))
+        })
+    })?;
+    let relay_public = startup_step("resolve primary relay identity", || {
+        resolve_relay_public(configured_relay, &pinned_relays)
+    })?;
     // By default both endpoints may share a relay identity (for a replicated
     // cluster). Set the secondary key explicitly when it has a distinct pin.
-    let secondary_relay_public = if relay_secondary.is_some() {
-        match configured_secondary_relay {
-            Some(public) => resolve_relay_public(Some(public), &pinned_relays)?,
-            None => relay_public,
+    let secondary_relay_public = startup_step("resolve secondary relay identity", || {
+        if relay_secondary.is_some() {
+            match configured_secondary_relay {
+                Some(public) => resolve_relay_public(Some(public), &pinned_relays),
+                None => Ok(relay_public),
+            }
+        } else {
+            Ok(None)
         }
-    } else {
-        None
-    };
-    let mode = select_connection_mode(relay_public.is_some(), insecure_lab_requested, cfg!(debug_assertions))?;
-    if mode != ConnectionMode::Secure && configured_secondary_relay.is_some() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "a secondary relay identity requires secure mode with a primary relay identity",
-        ));
-    }
-    validate_lab_target(mode, relay_primary, relay_secondary)?;
-    validate_simulated_traffic(mode, simulate_app_traffic_requested)?;
-    let keypair = store.load_or_generate().map_err(|error| std::io::Error::other(format!("failed to load or persist service identity: {error}")))?;
+    })?;
+    let mode = startup_step("select connection security mode", || {
+        select_connection_mode(
+            relay_public.is_some(),
+            insecure_lab_requested,
+            cfg!(debug_assertions),
+        )
+    })?;
+    startup_step("validate selected mode and relay identities", || {
+        if mode != ConnectionMode::Secure && configured_secondary_relay.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a secondary relay identity requires secure mode with a primary relay identity",
+            ));
+        }
+        Ok(())
+    })?;
+    startup_step("validate relay targets", || {
+        validate_lab_target(mode, relay_primary, relay_secondary)
+    })?;
+    startup_step("validate simulated traffic mode", || {
+        validate_simulated_traffic(mode, simulate_app_traffic_requested)
+    })?;
+    let keypair = startup_step("load or generate service identity", || {
+        store.load_or_generate().map_err(|error| {
+            std::io::Error::other(format!("failed to load or persist service identity: {error}"))
+        })
+    })?;
     let driver_device = if driver_device_requested {
-        Some(DriverDevice::open()?)
+        Some(startup_step("open requested NDIS device", DriverDevice::open)?)
     } else {
+        eprintln!("[startup] NDIS device: not requested; OK");
         None
     };
 
@@ -421,36 +499,58 @@ fn main() -> std::io::Result<()> {
         probe_timeout: Duration::from_secs(5),
         auto_accept: false,
     };
-    let policy_store = MachinePolicyStore::open(state_dir.join("machine-policy"))?;
+    let policy_path = state_dir.join("machine-policy");
+    let policy_store = startup_step("open machine-policy store", || {
+        MachinePolicyStore::open(&policy_path)
+            .map_err(|error| machine_policy_open_error(&policy_path, error))
+    })?;
     let dummy_key = [0u8; 32];
     let dummy_salt = [0u8; 3];
     let dummy_cipher = TunnelCipher::new(&dummy_key, dummy_salt).unwrap();
-    let (mut svc, recovered_policy) = Service::new_with_machine_policy_store(
-        cfg,
-        dummy_cipher.clone(),
-        dummy_cipher,
-        policy_store,
+    let (mut svc, recovered_policy) = startup_step(
+        "initialize service core and machine policy",
+        || {
+            Service::new_with_machine_policy_store(
+                cfg,
+                dummy_cipher.clone(),
+                dummy_cipher,
+                policy_store,
+            )
+        },
     )?;
     if recovered_policy {
         eprintln!("WARNING: machine policy was recovered from its last valid backup");
     }
+    eprintln!("[startup] apply service identity and relay configuration: starting");
     svc.set_static_keypair(keypair);
     if !pinned_relays.is_empty() {
         svc.set_pinned_relays(pinned_relays);
     }
     svc.set_relays(relay_primary, relay_secondary);
     svc.set_relay_failover_timeout(RELAY_FAILOVER_TIMEOUT);
+    eprintln!("[startup] apply service identity and relay configuration: OK");
 
-    // Simulate two uplinks with bound sockets
-    let sock0 = UdpSocket::bind("0.0.0.0:0")?;
-    let sock1 = UdpSocket::bind("0.0.0.0:0")?;
+    // Simulate two uplinks with bound sockets.
+    let sock0 = startup_step("bind simulated uplink 0 UDP socket", || {
+        UdpSocket::bind("0.0.0.0:0").map_err(|error| {
+            std::io::Error::new(error.kind(), format!("failed to bind 0.0.0.0:0: {error}"))
+        })
+    })?;
+    let sock1 = startup_step("bind simulated uplink 1 UDP socket", || {
+        UdpSocket::bind("0.0.0.0:0").map_err(|error| {
+            std::io::Error::new(error.kind(), format!("failed to bind 0.0.0.0:0: {error}"))
+        })
+    })?;
     // Keep the single-threaded service/IPC dispatcher responsive: blocking
     // reads on both sockets could otherwise stall it for 200 ms per loop.
-    sock0.set_nonblocking(true)?;
-    sock1.set_nonblocking(true)?;
-    let addrs = [sock0.local_addr()?, sock1.local_addr()?];
+    startup_step("set simulated uplink 0 nonblocking", || sock0.set_nonblocking(true))?;
+    startup_step("set simulated uplink 1 nonblocking", || sock1.set_nonblocking(true))?;
+    let addrs = startup_step("read simulated uplink socket addresses", || {
+        Ok([sock0.local_addr()?, sock1.local_addr()?])
+    })?;
     println!("  uplink sockets: {:?} (simulating Ethernet + Wi-Fi)", addrs);
 
+    eprintln!("[startup] configure simulated uplinks and publish initial state: starting");
     let now = Instant::now();
     svc.add_uplink(UplinkId(0), 200_000_000, false, 1500, now);
     svc.add_uplink(UplinkId(1), 100_000_000, false, 1500, now);
@@ -459,8 +559,9 @@ fn main() -> std::io::Result<()> {
         svc.on_probe_ok(UplinkId(1), Duration::from_millis(35), now);
     }
     svc.publish(now);
+    eprintln!("[startup] configure simulated uplinks and publish initial state: OK");
 
-    let (ipc_calls, ipc_addr) = start_ipc_listener()?;
+    let (ipc_calls, ipc_addr) = startup_step("start local IPC v1 listener", start_ipc_listener)?;
     println!("  IPC v1 listener: {}", ipc_addr);
 
     // Handshake
@@ -469,11 +570,20 @@ fn main() -> std::io::Result<()> {
         ConnectionMode::Secure => {
             let relay_identity = relay_public.expect("secure mode requires a relay identity");
             println!("  initiating authenticated handshake to primary...");
-            initiate_and_send_handshake(&mut svc, relay_identity, &sock0, relay_primary, handshake_started_at)?;
+            startup_step("send initial authenticated handshake", || {
+                initiate_and_send_handshake(
+                &mut svc,
+                relay_identity,
+                &sock0,
+                relay_primary,
+                handshake_started_at,
+            )
+            })?;
         }
         ConnectionMode::InsecureLab => {
             eprintln!("  WARNING: explicitly enabled INSECURE lab mode; loopback only, zero-key test cipher");
             svc.open_session(1, now);
+            eprintln!("[startup] open insecure lab session: OK");
         }
     }
 
@@ -944,6 +1054,24 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod ipc_capacity_tests {
     use super::*;
+
+    #[test]
+    fn machine_policy_open_error_names_path_os_cause_and_required_identity() {
+        let path = std::path::Path::new(r"C:\LabEvidence\balancify-ipc-state\machine-policy");
+        let source = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Access is denied.",
+        );
+        let error = machine_policy_open_error(path, source);
+        let message = error.to_string();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(message.contains(path.to_string_lossy().as_ref()));
+        assert!(message.contains("Access is denied."));
+        assert!(message.contains("LocalSystem"));
+        assert!(message.contains("SeRestorePrivilege"));
+        assert!(message.contains("Do not weaken the ACL"));
+    }
 
     #[test]
     fn pending_driver_receive_queue_preserves_fifo_and_fails_closed_at_capacity() {

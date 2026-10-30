@@ -263,27 +263,74 @@ jobs:
           }
 
       - name: Run PSScriptAnalyzer
+        id: pssa
+        continue-on-error: true
         shell: pwsh
         run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force -ErrorAction Stop
           $root = $env:GITHUB_WORKSPACE
-          $relativePaths = @(& git -C $root ls-files --cached --others --exclude-standard -- '*.ps1' '**/*.ps1')
-          if ($LASTEXITCODE -ne 0) { throw 'git ls-files could not enumerate repository PowerShell files.' }
-          $files = @($relativePaths | Where-Object { $_ -and $_ -notmatch '(^|[\\/])(target|node_modules|\.venv)([\\/]|$)' } |
-            ForEach-Object { Get-Item -LiteralPath (Join-Path $root $_) })
-          $findings = @(Invoke-ScriptAnalyzer -Path $files.FullName -Severity Error,Warning -ErrorAction Stop)
           $report = Join-Path $env:RUNNER_TEMP 'psscriptanalyzer-findings.json'
-          $findings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding utf8
-          if ($findings.Count -gt 0) {
-            $findings | Format-Table -AutoSize | Out-String -Width 4096 | Write-Host
-            $errors = @($findings | Where-Object Severity -eq 'Error')
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error ("{0}:{1}:{2} {3} [{4}]" -f $_.ScriptPath,$_.Line,$_.Column,$_.Message,$_.RuleName) }
-              throw "PSScriptAnalyzer found $($errors.Count) error-level finding(s)."
+          $summaryPath = $env:GITHUB_STEP_SUMMARY
+          $findings = @()
+          $analysisError = $null
+          try {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force -ErrorAction Stop
+            $relativePaths = @(& git -C $root ls-files --cached --others --exclude-standard -- '*.ps1' '**/*.ps1')
+            if ($LASTEXITCODE -ne 0) { throw 'git ls-files could not enumerate repository PowerShell files.' }
+            $files = @($relativePaths | Where-Object { $_ -and $_ -notmatch '(^|[\\/])(target|node_modules|\.venv)([\\/]|$)' } |
+              ForEach-Object { Get-Item -LiteralPath (Join-Path $root $_) })
+            if ($files.Count -eq 0) { throw 'No repository .ps1 files found for PSScriptAnalyzer.' }
+            $settings = Join-Path $root 'PSScriptAnalyzerSettings.psd1'
+            $findings = @(Invoke-ScriptAnalyzer -Path $files.FullName -Settings $settings -Severity Error,Warning -ErrorAction Stop)
+          } catch {
+            $analysisError = $_.Exception.Message
+          }
+
+          $reportObject = [pscustomobject]@{
+            analyzer = 'PSScriptAnalyzer'
+            version = '1.24.0'
+            settings = 'PSScriptAnalyzerSettings.psd1'
+            executionError = $analysisError
+            findings = @($findings | ForEach-Object {
+              [pscustomobject]@{
+                rule = $_.RuleName; severity = $_.Severity; file = $_.ScriptPath
+                line = $_.Line; column = $_.Column; message = $_.Message
+              }
+            })
+          }
+          $reportObject | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding utf8
+
+          $summary = New-Object System.Collections.Generic.List[string]
+          $summary.Add('### PSScriptAnalyzer')
+          $summary.Add('')
+          $summary.Add('Settings: `PSScriptAnalyzerSettings.psd1`; no rules are blanket-suppressed.')
+          $summary.Add('')
+          if ($null -ne $analysisError) {
+            $summary.Add("Analyzer execution failed: $analysisError")
+            Write-Host "PSScriptAnalyzer execution failed: $analysisError"
+          } elseif ($findings.Count -eq 0) {
+            $summary.Add('No Error/Warning findings.')
+            Write-Host 'PSScriptAnalyzer found no Error/Warning findings.'
+          } else {
+            $summary.Add('| Severity | Rule | File | Line | Message |')
+            $summary.Add('|---|---|---|---:|---|')
+            foreach ($finding in $findings) {
+              $relativeFile = [IO.Path]::GetRelativePath($root, [string]$finding.ScriptPath)
+              $message = ([string]$finding.Message -replace '[|]', '\|' -replace '[\r\n]+', ' ')
+              $summary.Add('| {0} | `{1}` | `{2}` | {3} | {4} |' -f $finding.Severity,$finding.RuleName,$relativeFile,$finding.Line,$message)
             }
-            Write-Warning "PSScriptAnalyzer reported $($findings.Count) warning/information finding(s); only error severity is release-blocking."
-          } else { Write-Host 'PSScriptAnalyzer found no findings.' }
+            $findings | Format-Table -AutoSize | Out-String -Width 4096 | Write-Host
+            $errorFindings = @($findings | Where-Object Severity -eq 'Error')
+            $summary.Add('')
+            $summary.Add("Error findings: $($errorFindings.Count); warning findings: $(@($findings | Where-Object Severity -eq 'Warning').Count).")
+            if ($errorFindings.Count -gt 0) {
+              Write-Host "PSScriptAnalyzer found $($errorFindings.Count) error-level finding(s)."
+            } else {
+              Write-Warning "PSScriptAnalyzer reported $($findings.Count) warning-level finding(s); warnings are listed for triage."
+            }
+          }
+          $summary | Add-Content -LiteralPath $summaryPath -Encoding utf8
+          if ($null -ne $analysisError -or @($findings | Where-Object Severity -eq 'Error').Count -gt 0) { exit 1 }
 
       - name: Build the debug service test host (no driver)
         shell: bash
@@ -353,6 +400,16 @@ jobs:
             ${{ runner.temp }}/balancify-ipc-hosted-evidence/**
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Enforce PSScriptAnalyzer after IPC evidence collection
+        if: always()
+        shell: pwsh
+        env:
+          PSSCRIPTANALYZER_OUTCOME: ${{ steps.pssa.outcome }}
+        run: |
+          if ($env:PSSCRIPTANALYZER_OUTCOME -ne 'success') {
+            throw "PSScriptAnalyzer did not pass (outcome=$env:PSSCRIPTANALYZER_OUTCOME); inspect the findings in the job summary/artifact."
+          }
 
   core-tests-windows:
     name: Rust workspace tests (windows)

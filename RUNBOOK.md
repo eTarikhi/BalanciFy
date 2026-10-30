@@ -6,17 +6,34 @@ This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Ri
 
 ### Setup
 
-1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using your approved test package; start the service under its intended service identity and confirm its local pipe is `BalanciFy.Service.v1`. If using the debug IPC test host instead of an installed service, launch it from a **Run as administrator** PowerShell window (or the approved SYSTEM service context): Windows machine-policy startup applies a protected SYSTEM/Administrators ACL. In that separate window set a unique temporary state directory, build and run the service with `--insecure-lab`, and leave it running while tests execute:
+1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using the approved test package, start it under its intended identity, and confirm its local pipe is `BalanciFy.Service.v1`.
+2. **Do not assume an elevated Administrator token can set the policy-store owner to SYSTEM.** `MachinePolicyStore::open` applies a protected SYSTEM/Administrators ACL with SYSTEM owner/group through `SetFileSecurityW`; assigning SYSTEM as owner/group requires `SeRestorePrivilege` unless running under an identity that can perform that operation (normally LocalSystem). An elevated Administrator may possess but not have this privilege enabled. Do not change the ACL to make the debug host start.
+3. For a debug IPC host, the approved test context is the configured service identity (normally LocalSystem). If no test service wrapper is installed, start it through a temporary SYSTEM scheduled task from an elevated PowerShell window. Build first, create a launcher, register/start the task, then keep it running while the interactive clients test the pipe:
 
    ```powershell
+   # Elevated PowerShell, inside the disposable VM only.
+   New-Item -ItemType Directory -Force -Path C:\LabEvidence | Out-Null
    $env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
    cargo build -p balancify-service --bin balancify-service
-   .\target\debug\balancify-service.exe --insecure-lab
+   $exe = (Resolve-Path .\target\debug\balancify-service.exe).Path
+   $taskName = 'BalanciFy-IpcService-' + [Guid]::NewGuid().ToString('N')
+   $launcher = 'C:\LabEvidence\start-balancify-ipc-service.ps1'
+   $log = 'C:\LabEvidence\balancify-ipc-service.log'
+   @"
+   `$env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
+   & '$exe' --insecure-lab *> '$log'
+   "@ | Set-Content -LiteralPath $launcher -Encoding UTF8
+   $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`""
+   $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
+   $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+   Start-ScheduledTask -TaskName $taskName
    ```
 
-   Use this only in the disposable VM, without relay credentials or `--driver-device`; do not start a second listener if the approved service already owns the pipe.
-2. The IPC harness emits **one JSON evidence file per invocation**. It contains the structured evidence records and a `transcriptLog` array. Default output is ignored `target\acceptance-evidence\ipc\`. Hosted CI uses `-Role Auto -ReadOnlyOnly` to exercise permitted requests and frame/idle deadlines without policy mutation; it is hosted-runner evidence, not isolated-VM acceptance, and cannot establish standard-user authorization or admin write behavior.
-3. The standard-user invocation takes roughly 3 minutes because idle, partial-header, and stalled-payload tests exercise the service's 60-second timeouts. `-TimeoutSeconds` is a client observation ceiling (65–300s), not a server setting.
+   Check the log for `[startup] open machine-policy store: OK` and `[startup] start local IPC v1 listener: OK` before running clients. On failure, retain the complete diagnostic, including the policy-store path, OS error, and identity/privilege hint; inspect the ACL from native PowerShell (`Get-Acl` is a PowerShell cmdlet, not a `cmd.exe` command). This debug mode is loopback-only; use no relay credentials and no `--driver-device`. Do not start a second listener if the approved service already owns the pipe. After tests, run `Stop-ScheduledTask -TaskName $taskName` and `Unregister-ScheduledTask -TaskName $taskName -Confirm:$false`; keep the log and evidence files.
+4. The IPC harness emits **one JSON evidence file per invocation** with structured cases and `transcriptLog`. Default output is ignored `target\acceptance-evidence\ipc\`. Hosted CI uses `-Role Auto -ReadOnlyOnly`; that is hosted-runner evidence, not isolated-VM acceptance, and cannot establish standard-user authorization or admin write behavior.
+5. The Standard invocation takes roughly 3 minutes because idle, partial-header, and stalled-payload tests exercise the service's 60-second deadlines. `-TimeoutSeconds` is a client observation ceiling (65–300s), not a server setting.
 
 ### Standard-user run
 

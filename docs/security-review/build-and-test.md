@@ -23,7 +23,9 @@ The SPDX 2.3 document is generated and validated by the existing CI steps. Confi
 
 ## Windows PowerShell and read-only IPC job
 
-The new `windows-latest` job is designed to:
+The `windows-latest` job parses every repository `.ps1`, runs PSScriptAnalyzer using `PSScriptAnalyzerSettings.psd1`, builds a debug service test host without a driver, and runs read-only named-pipe cases. The settings file keeps default rules active and excludes none; rule exceptions require a named rule and a documented scope-specific reason. Analyzer findings (rule, severity, file, line, message) are written to both the job summary and a JSON artifact. Analyzer failure is recorded but does not short-circuit the later IPC step; a final enforcement step keeps the overall job red if analysis did not pass.
+
+The job is designed to:
 
 1. Enumerate every repository `.ps1` outside `.git`, generated `target`, and tool caches; parse each using `[System.Management.Automation.Language.Parser]::ParseFile` and fail on parse errors.
 2. Run PSScriptAnalyzer 1.24.0 on the same script set. Error-severity findings fail the job; warnings are reported for triage.
