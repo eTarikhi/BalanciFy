@@ -181,18 +181,34 @@ pub struct MachinePolicyStore {
     directory: PathBuf,
 }
 
+fn prepare_directory(directory: &Path) -> io::Result<PathBuf> {
+    let directory = directory.to_path_buf();
+    fs::create_dir_all(&directory)?;
+    let metadata = fs::symlink_metadata(&directory)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(invalid_data("machine-policy directory is not a trusted directory"));
+    }
+    Ok(directory)
+}
+
 impl MachinePolicyStore {
     /// Opens a dedicated machine-policy directory and restricts it to the
     /// service/admin trust boundary before reading existing state.
     pub fn open(directory: impl AsRef<Path>) -> io::Result<Self> {
-        let directory = directory.as_ref().to_path_buf();
-        fs::create_dir_all(&directory)?;
-        let metadata = fs::symlink_metadata(&directory)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(invalid_data("machine-policy directory is not a trusted directory"));
-        }
+        let directory = prepare_directory(directory.as_ref())?;
         secure_path(&directory, true)?;
         Ok(Self { directory })
+    }
+
+    /// Opens an isolated test directory without changing its platform ACL.
+    /// This is compiled only into test builds so persistence behavior can be
+    /// tested under ordinary local accounts; production always uses `open`,
+    /// which enforces the SYSTEM/Administrators (or private Unix) policy.
+    #[cfg(test)]
+    pub(crate) fn open_without_platform_acl_for_test(
+        directory: impl AsRef<Path>,
+    ) -> io::Result<Self> {
+        Ok(Self { directory: prepare_directory(directory.as_ref())? })
     }
 
     pub fn load(&self) -> io::Result<LoadedMachinePolicy> {
@@ -547,7 +563,7 @@ mod tests {
     #[test]
     fn store_roundtrips_and_recovers_previous_atomic_generation() {
         let dir = test_dir();
-        let store = MachinePolicyStore::open(&dir).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(&dir).unwrap();
         let first = sample_policy();
         store.save(&first).unwrap();
         let second = MachinePolicy { duplicate_mode: false, ..first.clone() };
@@ -563,7 +579,7 @@ mod tests {
     #[test]
     fn store_does_not_downgrade_a_future_primary_to_an_older_backup() {
         let dir = test_dir();
-        let store = MachinePolicyStore::open(&dir).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(&dir).unwrap();
         store.save(&MachinePolicy::default()).unwrap();
         store.save(&sample_policy()).unwrap();
         let primary = dir.join(PRIMARY_FILE);
@@ -580,7 +596,7 @@ mod tests {
     #[test]
     fn store_ignores_uncommitted_temporary_files() {
         let dir = test_dir();
-        let store = MachinePolicyStore::open(&dir).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(&dir).unwrap();
         fs::write(dir.join(".machine-policy.stale.tmp"), b"incomplete transaction").unwrap();
         assert_eq!(store.load().unwrap().policy, MachinePolicy::default());
         let _ = fs::remove_dir_all(dir);
@@ -589,7 +605,7 @@ mod tests {
     #[test]
     fn store_fails_closed_when_primary_and_backup_are_both_corrupt() {
         let dir = test_dir();
-        let store = MachinePolicyStore::open(&dir).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(&dir).unwrap();
         store.save(&sample_policy()).unwrap();
         store.save(&MachinePolicy::default()).unwrap();
         fs::write(dir.join(PRIMARY_FILE), b"bad primary").unwrap();

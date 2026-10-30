@@ -2199,7 +2199,10 @@ mod tests {
     fn machine_policy_survives_service_restart_and_restores_rules() {
         let root = std::env::temp_dir().join(format!("balancify-service-policy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(
+            root.join("policy"),
+        )
+        .unwrap();
         let now = Instant::now();
         let (mut service, recovered) = Service::new_with_machine_policy_store(
             ServiceConfig::default(), PassThrough, PassThrough, store,
@@ -2224,7 +2227,10 @@ mod tests {
         }, now), ipc::Response::Ack);
         drop(service);
 
-        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(
+            root.join("policy"),
+        )
+        .unwrap();
         let (mut restored, recovered) = Service::new_with_machine_policy_store(
             ServiceConfig::default(), PassThrough, PassThrough, store,
         ).unwrap();
@@ -2236,7 +2242,10 @@ mod tests {
         assert_eq!(restored.handle(ipc::Request::SetBondMode { enabled: true }, now), ipc::Response::Ack);
         drop(restored);
 
-        let store = MachinePolicyStore::open(root.join("policy")).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(
+            root.join("policy"),
+        )
+        .unwrap();
         let (restored_again, _) = Service::new_with_machine_policy_store(
             ServiceConfig::default(), PassThrough, PassThrough, store,
         ).unwrap();
@@ -2250,7 +2259,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let state_dir = root.join("policy");
-        let store = MachinePolicyStore::open(&state_dir).unwrap();
+        let store = MachinePolicyStore::open_without_platform_acl_for_test(&state_dir).unwrap();
         let (mut service, _) = Service::new_with_machine_policy_store(
             ServiceConfig::default(), PassThrough, PassThrough, store,
         ).unwrap();

@@ -64,6 +64,10 @@ class MachinePolicyContractTests(unittest.TestCase):
         self.assertIn("OWNER_SECURITY_INFORMATION", STORE)
         self.assertIn("PROTECTED_DACL_SECURITY_INFORMATION", STORE)
         self.assertIn("SetFileSecurityW", STORE)
+        production_open = STORE.split("pub fn open(", 1)[1].split("#[cfg(test)]", 1)[0]
+        self.assertIn("secure_path(&directory, true)?", production_open)
+        self.assertIn("open_without_platform_acl_for_test", STORE)
+        self.assertIn("#[cfg(test)]\n    pub(crate) fn open_without_platform_acl_for_test", STORE)
         self.assertIn("options.mode(0o600)", STORE)
         self.assertIn("if is_directory { 0o700 } else { 0o600 }", STORE)
         self.assertIn("store_uses_private_unix_modes_and_rejects_symlink_policy_files", STORE)
