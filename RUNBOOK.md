@@ -25,11 +25,16 @@ This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Ri
    }
    ```
 
-   Only remove the directory if it is empty and belongs to this disposable test state. If it contains `machine-policy.bin`, `machine-policy.bak`, or any other data, leave it intact; run the service as SYSTEM to secure and load it, or revert the VM snapshot if its provenance is uncertain. Do not use `icacls`, `Set-Acl`, or recursive deletion to bypass the protected ACL.
+   Only remove the directory if it is empty and belongs to this disposable test state. If it contains `machine-policy.bin`, `machine-policy.bak`, or any other data, leave it intact; run the service as SYSTEM to secure and load it, or revert the VM snapshot if its provenance is uncertain. Do not use `icacls`, `Set-Acl`, or recursive deletion on the `machine-policy` child to bypass its protected ACL. Step 4 restricts only the fresh test state-directory parent to SYSTEM and Administrators before the child is created.
 4. In elevated PowerShell inside the VM, build the debug host and copy only the executable and IPC script to a path readable, but not writable, by standard users. Use an official Sysinternals PsExec copy at `C:\Tools\PsExec64.exe` (obtain it through the approved lab software process):
 
    ```powershell
    New-Item -ItemType Directory -Force -Path C:\LabEvidence | Out-Null
+   $stateDir = 'C:\LabEvidence\balancify-ipc-state'
+   New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+   icacls $stateDir /inheritance:r /grant:r `
+     '*S-1-5-18:(OI)(CI)(F)' `
+     '*S-1-5-32-544:(OI)(CI)(F)'
    cargo build -p balancify-service --bin balancify-service
    $publicRoot = 'C:\Users\Public\BalanciFy-Ipc'
    New-Item -ItemType Directory -Force -Path $publicRoot | Out-Null
