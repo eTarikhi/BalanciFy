@@ -6,7 +6,7 @@ This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Ri
 
 ### Setup
 
-1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using your approved test package; start the service and confirm its local pipe is `BalanciFy.Service.v1`. If using the debug IPC test host instead of an installed service, in a separate PowerShell window set a unique temporary state directory, build and run the service with `--insecure-lab`, and leave it running while tests execute:
+1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using your approved test package; start the service under its intended service identity and confirm its local pipe is `BalanciFy.Service.v1`. If using the debug IPC test host instead of an installed service, launch it from a **Run as administrator** PowerShell window (or the approved SYSTEM service context): Windows machine-policy startup applies a protected SYSTEM/Administrators ACL. In that separate window set a unique temporary state directory, build and run the service with `--insecure-lab`, and leave it running while tests execute:
 
    ```powershell
    $env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'

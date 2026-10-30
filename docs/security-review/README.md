@@ -22,7 +22,7 @@ This package describes the repository's intended data/control paths and the sour
 
 - Hosted Rust workspace tests have passed on Ubuntu and Windows for the recorded source revisions. Hosted WDK x64/ARM64 jobs have passed for commits `5c866ea` and `6a3b633`; this is **hosted-runner build evidence, not isolated-VM acceptance**.
 - The crypto source contains Noise_IK-style X25519/ChaCha20-Poly1305/BLAKE2s logic, a contributory-DH check, and unit/regression tests; unit/CI results are not an independent cryptographic review.
-- The user supplied a Windows 11 local full-CI summary at HEAD `e63e1439b1ac2ad763e426e7dec249b6d013ee80`; all 12 named stages passed. The Admin harness was then fixed for invalid `$session:` interpolation (and a similar `$exit:` parse defect elsewhere). In the latest IPC output, Admin context failed because the shell was not elevated; Standard context passed, but all IPC connection attempts timed out. No service process/pipe evidence was supplied, so no product IPC bug is established.
+- The user supplied a Windows 11 local full-CI summary at HEAD `e63e1439b1ac2ad763e426e7dec249b6d013ee80`; all 12 named stages passed. The Admin harness was fixed for invalid `$session:` interpolation (and a similar `$exit:` parse defect elsewhere). Admin context then failed because the shell was not elevated; Standard context passed but pipe connects timed out. The debug service subsequently exited with OS error 5 before creating its listener. Source order points to machine-policy ACL initialization under a non-elevated token; treat this as a service setup/privilege issue pending retry under the intended service identity, not an IPC handler bug.
 
 ### Not established
 
