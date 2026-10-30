@@ -1,11 +1,9 @@
 name: CI
 
+# Repository CI is opt-in: run the local profiles in tools/ci/local-ci.sh and
+# tools/ci/local-ci-windows.ps1 by default. This workflow never starts on push
+# or pull_request; workflow_dispatch is reserved for an explicit operator request.
 on:
-  push:
-    branches: ["**"]
-  pull_request:
-  # Explicit operator-triggered CI for a pushed branch; local CI remains
-  # available through tools/ci/local-ci.sh before making any remote changes.
   workflow_dispatch:
 
 permissions:

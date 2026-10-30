@@ -1,6 +1,6 @@
 # Build, test and evidence instructions
 
-This page is for a reviewer reproducing source/hosted software checks. It does not authorize a production deployment or driver load. Never use production credentials/keys in CI or a disposable test VM. Do not install the driver or enable test-signing in hosted CI.
+This page is for a reviewer reproducing source/software checks on a local machine. It does not authorize a production deployment or driver load. Never use production credentials/keys in CI or a disposable test VM. Do not install the driver or enable test-signing in hosted CI. GitHub CI and Pages workflows are now manual-dispatch only; pushes and pull requests do not start Actions. For local validation, run `bash tools/ci/local-ci.sh` (Linux/WSL) or `powershell.exe -NoProfile -File .\tools\ci\local-ci-windows.ps1` (native Windows PowerShell). Do not pass `--push` or `-Push`; those options push and wait for GitHub Actions.
 
 ## Reproducible source baseline
 
