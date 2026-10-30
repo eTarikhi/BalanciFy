@@ -56,7 +56,7 @@ environment (§4.8 rev 2.1 / §8.3), security & signing plan, validation plan,
 risk register, sourced assumptions. Diagrams in [`docs/assets/`](docs/assets/).
 Decisions: [`docs/decisions/`](docs/decisions/). Phase 1: [`docs/phase1/`](docs/phase1/).
 
-## Development status (audited 2026-10-28)
+## Development status (audited 2026-10-30)
 
 BalanciFy remains an engineering prototype, not a supported release. PR #20 is
 merged; the active continuation branch is `arena/fb5e8c41-balancify`. Hosted
@@ -68,32 +68,28 @@ WDK x64/ARM64.
 The X25519 hardening in
 [`5c866ea`](https://github.com/eTarikhi/BalanciFy/commit/5c866ea5bf8d501d2a939c8377d65bb463f79cde)
 rejects non-contributory (all-zero) X25519 shared secrets at every Noise_IK DH
-step. Initiator flight 1 now propagates failure rather than emitting a frame;
-regressions cover low-order static and ephemeral inputs. Local quick CI passed
-dependency audit, 5 lab tests, 77 CI Python tests, netem safety, and 12 portable
-C tests with strict warnings/ASan/UBSan; it skips Rust because Cargo and rustfmt
-are unavailable here. Hosted run `40609617883` is in progress: Ubuntu/Windows Rust
-tests, release/SPDX, native MSVC, WSL, lab, and dependency checks passed; WDK
-x64/ARM64 remain in progress. The latest source change, [`6a3b633`](https://github.com/eTarikhi/BalanciFy/commit/6a3b633d6503156d7ae4d76974156dc53f325094), bounds idle and stalled IPC reads in both stream modes. Run `40610109227` is in progress: Ubuntu/Windows Rust workspace tests, WSL, lab, dependency/crypto, Linux release, and SPDX 2.3/3.0.1 passed; WDK x64/ARM64 remain in progress.
-
-Run `40608725414` at `e101441` passed Ubuntu/Windows Rust, Linux release/SPDX,
-native MSVC, WSL, lab, and dependency/crypto jobs; WDK x64/ARM64 were still in
-progress. Earlier hosted-green fixes include bonded Data rate-limit admission
-(`be0cdb0`, all eight jobs green in `40454764313`), authenticated reorder-memory
-bounding (`13c58ff`), nonce sequence exhaustion guards (`725693a`), hold-cap
-release/cursor correctness (`773a514`), and duplicate Data re-ACK (`2ecd0a6`).
-No source or hosted CI result substitutes for Windows VM, driver-runtime,
-hardware, signing, review, or field evidence. See the [completion ledger](docs/completion-ledger.md)
-for prioritized work and evidence classes.
+step. Hosted run [`40609617883`](https://github.com/eTarikhi/BalanciFy/actions/runs/40609617883)
+completed successfully, including WDK x64 and ARM64. The IPC deadline fix
+[`6a3b633`](https://github.com/eTarikhi/BalanciFy/commit/6a3b633d6503156d7ae4d76974156dc53f325094)
+was validated by hosted run
+[`40610109227`](https://github.com/eTarikhi/BalanciFy/actions/runs/40610109227),
+which also completed successfully, including WDK x64 and ARM64. Both results
+are **build-only evidence, not runtime acceptance.** No failed job or CI repair
+was needed. No source or hosted CI result substitutes for Windows VM,
+driver-runtime, hardware, signing, review, or field evidence. See the
+[completion ledger](docs/completion-ledger.md) for links, detailed evidence
+classes, and open acceptance gates. Native Windows instructions are in
+[`RUNBOOK.md`](RUNBOOK.md), with the isolated VM plan and blocked release gates
+linked from the ledger.
 | Area | Implemented / evidenced | Still unproven or incomplete |
 |---|---|---|
-| Rust service, IPC, tunnel and relay | `be0cdb0` passed all eight hosted jobs in run `40454764313`, including Rust tests on Ubuntu/Windows and WDK x64/ARM64. `5c866ea` adds fail-closed X25519 contributory checks and low-order regressions; Ubuntu and Windows Rust tests plus native MSVC passed in run `40609617883`; WDK x64/ARM64 remained in progress at the latest query. `6a3b633` bounds IPC idle/stalled reads; Ubuntu/Windows Rust tests passed in run `40610109227`, while WDK builds remain in progress. Run `40608725414` at `e101441` passed software tests, release/SPDX, native MSVC, WSL, lab, and dependency checks; WDK x64/ARM64 remained in progress. | Ubuntu/Windows Rust tests and native MSVC for `5c866ea` passed in `40609617883`; WDK x64/ARM64 were still running, as were WDK jobs on `40608725414`. IPC timeout fix `6a3b633` passed Ubuntu/Windows Rust tests in run `40610109227`; WDK and full-run completion remain pending. Production Windows service lifecycle, relay deployment/interoperability, driver runtime, and real network behavior remain unvalidated. |
+| Rust service, IPC, tunnel and relay | `be0cdb0` passed all eight hosted jobs in run `40454764313`, including Rust tests on Ubuntu/Windows and WDK x64/ARM64. X25519 fix `5c866ea` passed all jobs in [run `40609617883`](https://github.com/eTarikhi/BalanciFy/actions/runs/40609617883), including WDK x64/ARM64. IPC timeout fix `6a3b633` passed all jobs in [run `40610109227`](https://github.com/eTarikhi/BalanciFy/actions/runs/40610109227), including WDK x64/ARM64. | Both recent Actions results are **build-only evidence, not runtime acceptance.** Production Windows service lifecycle, relay deployment/interoperability, driver runtime, and real network behavior remain unvalidated. |
 | Windows UI | Hosted WinUI 3/.NET Release build and native Windows quick validation passed at `e3e406b`. Source includes Home/status, policy controls, custom Rules editor, redacted Relay health, Diagnostics/self-test/support export, and explicit one-time legacy policy migration. | No interactive Windows UI, tray, accessibility, usability, or OS-integration acceptance is recorded. |
 | Driver and OS integration | Hosted WDK x64/ARM64 builds and PE architecture/mitigation checks passed at `e3e406b`; portable C packet/OID tests pass. Source includes initialization gating, bounded queues, injection ownership, and receive-filter checks. | Driver artifacts are unsigned. No test-signed installation, Driver Verifier, HVCI/HLK, VM packet path, adapter steering across three classes, or operational miniport evidence. Compile/link is not runtime validation. |
 | Installer, diagnostics and release | Rust installer journal/rollback and SBOM sidecar logic have unit coverage; CI generates and validates SPDX 2.3 and 3.0.1. The service has a bounded redacted support bundle and ETW source. | No production offline bundle, clean-machine install/uninstall/rollback run, live ETW collection, reviewed VEX, code signing/attestation, independent security review, GA distribution, or field observation. |
 | Performance gates | Blueprint §10.3 defines the thresholds; lab tooling includes safe netem dry-run and software simulations. | No Rig B/hardware measurements. Aggregate/single-flow throughput, ≤3 ms added wired delay, ≤0.1% delivered reordering, ≤2 s failover, 72-hour soak, 100 resume cycles, and compatibility targets are not results. |
 
-The former native-Windows Python path failures are resolved in hosted CI run
+The following CI/local-run notes are a historical audit trail; any “in progress” status below describes the result at its query time and is superseded for the two recent revisions by the final green runs above. The former native-Windows Python path failures are resolved in hosted CI run
 `40433764565`. The Pages workflow's site build passed in run `40377552901`, but
 GitHub's `Setup Pages` step reported that Pages is not enabled/configured for
 Actions (HTTP 404); deployment is not claimed. Local quick CI on the
