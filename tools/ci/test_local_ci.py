@@ -69,7 +69,7 @@ class LocalCiRunnerTests(unittest.TestCase):
         self.assertIn("tr -d '\\015'", audit)
         result = subprocess.run(
             [
-                "sh",
+                "bash",
                 "-c",
                 "printf 'name = \"aead\"\\r\\n' | tr -d '\\015' | sed 's/^name = \"\\(.*\\)\"$/\\1/'",
             ],
@@ -83,9 +83,10 @@ class LocalCiRunnerTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertRegex(workflow, r"(?m)^  workflow_dispatch:\s*$")
 
-    def test_push_ci_covers_new_topic_branches(self):
+    def test_ci_workflow_is_manual_only(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertRegex(workflow, r'(?m)^    branches: \["\*\*"\]$')
+        self.assertRegex(workflow, r"(?m)^  workflow_dispatch:\s*$")
+        self.assertNotRegex(workflow, r"(?m)^  (push|pull_request):")
 
 
 if __name__ == "__main__":

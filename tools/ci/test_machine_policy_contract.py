@@ -71,7 +71,10 @@ class MachinePolicyContractTests(unittest.TestCase):
     def test_service_loads_policy_before_ipc_and_persists_before_mutating_live_state(self):
         ctor = SERVICE.split("pub fn new_with_machine_policy_store", 1)[1].split("// ------------------------------------------------------------- topology", 1)[0]
         self.assertLess(ctor.index("store.load()?"), ctor.index("Self::new(cfg"))
-        self.assertLess(SERVICE_BIN.index("Service::new_with_machine_policy_store"), SERVICE_BIN.index("start_ipc_listener()?"))
+        self.assertLess(
+            SERVICE_BIN.index("Service::new_with_machine_policy_store"),
+            SERVICE_BIN.index('startup_step("start local IPC v1 listener", start_ipc_listener)?'),
+        )
         commit = SERVICE.split("fn commit_machine_policy", 1)[1].split("fn machine_policy_error_response", 1)[0]
         self.assertLess(commit.index("store.save(&candidate)"), commit.index("self.cfg.bond_enabled ="))
         self.assertLess(commit.index("store.save(&candidate)"), commit.index("self.rules = candidate_rules"))

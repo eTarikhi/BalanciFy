@@ -34,7 +34,7 @@ class DocsSiteTests(unittest.TestCase):
             output = Path(temporary) / "published"
             output_argument = output.relative_to(ROOT).as_posix()
             subprocess.run(
-                ["sh", "tools/ci/build-docs-site.sh", output_argument],
+                ["bash", "tools/ci/build-docs-site.sh", output_argument],
                 cwd=ROOT,
                 check=True,
             )
