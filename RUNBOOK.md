@@ -7,7 +7,7 @@ This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Ri
 ### Setup
 
 1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using your approved test package; start the service and confirm its local pipe is `BalanciFy.Service.v1`.
-2. The IPC harness emits **one JSON evidence file per invocation**. It contains the structured evidence records and a `transcriptLog` array. Default output is ignored `target\acceptance-evidence\ipc\`.
+2. The IPC harness emits **one JSON evidence file per invocation**. It contains the structured evidence records and a `transcriptLog` array. Default output is ignored `target\acceptance-evidence\ipc\`. Hosted CI uses `-Role Auto -ReadOnlyOnly` to exercise permitted requests and frame/idle deadlines without policy mutation; it is hosted-runner evidence, not isolated-VM acceptance, and cannot establish standard-user authorization or admin write behavior.
 3. The standard-user invocation takes roughly 3 minutes because idle, partial-header, and stalled-payload tests exercise the service's 60-second timeouts. `-TimeoutSeconds` is a client observation ceiling (65–300s), not a server setting.
 
 ### Standard-user run
@@ -18,7 +18,7 @@ Sign in as a standard local user (not an elevated split-token admin) and run an 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-IpcAcceptance.ps1 -Role Standard
 ```
 
-Expected per-case results: execution context, Ping, and GetStatus PASS; attempted `SetBondMode` returns IPC `PermissionDenied` status 5 and the subsequent status confirms the value did not change; idle connection closes; partial header and stalled payload are disconnected within the observation ceiling. The script never attempts a successful policy write in standard mode.
+Expected per-case results: execution context, Ping, and GetStatus PASS; each of SetFlowRule, RemoveFlowRule, SetBondMode, SetDuplicateMode, SetAllowMetered, and ApplyMachinePolicy returns IPC `PermissionDenied` status 5; the three exposed policy flags remain unchanged; idle connection closes; partial header and stalled payload close near the 60-second server deadline. The script never attempts a successful policy write in standard mode.
 
 ### Elevated-admin and session-0 runs
 
@@ -29,9 +29,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-I
   -Role Admin -AllowPolicyMutation -SkipTransportCases -IncludeNonInteractiveProbe
 ```
 
-The admin test toggles the bond-mode bit, checks the ACK/status, and restores the original value in a `finally` path. `-AllowPolicyMutation` is mandatory. The non-interactive test creates a temporary SYSTEM scheduled task, attempts one Ping from session 0, records the observation, then unregisters the task and removes its temporary file. The policy is not changed by that task. A remaining task or temporary directory is a test failure: remove it manually and include that fact in evidence.
+The admin test toggles bond, duplicate, and metered flags and restores each original value; it also adds/removes a uniquely identified temporary custom rule and submits the exact current settings/rules as a no-op policy import. `-AllowPolicyMutation` is mandatory. Review each restoration case and the final policy/rule state. The non-interactive test creates a temporary SYSTEM scheduled task, attempts one Ping from session 0, records the observation, then unregisters the task and removes its temporary file. The policy is not changed by that task. A remaining task or temporary directory is a test failure: remove it manually and include that fact in evidence.
 
-If a run is interrupted during the brief admin mutation, restore the saved bond mode through the approved admin UI/service before continuing. Do not use production machine policy.
+If a run is interrupted during the admin probes, restore the originally recorded bond, duplicate, and metered flags through the approved admin UI/service, remove any `IPC-acceptance-*` rule created by that run, verify the final status/rule snapshot, and include recovery in the evidence. Revert the VM snapshot if state cannot be confidently restored. Do not use production machine policy.
 
 ### Evidence review
 

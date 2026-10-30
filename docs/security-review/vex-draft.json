@@ -1,0 +1,9 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/eTarikhi/BalanciFy/security/vex/draft-2026-10-30",
+  "author": "BalanciFy Security Owner (DRAFT — replace before approval)",
+  "role": "Document Creator (draft; reviewer not assigned)",
+  "timestamp": "2026-10-30T00:00:00Z",
+  "version": 1,
+  "statements": []
+}

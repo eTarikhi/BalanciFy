@@ -128,6 +128,18 @@ Detailed owners, evidence, indicative lead times, and immediate preparation task
 | Release and rollback readiness | Release-gates checklist | Signed offline bundle, reproducible hashes/provenance, clean install/upgrade/uninstall, failure rollback/residue checks and go/no-go approval. | External + VM/lab | **BLOCKED — no signed release or rollback evidence.** |
 | Field observations | Release-gates checklist | Approved pilot scope/consent, real-device observations, support/incident/rollback data and reviewed privacy controls. | External + Hardware | **BLOCKED — no field/pilot evidence.** |
 
+## PowerShell hosted validation and security-review handoff (2026-10-30)
+
+| Criterion | Source/location | Command/evidence | Evidence class | Status / discrepancy |
+|---|---|---|---|---|
+| Parse every repository PowerShell script | `.github/workflows/ci.yml`, job `windows-powershell-ipc` | On `windows-latest`, enumerate repository `.ps1` files and invoke `System.Management.Automation.Language.Parser.ParseFile`; retain errors/report. | Unit/CI | **NOT RUN — workflow change is not yet pushed/executed.** Any eventual result is **hosted-runner evidence, not isolated-VM acceptance**. |
+| PSScriptAnalyzer | Same workflow job; version 1.24.0 | Run PSScriptAnalyzer on the same sources; fail on error-severity findings, report warnings; artifact `psscriptanalyzer-findings.json`. | Unit/CI | **NOT RUN — no analyzer output yet.** Fix any error-level findings before calling this gate green. |
+| Read-only service/named-pipe IPC smoke tests | Workflow debug service + `scripts/windows/Test-IpcAcceptance.ps1 -Role Auto -ReadOnlyOnly` | Build and run debug service with temporary state; Ping/GetStatus, idle close, partial header and stalled-body timeout; optionally session-0 scheduled-task probe if runner is elevated and Task Scheduler is running. No driver, test-signing or policy mutation. | Unit/CI | **NOT RUN — no hosted job result.** Any eventual outcome must be labelled **hosted-runner evidence, not isolated-VM acceptance**. The runner does not establish standard-user authorization or admin mutation success; session-0 is conditional. |
+| Windows 11 VM IPC failures reported in user message | [`docs/security-review/windows11-ipc-failure-triage.md`](security-review/windows11-ipc-failure-triage.md), IPC evidence JSON | The message contained literal `<paste logs>`, not logs. No case IDs, observed output or environment were available to classify script bug vs product bug. Exact standard/admin/transport rerun commands are documented in the triage note. | VM/lab | **NOT CLASSIFIABLE / NOT ACCEPTED — request raw JSON, transcript, service logs, Windows build and account/session context. No failure-specific fix is claimed.** |
+| Security-review handoff | [`docs/security-review/`](security-review/README.md) | Architecture, boundaries/threat model, IPC/X25519 surface, build/reproduction instructions, and an OpenVEX-shaped draft scaffold are prepared against base `528739405ef08404e48574808d5fcc513feef2bb`; exact release hash and SBOM still required. | Source | **DRAFT ONLY — no independent review, VEX validation/approval, vulnerability triage, or security acceptance.** Draft VEX has no vulnerability statements; empty means unassessed, not unaffected. |
+
+Hosted-runner scope limit: `Auto` records the actual runner token but does not impersonate a standard user. `ReadOnlyOnly` deliberately skips all six machine-policy mutation opcodes; the runner's admin group membership does not prove that admin writes work. Do not move VM IPC rows above from NOT RUN based on this job.
+
 ## Evidence collection rules
 
 1. Record commit SHA, command, exact result, and the evidence class for every claimed pass.

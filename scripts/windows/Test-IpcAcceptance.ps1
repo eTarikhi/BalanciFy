@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Standard', 'Admin', 'NonInteractiveProbe')]
+    [ValidateSet('Standard', 'Admin', 'Auto', 'NonInteractiveProbe')]
     [string]$Role = 'Standard',
     [string]$PipeName = 'BalanciFy.Service.v1',
     [ValidateRange(65, 300)]
@@ -8,6 +8,7 @@ param(
     [switch]$AllowPolicyMutation,
     [switch]$IncludeNonInteractiveProbe,
     [switch]$SkipTransportCases,
+    [switch]$ReadOnlyOnly,
     [string]$OutputDirectory,
     [string]$ProbeResultPath
 )
@@ -304,14 +305,17 @@ if ($Role -eq 'NonInteractiveProbe') {
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$adminGroupSid = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+$isAdminGroupMember = @($identity.Groups | Where-Object { $_.Value -eq $adminGroupSid.Value }).Count -gt 0
 $sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
-$expectedAdmin = ($Role -eq 'Admin')
-$contextOkay = if ($Role -eq 'Admin') { $isAdmin -and $sessionId -ne 0 } else { (-not $isAdmin) -and $sessionId -ne 0 }
+$expectedAdmin = if ($Role -eq 'Auto') { "actual=$isAdmin (auto-detected)" } else { $Role -eq 'Admin' }
+$contextOkay = if ($sessionId -eq 0) { $false } elseif ($Role -eq 'Admin') { $isAdmin } elseif ($Role -eq 'Standard') { -not $isAdminGroupMember } else { $true }
 $os = Get-CimInstance Win32_OperatingSystem
 $runContext = [pscustomobject]@{
     windowsCaption = $os.Caption; windowsVersion = $os.Version; windowsBuild = $os.BuildNumber
     account = $identity.Name; accountSid = $identity.User.Value; roleRequested = $Role
-    isElevatedAdministrator = $isAdmin; sessionId = $sessionId; pipeName = $PipeName
+    isElevatedAdministrator = $isAdmin; administratorGroupMember = $isAdminGroupMember
+    sessionId = $sessionId; pipeName = $PipeName
 }
 Add-Case 'execution-context' $contextOkay "Run under requested role '$Role'." ("interactive session; admin=$expectedAdmin") ("account=$($identity.Name); elevatedAdmin=$isAdmin; session=$sessionId")
 
@@ -326,6 +330,9 @@ if ($contextOkay) {
         Add-Case 'permitted-get-status' ($status.Tag -eq 2) 'IPC GetStatus (opcode 1).' 'Status response (tag 2).' "responseTag=$($status.Tag); errorStatus=$($status.Status)"
     } catch { Add-Case 'permitted-get-status' $false 'IPC GetStatus (opcode 1).' 'Status response (tag 2).' $_.Exception.Message }
 
+    if ($ReadOnlyOnly) {
+        Add-Log 'Read-only mode: machine-policy mutation probes were intentionally not executed.'
+    } else {
     try {
         $oldFlags = Get-PolicyFlags
         if ($Role -eq 'Standard') {
@@ -420,6 +427,7 @@ if ($contextOkay) {
             Add-Case 'admin-policy-writes-allowed' $false 'Run the guarded mutation probes.' 'Run with -AllowPolicyMutation in a disposable VM; all values/rules are restored.' 'NOT RUN: explicit -AllowPolicyMutation was not supplied.'
         }
     } catch { Add-Case 'machine-policy-write' $false 'Read machine policy; send authorized/unauthorized IPC mutations; verify state.' 'Standard: all machine-policy mutation opcodes denied; Admin: ACK and original policy restored.' $_.Exception.Message }
+    }
 
     if (-not $SkipTransportCases) {
         Invoke-IdleCase
@@ -444,7 +452,8 @@ $evidencePath = Join-Path $OutputDirectory ("ipc-{0}-{1}.json" -f $Role.ToLowerI
 $evidence = [pscustomobject]@{
     evidenceType = 'IPC Windows VM integration test; not driver runtime acceptance'
     runId = $script:RunId; startedUtc = $script:Started.ToString('o'); finishedUtc = [DateTime]::UtcNow.ToString('o')
-    context = $runContext; command = $MyInvocation.Line
+    context = $runContext; command = $MyInvocation.Line; readOnlyOnly = [bool]$ReadOnlyOnly
+    coverageNotes = if ($ReadOnlyOnly) { @('Machine-policy authorization and mutations NOT RUN; execute separate standard-user and elevated-admin VM runs.') } else { @() }
     cases = @($script:Cases); transcriptLog = @($script:Transcript)
     summary = [pscustomobject]@{ passed = @($script:Cases | Where-Object result -eq 'PASS').Count; failed = @($script:Cases | Where-Object result -eq 'FAIL').Count; evidenceFile = $evidencePath }
 }

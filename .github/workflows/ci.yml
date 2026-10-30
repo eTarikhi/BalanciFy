@@ -229,6 +229,131 @@ jobs:
             exit [int]$env:BALANCIFY_WINUI_BUILD_EXIT_CODE
           }
 
+  windows-powershell-ipc:
+    name: Windows PowerShell and IPC hosted validation
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Parse-check every repository PowerShell script
+        shell: pwsh
+        run: |
+          $root = $env:GITHUB_WORKSPACE
+          $relativePaths = @(& git -C $root ls-files --cached --others --exclude-standard -- '*.ps1' '**/*.ps1')
+          if ($LASTEXITCODE -ne 0) { throw 'git ls-files could not enumerate repository PowerShell files.' }
+          $files = @($relativePaths | Where-Object { $_ -and $_ -notmatch '(^|[\\/])(target|node_modules|\.venv)([\\/]|$)' } |
+            ForEach-Object { Get-Item -LiteralPath (Join-Path $root $_) })
+          if ($files.Count -eq 0) { throw 'No .ps1 files found under the repository root.' }
+          $failures = New-Object System.Collections.Generic.List[string]
+          foreach ($file in $files) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName, [ref]$tokens, [ref]$parseErrors)
+            foreach ($parseError in @($parseErrors)) {
+              $failures.Add("$($file.FullName):$($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber): $($parseError.Message)")
+            }
+          }
+          Write-Host "Parsed $($files.Count) PowerShell files."
+          if ($failures.Count -gt 0) {
+            $failures | ForEach-Object { Write-Error $_ }
+            throw "PowerShell parser found $($failures.Count) syntax error(s)."
+          }
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force -ErrorAction Stop
+          $root = $env:GITHUB_WORKSPACE
+          $relativePaths = @(& git -C $root ls-files --cached --others --exclude-standard -- '*.ps1' '**/*.ps1')
+          if ($LASTEXITCODE -ne 0) { throw 'git ls-files could not enumerate repository PowerShell files.' }
+          $files = @($relativePaths | Where-Object { $_ -and $_ -notmatch '(^|[\\/])(target|node_modules|\.venv)([\\/]|$)' } |
+            ForEach-Object { Get-Item -LiteralPath (Join-Path $root $_) })
+          $findings = @(Invoke-ScriptAnalyzer -Path $files.FullName -Severity Error,Warning -ErrorAction Stop)
+          $report = Join-Path $env:RUNNER_TEMP 'psscriptanalyzer-findings.json'
+          $findings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding utf8
+          if ($findings.Count -gt 0) {
+            $findings | Format-Table -AutoSize | Out-String -Width 4096 | Write-Host
+            $errors = @($findings | Where-Object Severity -eq 'Error')
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error ("{0}:{1}:{2} {3} [{4}]" -f $_.ScriptPath,$_.Line,$_.Column,$_.Message,$_.RuleName) }
+              throw "PSScriptAnalyzer found $($errors.Count) error-level finding(s)."
+            }
+            Write-Warning "PSScriptAnalyzer reported $($findings.Count) warning/information finding(s); only error severity is release-blocking."
+          } else { Write-Host 'PSScriptAnalyzer found no findings.' }
+
+      - name: Build the debug service test host (no driver)
+        shell: bash
+        run: cargo build -p balancify-service --bin balancify-service
+
+      - name: Run read-only named-pipe IPC cases (hosted runner only)
+        shell: pwsh
+        run: |
+          $root = $env:GITHUB_WORKSPACE
+          $output = Join-Path $env:RUNNER_TEMP 'balancify-ipc-hosted-evidence'
+          $state = Join-Path $env:RUNNER_TEMP 'balancify-ipc-hosted-state'
+          New-Item -ItemType Directory -Path $output,$state -Force | Out-Null
+          $env:BALANCIFY_STATE_DIR = $state
+          Remove-Item Env:BALANCIFY_IPC_TRANSPORT,Env:BALANCIFY_RELAY_PUBLIC_KEY,Env:BALANCIFY_SECONDARY_RELAY_PUBLIC_KEY -ErrorAction SilentlyContinue
+          $exe = Join-Path $root 'target\debug\balancify-service.exe'
+          $stdout = Join-Path $output 'service.stdout.log'
+          $stderr = Join-Path $output 'service.stderr.log'
+          $service = $null
+          try {
+            $service = Start-Process -FilePath $exe -ArgumentList @('--insecure-lab') -PassThru -NoNewWindow `
+              -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            $pipeReady = $false
+            while ([DateTime]::UtcNow -lt $deadline) {
+              if ($service.HasExited) {
+                $diagnostic = Get-Content $stdout,$stderr -ErrorAction SilentlyContinue | Out-String
+                throw "Debug service exited before IPC became ready (exit=$($service.ExitCode)): $diagnostic"
+              }
+              try {
+                $probe = [System.IO.Pipes.NamedPipeClientStream]::new('.', 'BalanciFy.Service.v1',
+                  [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None,
+                  [System.Security.Principal.TokenImpersonationLevel]::Impersonation)
+                $probe.Connect(250)
+                $pipeReady = $true
+                $probe.Dispose()
+                break
+              } catch {
+                if ($null -ne $probe) { $probe.Dispose() }
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if (-not $pipeReady) { throw 'Named-pipe listener did not become ready within 30 seconds.' }
+            $ipcScript = Join-Path $root 'scripts/windows/Test-IpcAcceptance.ps1'
+            $scriptArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$ipcScript,
+              '-Role','Auto','-ReadOnlyOnly','-OutputDirectory',$output)
+            $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+            $taskScheduler = Get-Service -Name Schedule -ErrorAction SilentlyContinue
+            if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and
+                $null -ne $taskScheduler -and $taskScheduler.Status -eq 'Running') {
+              $scriptArgs += '-IncludeNonInteractiveProbe'
+            } else {
+              Write-Host 'Skipping session-0 probe: hosted token/task-scheduler prerequisites are not available.'
+            }
+            & powershell.exe @scriptArgs
+            if ($LASTEXITCODE -ne 0) { throw "IPC acceptance script exited with code $LASTEXITCODE." }
+          } finally {
+            if ($null -ne $service -and -not $service.HasExited) { Stop-Process -Id $service.Id -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Upload PowerShell and IPC hosted evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: balancify-windows-powershell-ipc-hosted-evidence
+          path: |
+            ${{ runner.temp }}/psscriptanalyzer-findings.json
+            ${{ runner.temp }}/balancify-ipc-hosted-evidence/**
+          if-no-files-found: ignore
+          retention-days: 14
+
   core-tests-windows:
     name: Rust workspace tests (windows)
     runs-on: windows-latest
