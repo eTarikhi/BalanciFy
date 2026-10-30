@@ -37,6 +37,50 @@ function Add-Case([string]$Name, [bool]$Passed, [string]$Command, [string]$Expec
     Add-Log ("{0} [{1}] expected={2}; observed={3}" -f $status, $Name, $Expected, $Observed)
 }
 
+function Add-NotRunCase([string]$Name, [string]$Command, [string]$Expected, [string]$Reason) {
+    [void]$script:Cases.Add([pscustomobject]@{
+        case = $Name; result = 'NOT RUN'; command = $Command
+        expected = $Expected; observed = $Reason
+    })
+    Add-Log ("NOT RUN [{0}] expected={1}; reason={2}" -f $Name, $Expected, $Reason)
+}
+
+function Add-NotRunIpcCases([string]$Reason) {
+    Add-NotRunCase 'permitted-ping' 'IPC Ping (opcode 0).' 'Pong response (tag 1).' $Reason
+    Add-NotRunCase 'permitted-get-status' 'IPC GetStatus (opcode 1).' 'Status response (tag 2).' $Reason
+
+    if (-not $ReadOnlyOnly) {
+        if ($Role -eq 'Standard') {
+            foreach ($name in @('standard-denied-SetFlowRule','standard-denied-RemoveFlowRule',
+                'standard-denied-SetBondMode','standard-denied-SetDuplicateMode',
+                'standard-denied-SetAllowMetered','standard-denied-ApplyMachinePolicy',
+                'standard-policy-unchanged')) {
+                Add-NotRunCase $name 'Standard-user machine-policy authorization probe.' 'PermissionDenied status 5 for mutations; policy unchanged.' $Reason
+            }
+        } elseif ($Role -eq 'Admin' -and $AllowPolicyMutation) {
+            foreach ($name in @('admin-Bond-write-allowed','admin-Bond-write-applied','admin-Bond-restored',
+                'admin-Duplicate-write-allowed','admin-Duplicate-write-applied','admin-Duplicate-restored',
+                'admin-AllowMetered-write-allowed','admin-AllowMetered-write-applied','admin-AllowMetered-restored',
+                'admin-set-flow-rule-allowed','admin-remove-flow-rule-allowed',
+                'admin-apply-machine-policy-allowed')) {
+                Add-NotRunCase $name 'Elevated-admin machine-policy mutation/restoration probe.' 'Authorized operation and original state restored.' $Reason
+            }
+        } elseif ($Role -eq 'Admin') {
+            Add-NotRunCase 'admin-policy-writes-allowed' 'Run the guarded mutation probes.' 'Run with -AllowPolicyMutation in a disposable VM; all values/rules are restored.' $Reason
+        }
+    }
+
+    if (-not $SkipTransportCases) {
+        Add-NotRunCase 'idle-connection-timeout' 'Connect named pipe; GetStatus; remain idle.' 'Service closes idle connection after the configured idle deadline.' $Reason
+        Add-NotRunCase 'partial-ipc-header-timeout' 'Send first 2 bytes of a Ping frame and hold the connection.' 'Service closes the incomplete frame after the configured deadline.' $Reason
+        Add-NotRunCase 'stalled-ipc-payload-timeout' 'Send a request header declaring 1 payload byte, then stall.' 'Service closes the incomplete frame after the configured deadline.' $Reason
+    }
+
+    if ($IncludeNonInteractiveProbe) {
+        Add-NotRunCase 'non-interactive-client-rejected' 'Run the probe as SYSTEM in a scheduled task (session 0).' 'Session-0 peer is rejected.' $Reason
+    }
+}
+
 function New-IpcFrame([byte[]]$Payload) {
     $frame = New-Object byte[] (6 + $Payload.Length)
     $frame[0] = 1; $frame[1] = 1
@@ -47,15 +91,20 @@ function New-IpcFrame([byte[]]$Payload) {
     return ,$frame
 }
 
-function Connect-Ipc {
+function Connect-Ipc([int]$ConnectTimeoutMilliseconds = 5000) {
     $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
         '.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut,
         [System.IO.Pipes.PipeOptions]::None,
         [System.Security.Principal.TokenImpersonationLevel]::Impersonation)
-    $pipe.Connect(5000)
-    $pipe.ReadTimeout = [Math]::Max(5000, $TimeoutSeconds * 1000)
-    $pipe.WriteTimeout = 5000
-    return $pipe
+    try {
+        $pipe.Connect($ConnectTimeoutMilliseconds)
+        $pipe.ReadTimeout = [Math]::Max(5000, $TimeoutSeconds * 1000)
+        $pipe.WriteTimeout = 5000
+        return $pipe
+    } catch {
+        $pipe.Dispose()
+        throw
+    }
 }
 
 function Read-Exact([System.IO.Stream]$Stream, [int]$Count) {
@@ -90,6 +139,27 @@ function Send-IpcRequest([byte[]]$Payload) {
         $pipe.Flush()
         return Read-IpcResponse $pipe
     } finally { $pipe.Dispose() }
+}
+
+function Test-IpcServiceReady {
+    $pipe = $null
+    try {
+        $pipe = Connect-Ipc 1000
+        $pipe.ReadTimeout = 2000
+        $pipe.WriteTimeout = 1000
+        $ping = New-IpcFrame ([byte[]]@(0))
+        $pipe.Write($ping, 0, $ping.Length)
+        $pipe.Flush()
+        $response = Read-IpcResponse $pipe
+        if ($response.Tag -ne 1) {
+            throw "Named pipe '$PipeName' accepted a client but did not return a Pong (response tag $($response.Tag))."
+        }
+        return $true
+    } catch {
+        throw "Service not reachable / pipe missing: could not connect to '$PipeName' and complete a Ping preflight. $($_.Exception.Message)"
+    } finally {
+        if ($null -ne $pipe) { $pipe.Dispose() }
+    }
 }
 
 function Read-U32BE([byte[]]$Bytes, [int]$Offset) {
@@ -317,9 +387,33 @@ $runContext = [pscustomobject]@{
     isElevatedAdministrator = $isAdmin; administratorGroupMember = $isAdminGroupMember
     sessionId = $sessionId; pipeName = $PipeName
 }
-Add-Case 'execution-context' $contextOkay "Run under requested role '$Role'." ("interactive session; admin=$expectedAdmin") ("account=$($identity.Name); elevatedAdmin=$isAdmin; session=$sessionId")
+$contextObserved = "account=$($identity.Name); elevatedAdmin=$isAdmin; administratorGroupMember=$isAdminGroupMember; session=$sessionId"
+if ($Role -eq 'Standard' -and $isAdminGroupMember) {
+    $contextObserved += '; Standard role requires a separate account that is not a member of Administrators.'
+}
+Add-Case 'execution-context' $contextOkay "Run under requested role '$Role'." ("interactive session; admin=$expectedAdmin") $contextObserved
 
+$serviceReachable = $false
 if ($contextOkay) {
+    try {
+        [void](Test-IpcServiceReady)
+        $serviceReachable = $true
+        Add-Case 'service-reachable' $true "Connect to named pipe '$PipeName' and complete a Ping preflight." 'Service accepts the local pipe connection and returns Pong.' 'Preflight Pong received.'
+    } catch {
+        $serviceError = $_.Exception.Message
+        Add-Case 'service-reachable' $false "Connect to named pipe '$PipeName' and complete a Ping preflight." 'Service accepts the local pipe connection and returns Pong.' $serviceError
+        Add-NotRunIpcCases $serviceError
+    }
+} else {
+    $contextReason = 'NOT CHECKED: requested execution context failed; no IPC connection was attempted.'
+    if ($Role -eq 'Standard' -and $isAdminGroupMember) {
+        $contextReason = 'NOT CHECKED: Standard role was requested from an account in the Administrators group; sign in as a separate standard account. No IPC connection was attempted.'
+    }
+    Add-NotRunCase 'service-reachable' "Connect to named pipe '$PipeName' and complete a Ping preflight." 'Service accepts the local pipe connection and returns Pong.' $contextReason
+    Add-NotRunIpcCases $contextReason
+}
+
+if ($contextOkay -and $serviceReachable) {
     try {
         $ping = Send-IpcRequest ([byte[]]@(0))
         Add-Case 'permitted-ping' ($ping.Tag -eq 1) 'IPC Ping (opcode 0).' 'Pong response (tag 1).' "responseTag=$($ping.Tag); errorStatus=$($ping.Status)"
@@ -455,7 +549,12 @@ $evidence = [pscustomobject]@{
     context = $runContext; command = $MyInvocation.Line; readOnlyOnly = [bool]$ReadOnlyOnly
     coverageNotes = if ($ReadOnlyOnly) { @('Machine-policy authorization and mutations NOT RUN; execute separate standard-user and elevated-admin VM runs.') } else { @() }
     cases = @($script:Cases); transcriptLog = @($script:Transcript)
-    summary = [pscustomobject]@{ passed = @($script:Cases | Where-Object result -eq 'PASS').Count; failed = @($script:Cases | Where-Object result -eq 'FAIL').Count; evidenceFile = $evidencePath }
+    summary = [pscustomobject]@{
+        passed = @($script:Cases | Where-Object result -eq 'PASS').Count
+        failed = @($script:Cases | Where-Object result -eq 'FAIL').Count
+        notRun = @($script:Cases | Where-Object result -eq 'NOT RUN').Count
+        evidenceFile = $evidencePath
+    }
 }
 $evidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $evidencePath -Encoding UTF8
 Add-Log "Evidence JSON (structured cases + transcript log): $evidencePath"

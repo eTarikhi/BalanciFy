@@ -349,10 +349,14 @@ fn startup_step<T>(
 
 fn machine_policy_open_error(path: &std::path::Path, source: std::io::Error) -> std::io::Error {
     let kind = source.kind();
+    let os_cause = match source.raw_os_error() {
+        Some(code) => format!("OS error {code}: {source}"),
+        None => source.to_string(),
+    };
     std::io::Error::new(
         kind,
         format!(
-            "failed to open machine-policy store at {}: {source}. Run under the intended service identity (preferably LocalSystem), or elevated with SeRestorePrivilege enabled; setting SYSTEM as owner/group requires SeRestorePrivilege. Do not weaken the ACL.",
+            "failed to open machine-policy store at {}: {os_cause}. The service must run as LocalSystem (or its configured service identity with equivalent authority); assigning SYSTEM as owner requires SeRestorePrivilege, and an elevated Administrator token is not sufficient. This service does not enable that privilege in an Administrator token. Start the debug host as SYSTEM with PsExec64.exe -i -s; see RUNBOOK.md. Windows error 1307 means the owner SID cannot be assigned; error 5 means access is denied. Do not weaken the ACL.",
             path.display()
         ),
     )
@@ -1070,7 +1074,18 @@ mod ipc_capacity_tests {
         assert!(message.contains("Access is denied."));
         assert!(message.contains("LocalSystem"));
         assert!(message.contains("SeRestorePrivilege"));
+        assert!(message.contains("PsExec64.exe -i -s"));
         assert!(message.contains("Do not weaken the ACL"));
+    }
+
+    #[test]
+    fn machine_policy_open_error_preserves_windows_error_codes() {
+        let path = std::path::Path::new(r"C:\LabEvidence\balancify-ipc-state\machine-policy");
+        for code in [1307, 5] {
+            let error = machine_policy_open_error(path, std::io::Error::from_raw_os_error(code));
+            assert!(error.to_string().contains(&format!("OS error {code}")));
+            assert!(error.to_string().contains(path.to_string_lossy().as_ref()));
+        }
     }
 
     #[test]

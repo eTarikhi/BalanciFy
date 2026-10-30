@@ -6,13 +6,13 @@ The user supplied a Windows 11 local full-CI summary for HEAD `e63e1439b1ac2ad76
 
 The user then supplied the Admin and Standard harness output after pulling commit `b147226`. This confirms the PowerShell syntax fixes worked. The Admin command reached `execution-context` but failed because the caller was not elevated: `ETARIKHI\\Administrator`, session 1, `elevatedAdmin=False`, while `-Role Admin` requires `IsInRole(Administrator)` to be true. That is a **test setup/context failure**, not a product bug; no Admin mutations or further Admin cases ran.
 
-The later debug-service startup output prints the state directory/public key, then returns OS error 5 (`Access is denied`) before printing simulated uplink sockets or the IPC listener. In `balancify-service`, the next fallible operation after the public-key print is `MachinePolicyStore::open`; on Windows it applies a protected ACL with SYSTEM as owner/group. The service was launched from a non-elevated shell, so this strongly points to the service being unable to set its intended machine-policy ACL under that token. Treat this as a **service startup privilege/setup failure** until it is retried under the intended service identity; do not weaken the ACL.
+The latest user-supplied reruns show the Admin context passed with `elevatedAdmin=True`, but Ping, GetStatus, machine-policy-write, and the session-0 probe all timed out before a request/response. The service then failed with Windows OS error 1307 (`This security ID may not be assigned as the owner of this object.`) while opening the policy store. `Get-Acl` showed the half-initialized folder owned by `ETARIKHI\Administrator` with inherited Authenticated Users Modify access; this is evidence of ACL initialization failing, not an IPC protocol result. The subsequent `-Role Standard` invocation was run from that same elevated Administrator token and failed its context gate before connecting. All IPC protocol cases remain **NOT RUN / NOT ACCEPTED** until the service starts as LocalSystem, logs both policy-store and listener startup success, and the harness preflight receives Pong. Do not weaken the ACL.
 
-The Standard command passed `execution-context`, but `permitted-ping`, `permitted-get-status`, `machine-policy-write`, `idle-connection-timeout`, `partial-ipc-header-timeout`, and `stalled-ipc-payload-timeout` all failed on `NamedPipeClientStream.Connect()` timing out after 5 seconds. Since startup failed before the named-pipe listener was created, these are downstream setup failures, not six product IPC failures. No IPC request was sent, so authorization and frame/idle deadlines were not tested. No case is accepted from these attempts; verify the listener starts and then rerun.
+In the earlier separate Standard attempt, `execution-context` passed, but Ping/GetStatus, policy, idle, partial-header, and stalled-payload cases failed on `NamedPipeClientStream.Connect()` timing out after 5 seconds. The service had not reached listener startup, so no IPC request was sent; these were downstream setup failures, not protocol results. The latest Standard invocation instead failed `execution-context` because it was launched from the elevated Administrator token. No case is accepted from either run.
 
 The syntax fixes are in pushed commit `b147226`. Hosted run [41038076670](https://github.com/eTarikhi/BalanciFy/actions/runs/41038076670) passed the repository-wide PowerShell parser, but PSScriptAnalyzer failed and the service-build/IPC steps were skipped. The follow-up in [41042199740](https://github.com/eTarikhi/BalanciFy/actions/runs/41042199740) on commit `ef6f142` passed PowerShell parsing, ran PSScriptAnalyzer and the service build, then reached the hosted IPC step; IPC failed and the final analyzer-enforcement step also failed. The findings/IPC evidence artifact was uploaded, but this environment could not download it (the artifact host returned EOF), so exact analyzer rules and case-level IPC results remain unavailable. The quoted `IsInRole` and `Get-Acl` errors came from `cmd.exe`, so they are command-shell errors, not PSScriptAnalyzer findings. Run those commands in Windows PowerShell (for example, start `powershell.exe` first); use the exact policy path printed by the service diagnostic when inspecting its ACL.
 
-The workflow now places rule/severity/file/line/message details in the Actions job summary and JSON artifact, records analyzer failure without skipping IPC, and enforces the analyzer result after evidence upload. `PSScriptAnalyzerSettings.psd1` enables default rules and has no exclusions. Analyzer failure is confirmed, but no rule-level finding can yet be claimed fixed. The Rust workspace test jobs passed on `ef6f142`, including the new diagnostic unit test; this is hosted CI evidence only.
+The workflow now places rule/severity/file/line/message details in the Actions job summary and JSON artifact, records analyzer failure without skipping IPC, and enforces the analyzer result after evidence upload. Follow-up run [41042559115](https://github.com/eTarikhi/BalanciFy/actions/runs/41042559115) on `f5ada7f` also passed parsing and service build, ran the hosted IPC step (failed), and failed analyzer enforcement. Artifact download returned EOF; check annotations contained only generic step failures. `PSScriptAnalyzerSettings.psd1` enables default rules and has no exclusions. Analyzer failure is confirmed, but no rule-level finding can yet be claimed fixed. The Rust workspace tests passed on `ef6f142`, including the diagnostic unit tests; this is hosted CI evidence only.
 
 The additive `-Role Auto -ReadOnlyOnly` mode is solely for hosted CI. It does not change standard-user/admin authorization logic.
 
@@ -30,28 +30,21 @@ Do not send signing keys, relay secrets, user credentials, raw packet payloads o
 
 ## Exact IPC reruns if an earlier symptom remains
 
-The 12 local CI PASS checks do not need rerunning. The supplied Standard transcript names the timed-out IPC cases, but there is no case JSON or service log. Because each failed at `Connect()` before sending a request, first start the intended service build and confirm the process and local pipe `BalanciFy.Service.v1` are present. Follow RUNBOOK setup: use the approved test service, or in a disposable VM run the debug test host in a separate window with a unique temporary state directory and `--insecure-lab` (never add `--driver-device`):
-
-```powershell
-$env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
-cargo build -p balancify-service --bin balancify-service
-.\target\debug\balancify-service.exe --insecure-lab
-```
-
-Leave that process running while testing. Do not start a second listener if the approved service already owns the pipe. If the process is running but the named pipe is absent, stop and capture service stdout/stderr rather than treating downstream timeouts as IPC case results. Then rerun both role groups below. For Admin, launch a new **Run as administrator** PowerShell and verify `WindowsPrincipal.IsInRole(Administrator)` is `True`; the account name alone is insufficient. Do not mark a case accepted until its evidence JSON and transcript are reviewed.
+The 12 local CI PASS checks do not need rerunning. The supplied Admin transcript confirms that the service did not start and no IPC request reached it. Build the debug binary, then follow the exact [`RUNBOOK.md` LocalSystem/PsExec `-i -s` procedure](../../RUNBOOK.md); **do not launch the debug host directly from an elevated Administrator shell**. Keep the SYSTEM-hosted service running and confirm `[startup] open machine-policy store: OK` and `[startup] start local IPC v1 listener: OK`. The updated harness preflights the pipe with Ping; if the service is unavailable it records `service-reachable` as failed, marks requested protocol cases `NOT RUN`, and exits without repeated connect timeouts. If the process is running but the pipe is absent, retain its startup output and resolve that setup issue before testing. For Standard, use the separate non-admin local account; for Admin, use an elevated interactive PowerShell and verify the token. Do not mark a case accepted until the listener and case-level evidence JSON/transcript are reviewed.
 
 ### A. Standard-user authorization + transport group
 
 On the Windows 11 VM, use a non-elevated standard local user and native Windows PowerShell 5.1:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-IpcAcceptance.ps1 `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Public\BalanciFy-Ipc\Test-IpcAcceptance.ps1 `
   -Role Standard -OutputDirectory C:\LabEvidence\ipc-standard-rerun
 ```
 
 Cases to capture exactly:
 
 - `execution-context`
+- `service-reachable`
 - `permitted-ping`
 - `permitted-get-status`
 - `standard-denied-SetFlowRule`
@@ -72,7 +65,7 @@ Expected authorization response is IPC Error status 5 (`PermissionDenied`) for a
 In a disposable VM checkpoint, run an elevated native PowerShell 5.1 session:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-IpcAcceptance.ps1 `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Public\BalanciFy-Ipc\Test-IpcAcceptance.ps1 `
   -Role Admin -AllowPolicyMutation -SkipTransportCases -IncludeNonInteractiveProbe `
   -OutputDirectory C:\LabEvidence\ipc-admin-rerun
 ```
@@ -93,11 +86,11 @@ The script's `finally` paths restore flags and remove the temporary rule; verify
 This isolates transport from policy mutation and scheduled-task setup:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-IpcAcceptance.ps1 `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Public\BalanciFy-Ipc\Test-IpcAcceptance.ps1 `
   -Role Admin -ReadOnlyOnly -OutputDirectory C:\LabEvidence\ipc-admin-transport-rerun
 ```
 
-Capture `execution-context`, Ping/GetStatus and all three transport cases listed in group A. `-ReadOnlyOnly` intentionally omits every machine-policy mutation; it cannot replace group A or B.
+Capture `execution-context`, `service-reachable`, Ping/GetStatus and all three transport cases listed in group A. `-ReadOnlyOnly` intentionally omits every machine-policy mutation; it cannot replace group A or B.
 
 ## How to classify after logs are supplied
 

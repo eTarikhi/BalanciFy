@@ -6,57 +6,103 @@ This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Ri
 
 ### Setup
 
-1. Use a disposable Windows 11 VM and take a snapshot before running. Build/install the service and shell using the approved test package, start it under its intended identity, and confirm its local pipe is `BalanciFy.Service.v1`.
-2. **Do not assume an elevated Administrator token can set the policy-store owner to SYSTEM.** `MachinePolicyStore::open` applies a protected SYSTEM/Administrators ACL with SYSTEM owner/group through `SetFileSecurityW`; assigning SYSTEM as owner/group requires `SeRestorePrivilege` unless running under an identity that can perform that operation (normally LocalSystem). An elevated Administrator may possess but not have this privilege enabled. Do not change the ACL to make the debug host start.
-3. For a debug IPC host, the approved test context is the configured service identity (normally LocalSystem). If no test service wrapper is installed, start it through a temporary SYSTEM scheduled task from an elevated PowerShell window. Build first, create a launcher, register/start the task, then keep it running while the interactive clients test the pipe:
+1. Use a disposable Windows 11 x64 VM, take a snapshot, and use **native PowerShell** (not `cmd.exe` for PowerShell cmdlets). Start the service once under its intended identity and confirm the listener before any IPC cases. Do not install a driver, enable test-signing, or use production policy/credentials for these tests.
+2. **The debug service must run as LocalSystem (or the configured service identity with equivalent restore authority).** `MachinePolicyStore::open` applies a protected ACL whose owner/group are SYSTEM. Assigning SYSTEM as owner requires `SeRestorePrivilege`; an elevated Administrator token is not sufficient and this service deliberately does not enable that privilege in an admin token. Windows reports error 1307 when the owner SID cannot be assigned, or error 5 for access denied. Startup now names the exact policy-store path and OS error and tells you to run as SYSTEM. Do not grant extra access to the policy directory, change its owner/DACL manually, or weaken the ACL.
+3. If a previous non-SYSTEM launch left the policy directory behind, first ensure the test service process has exited. Inspect it without changing its ACL:
 
    ```powershell
-   # Elevated PowerShell, inside the disposable VM only.
-   New-Item -ItemType Directory -Force -Path C:\LabEvidence | Out-Null
-   $env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
-   cargo build -p balancify-service --bin balancify-service
-   $exe = (Resolve-Path .\target\debug\balancify-service.exe).Path
-   $taskName = 'BalanciFy-IpcService-' + [Guid]::NewGuid().ToString('N')
-   $launcher = 'C:\LabEvidence\start-balancify-ipc-service.ps1'
-   $log = 'C:\LabEvidence\balancify-ipc-service.log'
-   @"
-   `$env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
-   & '$exe' --insecure-lab *> '$log'
-   "@ | Set-Content -LiteralPath $launcher -Encoding UTF8
-   $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') `
-     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`""
-   $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
-   $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-   Start-ScheduledTask -TaskName $taskName
+   $stateDir = 'C:\LabEvidence\balancify-ipc-state'
+   $policyPath = Join-Path $stateDir 'machine-policy'
+   if (Test-Path -LiteralPath $policyPath) {
+       $contents = @(Get-ChildItem -LiteralPath $policyPath -Force)
+       if ($contents.Count -eq 0) {
+           Remove-Item -LiteralPath $policyPath -Force
+           'Removed the empty directory created by the failed startup.'
+       } else {
+           $contents | Select-Object Name,Length,LastWriteTime
+           throw 'Policy data exists. Do not delete it; preserve it and restart the service as LocalSystem so it can apply the protected ACL.'
+       }
+   }
    ```
 
-   Check the log for `[startup] open machine-policy store: OK` and `[startup] start local IPC v1 listener: OK` before running clients. On failure, retain the complete diagnostic, including the policy-store path, OS error, and identity/privilege hint; inspect the ACL from native PowerShell (`Get-Acl` is a PowerShell cmdlet, not a `cmd.exe` command). This debug mode is loopback-only; use no relay credentials and no `--driver-device`. Do not start a second listener if the approved service already owns the pipe. After tests, run `Stop-ScheduledTask -TaskName $taskName` and `Unregister-ScheduledTask -TaskName $taskName -Confirm:$false`; keep the log and evidence files.
-4. The IPC harness emits **one JSON evidence file per invocation** with structured cases and `transcriptLog`. Default output is ignored `target\acceptance-evidence\ipc\`. Hosted CI uses `-Role Auto -ReadOnlyOnly`; that is hosted-runner evidence, not isolated-VM acceptance, and cannot establish standard-user authorization or admin write behavior.
-5. The Standard invocation takes roughly 3 minutes because idle, partial-header, and stalled-payload tests exercise the service's 60-second deadlines. `-TimeoutSeconds` is a client observation ceiling (65–300s), not a server setting.
+   Only remove the directory if it is empty and belongs to this disposable test state. If it contains `machine-policy.bin`, `machine-policy.bak`, or any other data, leave it intact; run the service as SYSTEM to secure and load it, or revert the VM snapshot if its provenance is uncertain. Do not use `icacls`, `Set-Acl`, or recursive deletion to bypass the protected ACL.
+4. In elevated PowerShell inside the VM, build the debug host and copy only the executable and IPC script to a path readable, but not writable, by standard users. Use an official Sysinternals PsExec copy at `C:\Tools\PsExec64.exe` (obtain it through the approved lab software process):
 
-### Standard-user run
+   ```powershell
+   New-Item -ItemType Directory -Force -Path C:\LabEvidence | Out-Null
+   cargo build -p balancify-service --bin balancify-service
+   $publicRoot = 'C:\Users\Public\BalanciFy-Ipc'
+   New-Item -ItemType Directory -Force -Path $publicRoot | Out-Null
+   Copy-Item .\target\debug\balancify-service.exe (Join-Path $publicRoot 'balancify-service.exe') -Force
+   Copy-Item .\scripts\windows\Test-IpcAcceptance.ps1 (Join-Path $publicRoot 'Test-IpcAcceptance.ps1') -Force
+   icacls $publicRoot /inheritance:r /grant:r `
+     '*S-1-5-18:(OI)(CI)(F)' `
+     '*S-1-5-32-544:(OI)(CI)(F)' `
+     '*S-1-5-32-545:(OI)(CI)(RX)' /T /C
+   ```
 
-Sign in as a standard local user (not an elevated split-token admin) and run an ordinary, non-elevated Windows PowerShell 5.1 console:
+   Create a launcher and start it interactively as SYSTEM with **PsExec `-s -i`**. The launcher verifies the token SID before starting the service; it uses a unique temporary state directory and never opens the driver:
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-IpcAcceptance.ps1 -Role Standard
-```
+   ```powershell
+   $env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
+   $serviceExe = Join-Path $publicRoot 'balancify-service.exe'
+   $launcher = 'C:\LabEvidence\Start-BalanciFyIpcService.ps1'
+   @"
+   `$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+   if (`$identity.User.Value -ne 'S-1-5-18') { throw "Expected LocalSystem, got `$(`$identity.Name) (`$(`$identity.User.Value))." }
+   Write-Host "Service identity: `$(`$identity.Name), SID `$(`$identity.User.Value)"
+   `$env:BALANCIFY_STATE_DIR = 'C:\LabEvidence\balancify-ipc-state'
+   & '$serviceExe' --insecure-lab
+   "@ | Set-Content -LiteralPath $launcher -Encoding UTF8
+   & 'C:\Tools\PsExec64.exe' -accepteula -i -s powershell.exe `
+     -NoProfile -ExecutionPolicy Bypass -NoExit -File $launcher
+   ```
 
-Expected per-case results: execution context, Ping, and GetStatus PASS; each of SetFlowRule, RemoveFlowRule, SetBondMode, SetDuplicateMode, SetAllowMetered, and ApplyMachinePolicy returns IPC `PermissionDenied` status 5; the three exposed policy flags remain unchanged; idle connection closes; partial header and stalled payload close near the 60-second server deadline. The script never attempts a successful policy write in standard mode.
+   In the PsExec window, verify the identity is `NT AUTHORITY\SYSTEM` / SID `S-1-5-18`, then retain the full console output. Do not start another listener if the pipe is already owned. Continue only after `[startup] open machine-policy store: OK` and `[startup] start local IPC v1 listener: OK`. If startup prints error 1307 or 5, the service did not become available; correct the identity and restart rather than weakening the ACL.
+5. Create a dedicated **standard, non-Administrator local account** for the Standard-role run. Enter a test-only password interactively; do not add this account to Administrators:
 
-### Elevated-admin and session-0 runs
+   ```powershell
+   $standardName = 'BalanciFyIpcStandard'
+   if (-not (Get-LocalUser -Name $standardName -ErrorAction SilentlyContinue)) {
+       $password = Read-Host 'Temporary password for the disposable-VM test account' -AsSecureString
+       New-LocalUser -Name $standardName -Password $password -Description 'Temporary BalanciFy IPC test account'
+   }
+   $standardSid = (Get-LocalUser -Name $standardName).SID.Value
+   $adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+   if (@(Get-LocalGroupMember -SID $adminSid | Where-Object { $_.SID.Value -eq $standardSid }).Count -gt 0) {
+       throw 'The IPC test account is an Administrator; use a separate standard account.'
+   }
+   $standardOutput = 'C:\LabEvidence\ipc-standard-rerun'
+   New-Item -ItemType Directory -Force -Path $standardOutput | Out-Null
+   icacls $standardOutput /inheritance:r /grant:r `
+     '*S-1-5-18:(OI)(CI)(F)' `
+     '*S-1-5-32-544:(OI)(CI)(F)' `
+     "*${standardSid}:(OI)(CI)(M)"
+   ```
 
-From **Run as administrator** PowerShell inside the disposable VM:
+   Open a separate shell as that account with `runas.exe /user:"$env:COMPUTERNAME\BalanciFyIpcStandard" 'powershell.exe -NoProfile'`, enter the password when prompted, and confirm `IsInRole(Administrator)` is `False`. Then run the public, read-only script copy; its output directory is the one explicitly granted to this test account:
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Test-IpcAcceptance.ps1 `
-  -Role Admin -AllowPolicyMutation -SkipTransportCases -IncludeNonInteractiveProbe
-```
+   ```powershell
+   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+   $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+   if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+       throw 'This is an elevated Administrator token, not a Standard test context.'
+   }
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Public\BalanciFy-Ipc\Test-IpcAcceptance.ps1 `
+     -Role Standard -OutputDirectory C:\LabEvidence\ipc-standard-rerun
+   ```
 
-The admin test toggles bond, duplicate, and metered flags and restores each original value; it also adds/removes a uniquely identified temporary custom rule and submits the exact current settings/rules as a no-op policy import. `-AllowPolicyMutation` is mandatory. Review each restoration case and the final policy/rule state. The non-interactive test creates a temporary SYSTEM scheduled task, attempts one Ping from session 0, records the observation, then unregisters the task and removes its temporary file. The policy is not changed by that task. A remaining task or temporary directory is a test failure: remove it manually and include that fact in evidence.
+   The script first connects to the named pipe and requires a Pong. If the service is absent, it emits one `service-reachable` failure with **“Service not reachable / pipe missing”**, marks requested IPC cases **NOT RUN**, and exits without repeating five-second connection attempts. A Standard run from an elevated/admin-group token fails `execution-context` before attempting any pipe connection.
+6. In a separate **Run as administrator** PowerShell, only after the Standard run, run the admin probes in the disposable VM:
 
-If a run is interrupted during the admin probes, restore the originally recorded bond, duplicate, and metered flags through the approved admin UI/service, remove any `IPC-acceptance-*` rule created by that run, verify the final status/rule snapshot, and include recovery in the evidence. Revert the VM snapshot if state cannot be confidently restored. Do not use production machine policy.
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Public\BalanciFy-Ipc\Test-IpcAcceptance.ps1 `
+     -Role Admin -AllowPolicyMutation -SkipTransportCases -IncludeNonInteractiveProbe `
+     -OutputDirectory C:\LabEvidence\ipc-admin-rerun
+   ```
+
+   The IPC harness writes one JSON evidence file per invocation, including each case's `result`, `observed`, and `transcriptLog`. Keep connection/setup failures separate from protocol results. Do not accept any IPC case unless the service listener was confirmed and the case-level JSON/transcript was reviewed. Hosted CI is **hosted-runner evidence, not isolated-VM acceptance**; it cannot establish standard-user authorization or admin writes.
+7. After preserving evidence, stop the LocalSystem debug service with Ctrl+C in the PsExec window. Remove the temporary account and copied public test files only after confirming evidence is retained; do not delete machine-policy data manually. Revert the disposable VM snapshot if the policy directory or machine state is uncertain. The Standard invocation takes roughly 3 minutes for its 60-second idle/framing deadlines; `-TimeoutSeconds` is a client observation ceiling (65–300s), not a server setting.
 
 ### Evidence review
 

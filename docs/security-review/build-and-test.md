@@ -30,7 +30,7 @@ The job is designed to:
 1. Enumerate every repository `.ps1` outside `.git`, generated `target`, and tool caches; parse each using `[System.Management.Automation.Language.Parser]::ParseFile` and fail on parse errors.
 2. Run PSScriptAnalyzer 1.24.0 on the same script set. Error-severity findings fail the job; warnings are reported for triage.
 3. Build the debug `balancify-service` executable, set a unique temporary `BALANCIFY_STATE_DIR`, and start it in explicit `--insecure-lab` mode without `--driver-device` or relay credentials.
-4. Run `scripts/windows/Test-IpcAcceptance.ps1 -Role Auto -ReadOnlyOnly` against the local named pipe. It exercises a permitted Ping/GetStatus, idle disconnect, partial-header and stalled-body timeout. A temporary SYSTEM session-0 probe is included only if the runner token is elevated and Task Scheduler is running. The script never changes policy in this mode.
+4. Run `scripts/windows/Test-IpcAcceptance.ps1 -Role Auto -ReadOnlyOnly` against the local named pipe. The harness first requires a pipe connection and Pong preflight; if unavailable, it records `service-reachable` as failed, marks requested IPC protocol cases `NOT RUN`, and exits without repeated connect timeouts. With a live listener it exercises Ping/GetStatus, idle disconnect, partial-header and stalled-body timeout. A temporary SYSTEM session-0 probe is included only if the runner token is elevated and Task Scheduler is running. The script never changes policy in this mode.
 5. Upload parser/analyzer/IPC evidence and service logs. CI artifact status must be labelled **hosted-runner evidence, not isolated-VM acceptance**.
 
 ### Hosted-runner cases not covered
