@@ -28,6 +28,6 @@ This package describes the repository's intended data/control paths and the sour
 
 - Independent security review, formal verification, third-party cryptographic audit, or signed VEX.
 - Production key provisioning/custody, production Windows service installation, supported installer lifecycle, signed/certified driver, runtime load, bidirectional packet path, HVCI/Verifier/HLK, clean-machine rollback, or real hardware/field behavior.
-- PSScriptAnalyzer/parser or the new Windows hosted IPC job's result; the job must run after push. CI IPC checks are intentionally read-only and cannot prove standard-user authorization or admin policy writes.
+- A completed PSScriptAnalyzer/parser or Windows hosted IPC result: Actions run [41019982666](https://github.com/eTarikhi/BalanciFy/actions/runs/41019982666) was active at last inspection and its PowerShell-specific steps were still pending. CI IPC checks are intentionally read-only and cannot prove standard-user authorization or admin policy writes.
 
 Reviewers should treat undocumented assumptions and every `NOT RUN`/`BLOCKED` status as open. See `docs/completion-ledger.md` and `docs/release-gates-checklist.md` for the project gate ledger.
