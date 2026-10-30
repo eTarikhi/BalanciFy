@@ -2,9 +2,13 @@
 
 ## Failure-log availability
 
-The user message contained the literal placeholder **`<paste logs>`**, not raw Windows 11 PowerShell output or an evidence JSON file. No failure case IDs, expected/observed values, timestamps, service logs, Windows build, account privilege, or script exit code were provided. Therefore it is not possible to classify any reported failure as a **script bug** or a **product bug** from the supplied material. No failure-specific code fix or acceptance claim is made.
+The user supplied a Windows 11 local full-CI summary for HEAD `e63e1439b1ac2ad763e426e7dec249b6d013ee80`: all 12 listed CI stages passed. Those checks are separate from the IPC harness; portable driver tests are not driver install/runtime acceptance.
 
-The additive `-Role Auto -ReadOnlyOnly` mode was added only for hosted CI. It does not change standard-user/admin authorization logic and is not a claimed fix for the missing VM failures.
+The user then supplied the actual elevated-admin IPC command and PowerShell parser output. It reports two **script bugs** in `Test-IpcAcceptance.ps1`: interpolating `$session:` in strings at lines 253 and 256 is parsed as a scoped variable reference and fails with `InvalidVariableReferenceWithDrive`. I fixed both as `${session}:`. A repository-wide scan found the same parse defect in `Invoke-RigBMeasurements.ps1` (`$exit:` in an interpolated error message); I fixed it as `${exit}:` because CI parses every `.ps1`. These are harness syntax bugs, not product/IPC bugs. The parser stops before the script body runs, so no admin test case or policy mutation occurred; no case is accepted.
+
+The separate hosted Actions runs [41019982666](https://github.com/eTarikhi/BalanciFy/actions/runs/41019982666), [41020076222](https://github.com/eTarikhi/BalanciFy/actions/runs/41020076222), and [41028177906](https://github.com/eTarikhi/BalanciFy/actions/runs/41028177906) failed at `Parse-check every repository PowerShell script`, before PSScriptAnalyzer, service build, or IPC. The user-supplied parse errors explain the acceptance-script failure; the `$exit:` defect was another repository-wide parse failure candidate. Both syntax fixes are in this branch update; rerun the parser job to confirm. PSScriptAnalyzer and hosted IPC results remain unavailable.
+
+The additive `-Role Auto -ReadOnlyOnly` mode is solely for hosted CI. It does not change standard-user/admin authorization logic.
 
 ## Minimum evidence needed for root-cause classification
 
@@ -18,9 +22,9 @@ Supply the original files without editing/redacting the diagnostic lines needed 
 
 Do not send signing keys, relay secrets, user credentials, raw packet payloads or private IP/identity data. Redact identifiers while keeping the relevant status codes and timing intact.
 
-## Exact reruns after the logs are available
+## Exact IPC reruns if an earlier symptom remains
 
-Because no failure can be mapped to a specific case, rerun the complete case group that corresponds to the execution role. Do not mark a case accepted until its JSON and transcript are reviewed.
+The 12 local CI PASS checks do not need rerunning based on the supplied report. They are not IPC acceptance cases. Since the earlier IPC failure was not accompanied by a case ID or case log, if that symptom still needs investigation, rerun the full role-specific group below; do not rerun an unrelated group, and do not mark any IPC case accepted until its JSON and transcript are reviewed.
 
 ### A. Standard-user authorization + transport group
 

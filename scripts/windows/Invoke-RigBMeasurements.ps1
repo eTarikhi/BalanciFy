@@ -221,7 +221,7 @@ function Invoke-IperfRun([int]$Rep,[int]$Parallel) {
     $args=@('-c',$IperfServer,'-t',"$DurationSeconds",'-P',"$Parallel",'-J')
     $text=@(& $iperf.Source @args 2>&1 | ForEach-Object { "$_" }) -join "`n"
     $exit=$LASTEXITCODE
-    if ($exit -ne 0) { throw "iperf3 exited $exit: $text" }
+    if ($exit -ne 0) { throw "iperf3 exited ${exit}: $text" }
     $result=$text | ConvertFrom-Json
     $bps=$null
     if ($result.end.sum_received.bits_per_second) { $bps=[double]$result.end.sum_received.bits_per_second }

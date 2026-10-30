@@ -250,10 +250,10 @@ function Invoke-NonInteractiveProbeChild([string]$ResultPath) {
         $observation = "Timed out waiting for service rejection in session $session."
         $rejected = $false
     } catch [System.UnauthorizedAccessException] {
-        $observation = "OS/pipe ACL rejected the client before service dispatch in session $session: $($_.Exception.Message)"
+        $observation = "OS/pipe ACL rejected the client before service dispatch in session ${session}: $($_.Exception.Message)"
         $rejected = $true
     } catch [System.IO.IOException] {
-        $observation = "Pipe closed/rejected the client in session $session: $($_.Exception.Message)"
+        $observation = "Pipe closed/rejected the client in session ${session}: $($_.Exception.Message)"
         $rejected = ($session -eq 0)
     } finally { if ($null -ne $pipe) { $pipe.Dispose() } }
     $result = [pscustomobject]@{ sessionId = $session; rejected = $rejected; observed = $observation }
