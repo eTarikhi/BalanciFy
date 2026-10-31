@@ -48,8 +48,8 @@ class MachinePolicyContractTests(unittest.TestCase):
 
     def test_recovery_fails_closed_on_future_schema_and_invalid_generations(self):
         load = STORE.split("pub fn load(&self)", 1)[1].split("pub fn save(&self", 1)[0]
-        self.assertIn("read_policy(&primary_path)", load)
-        self.assertIn("read_policy(&backup_path)", load)
+        self.assertIn("read_policy(&primary_path, self.enforce_windows_acl)", load)
+        self.assertIn("read_policy(&backup_path, self.enforce_windows_acl)", load)
         self.assertIn("io::ErrorKind::Unsupported", STORE)
         self.assertIn("unsupported machine policy schema version", STORE)
         self.assertIn("install_recovered(&policy)", load)
@@ -71,6 +71,19 @@ class MachinePolicyContractTests(unittest.TestCase):
         self.assertIn("options.mode(0o600)", STORE)
         self.assertIn("if is_directory { 0o700 } else { 0o600 }", STORE)
         self.assertIn("store_uses_private_unix_modes_and_rejects_symlink_policy_files", STORE)
+
+    def test_test_store_skips_windows_acl_for_reads_writes_and_recovery_only(self):
+        production_open = STORE.split("pub fn open(", 1)[1].split("#[cfg(test)]", 1)[0]
+        test_open = STORE.split("pub(crate) fn open_without_platform_acl_for_test", 1)[1].split("pub fn load", 1)[0]
+        policy_guard = STORE.split("fn secure_policy_path(", 1)[1].split("fn secure_path(", 1)[0]
+        self.assertIn("enforce_windows_acl: true", production_open)
+        self.assertIn("enforce_windows_acl: false", test_open)
+        self.assertIn("secure_policy_path(&path, false, self.enforce_windows_acl)", STORE)
+        self.assertIn("read_policy(&primary_path, self.enforce_windows_acl)", STORE)
+        self.assertIn("read_policy(&backup_path, self.enforce_windows_acl)", STORE)
+        self.assertIn("if enforce_windows_acl {", policy_guard)
+        self.assertIn("secure_path(path, is_directory)", policy_guard)
+        self.assertIn("let _ = enforce_windows_acl;\n        secure_path(path, is_directory)", policy_guard)
 
     def test_ignored_windows_acl_test_checks_the_production_open_policy(self):
         test_name = "windows_real_open_sets_system_owner_and_restricted_dacl"

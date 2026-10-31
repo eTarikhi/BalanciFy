@@ -179,6 +179,7 @@ pub struct LoadedMachinePolicy {
 #[derive(Debug, Clone)]
 pub struct MachinePolicyStore {
     directory: PathBuf,
+    enforce_windows_acl: bool,
 }
 
 fn prepare_directory(directory: &Path) -> io::Result<PathBuf> {
@@ -197,26 +198,32 @@ impl MachinePolicyStore {
     pub fn open(directory: impl AsRef<Path>) -> io::Result<Self> {
         let directory = prepare_directory(directory.as_ref())?;
         secure_path(&directory, true)?;
-        Ok(Self { directory })
+        Ok(Self {
+            directory,
+            enforce_windows_acl: true,
+        })
     }
 
-    /// Opens an isolated test directory without changing its platform ACL.
-    /// This is compiled only into test builds so persistence behavior can be
-    /// tested under ordinary local accounts; production always uses `open`,
-    /// which enforces the SYSTEM/Administrators (or private Unix) policy.
+    /// Opens an isolated test directory without applying the Windows
+    /// SYSTEM/Administrators ACL during later reads, writes, or recovery.
+    /// This is compiled only into test builds; production always uses `open`,
+    /// which enforces the production ACL for the directory and each policy file.
     #[cfg(test)]
     pub(crate) fn open_without_platform_acl_for_test(
         directory: impl AsRef<Path>,
     ) -> io::Result<Self> {
-        Ok(Self { directory: prepare_directory(directory.as_ref())? })
+        Ok(Self {
+            directory: prepare_directory(directory.as_ref())?,
+            enforce_windows_acl: false,
+        })
     }
 
     pub fn load(&self) -> io::Result<LoadedMachinePolicy> {
         let primary_path = self.directory.join(PRIMARY_FILE);
         let backup_path = self.directory.join(BACKUP_FILE);
-        match read_policy(&primary_path) {
+        match read_policy(&primary_path, self.enforce_windows_acl) {
             Ok(Some(policy)) => Ok(LoadedMachinePolicy { policy, recovered_from_backup: false }),
-            Ok(None) => match read_policy(&backup_path)? {
+            Ok(None) => match read_policy(&backup_path, self.enforce_windows_acl)? {
                 Some(policy) => {
                     self.install_recovered(&policy)?;
                     Ok(LoadedMachinePolicy { policy, recovered_from_backup: true })
@@ -224,7 +231,7 @@ impl MachinePolicyStore {
                 None => Ok(LoadedMachinePolicy { policy: MachinePolicy::default(), recovered_from_backup: false }),
             },
             Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                match read_policy(&backup_path) {
+                match read_policy(&backup_path, self.enforce_windows_acl) {
                     Ok(Some(policy)) => {
                         self.install_recovered(&policy)?;
                         Ok(LoadedMachinePolicy { policy, recovered_from_backup: true })
@@ -307,7 +314,7 @@ impl MachinePolicyStore {
                 return Err(error);
             }
             drop(file);
-            if let Err(error) = secure_path(&path, false) {
+            if let Err(error) = secure_policy_path(&path, false, self.enforce_windows_acl) {
                 let _ = fs::remove_file(&path);
                 return Err(error);
             }
@@ -317,7 +324,7 @@ impl MachinePolicyStore {
     }
 }
 
-fn read_policy(path: &Path) -> io::Result<Option<MachinePolicy>> {
+fn read_policy(path: &Path, enforce_windows_acl: bool) -> io::Result<Option<MachinePolicy>> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -329,7 +336,7 @@ fn read_policy(path: &Path) -> io::Result<Option<MachinePolicy>> {
         }
         Ok(_) => {}
     }
-    secure_path(path, false)?;
+    secure_policy_path(path, false, enforce_windows_acl)?;
     let mut file = File::open(path)?;
     let mut bytes = Vec::new();
     Read::take(&mut file, (MAX_FILE_BYTES + 1) as u64).read_to_end(&mut bytes)?;
@@ -374,6 +381,26 @@ fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     let _ = path;
     Ok(())
+}
+
+fn secure_policy_path(
+    path: &Path,
+    is_directory: bool,
+    enforce_windows_acl: bool,
+) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        if enforce_windows_acl {
+            secure_path(path, is_directory)
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enforce_windows_acl;
+        secure_path(path, is_directory)
+    }
 }
 
 fn secure_path(path: &Path, is_directory: bool) -> io::Result<()> {
