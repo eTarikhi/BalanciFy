@@ -257,18 +257,67 @@ fn send_datagram(sock: &UdpSocket, bytes: &[u8], destination: SocketAddr) -> std
     Ok(())
 }
 
+fn is_unreachable_relay_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::HostUnreachable
+            | std::io::ErrorKind::NetworkUnreachable
+            | std::io::ErrorKind::TimedOut
+    )
+}
+
+fn keep_insecure_lab_alive_on_relay_error(
+    mode: ConnectionMode,
+    relay: SocketAddr,
+    warning_logged: &mut bool,
+    result: std::io::Result<()>,
+) -> std::io::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if mode == ConnectionMode::InsecureLab && is_unreachable_relay_error(&error) => {
+            if !*warning_logged {
+                eprintln!(
+                    "WARNING: insecure lab relay {relay} is unreachable ({error}); keeping the local IPC listener alive. Start the loopback lab relay to exchange tunnel traffic."
+                );
+                *warning_logged = true;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn send_datagram_for_mode(
+    mode: ConnectionMode,
+    sock: &UdpSocket,
+    bytes: &[u8],
+    destination: SocketAddr,
+    warning_logged: &mut bool,
+) -> std::io::Result<()> {
+    keep_insecure_lab_alive_on_relay_error(
+        mode,
+        destination,
+        warning_logged,
+        send_datagram(sock, bytes, destination),
+    )
+}
+
 fn send_scheduled_actions(
     actions: Vec<Action>,
     service: &Service<TunnelCipher>,
     sock0: &UdpSocket,
     sock1: &UdpSocket,
     relay_primary: SocketAddr,
+    mode: ConnectionMode,
+    warning_logged: &mut bool,
 ) -> std::io::Result<()> {
     for action in actions {
         if let Action::Send { uplink, bytes } = action {
             let socket = if uplink.0 == 0 { sock0 } else { sock1 };
             let relay = service.relay_current().unwrap_or(relay_primary);
-            send_datagram(socket, &bytes, relay)?;
+            send_datagram_for_mode(mode, socket, &bytes, relay, warning_logged)?;
         }
     }
     Ok(())
@@ -593,6 +642,7 @@ fn main() -> std::io::Result<()> {
 
     let mut handshake_pending = mode == ConnectionMode::Secure;
     let mut last_handshake_attempt = (mode == ConnectionMode::Secure).then_some(handshake_started_at);
+    let mut lab_relay_warning_logged = false;
     let mut dg = [0u8; 65535];
     let mut flow_counter = 0u64;
     let started_at = Instant::now();
@@ -654,7 +704,7 @@ fn main() -> std::io::Result<()> {
                 if let Action::Send { uplink, bytes } = act {
                     let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
                     let relay = svc.relay_current().unwrap_or(relay_primary);
-                    send_datagram(sock, &bytes, relay)?;
+                    send_datagram_for_mode(mode, sock, &bytes, relay, &mut lab_relay_warning_logged)?;
                 }
             }
             last_tick = now;
@@ -743,7 +793,13 @@ fn main() -> std::io::Result<()> {
                                     Action::Send { uplink, bytes } => {
                                         let s = if uplink.0 == 0 { &sock0 } else { &sock1 };
                                         let relay = svc.relay_current().unwrap_or(relay_primary);
-                                        send_datagram(s, &bytes, relay)?;
+                                        send_datagram_for_mode(
+                                            mode,
+                                            s,
+                                            &bytes,
+                                            relay,
+                                            &mut lab_relay_warning_logged,
+                                        )?;
                                     }
                                     _ => {}
                                 }
@@ -758,6 +814,15 @@ fn main() -> std::io::Result<()> {
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) if mode == ConnectionMode::InsecureLab && is_unreachable_relay_error(&e) => {
+                    let relay = svc.relay_current().unwrap_or(relay_primary);
+                    keep_insecure_lab_alive_on_relay_error(
+                        mode,
+                        relay,
+                        &mut lab_relay_warning_logged,
+                        Err(e),
+                    )?;
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -806,7 +871,15 @@ fn main() -> std::io::Result<()> {
                     if should_retry_driver_tx(&actions) {
                         pending_driver_tx = Some(packet);
                     } else {
-                        send_scheduled_actions(actions, &svc, &sock0, &sock1, relay_primary)?;
+                        send_scheduled_actions(
+                            actions,
+                            &svc,
+                            &sock0,
+                            &sock1,
+                            relay_primary,
+                            mode,
+                            &mut lab_relay_warning_logged,
+                        )?;
                     }
                 }
 
@@ -820,7 +893,15 @@ fn main() -> std::io::Result<()> {
                             pending_driver_tx = Some(packet);
                             break;
                         }
-                        send_scheduled_actions(actions, &svc, &sock0, &sock1, relay_primary)?;
+                        send_scheduled_actions(
+                            actions,
+                            &svc,
+                            &sock0,
+                            &sock1,
+                            relay_primary,
+                            mode,
+                            &mut lab_relay_warning_logged,
+                        )?;
                     }
                 }
             }
@@ -845,7 +926,13 @@ fn main() -> std::io::Result<()> {
                     if let Action::Send { uplink, bytes } = act {
                         let sock = if uplink.0 == 0 { &sock0 } else { &sock1 };
                         let relay = svc.relay_current().unwrap_or(relay_primary);
-                        send_datagram(sock, &bytes, relay)?;
+                        send_datagram_for_mode(
+                            mode,
+                            sock,
+                            &bytes,
+                            relay,
+                            &mut lab_relay_warning_logged,
+                        )?;
                     }
                 }
             }
@@ -1206,6 +1293,38 @@ mod ipc_capacity_tests {
             root.join("Balancify")
         );
         assert!(choose_state_dir(None, None, None, None, true).is_err());
+    }
+
+    #[test]
+    fn unreachable_loopback_relay_is_nonfatal_only_in_insecure_lab_mode() {
+        let relay = "127.0.0.1:4430".parse().unwrap();
+        let mut warning_logged = false;
+        assert!(keep_insecure_lab_alive_on_relay_error(
+            ConnectionMode::InsecureLab,
+            relay,
+            &mut warning_logged,
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+        ).is_ok());
+        assert!(warning_logged, "lab relay failure should be diagnosed once");
+
+        let mut secure_warning_logged = false;
+        let secure_error = keep_insecure_lab_alive_on_relay_error(
+            ConnectionMode::Secure,
+            relay,
+            &mut secure_warning_logged,
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+        ).unwrap_err();
+        assert_eq!(secure_error.kind(), std::io::ErrorKind::ConnectionReset);
+        assert!(!secure_warning_logged, "secure mode must retain fail-closed send behavior");
+
+        let mut invalid_warning_logged = false;
+        let invalid_error = keep_insecure_lab_alive_on_relay_error(
+            ConnectionMode::InsecureLab,
+            relay,
+            &mut invalid_warning_logged,
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        ).unwrap_err();
+        assert_eq!(invalid_error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[test]

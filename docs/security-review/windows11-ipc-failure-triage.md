@@ -1,5 +1,13 @@
 # Windows 11 IPC failure triage and rerun matrix
 
+## Newer user-supplied Windows observations (2026-10-31)
+
+The latest LocalSystem run reportedly reached `[startup] open machine-policy store: OK`, `[startup] start local IPC v1 listener: OK`, and `[startup] open insecure lab session: OK`, then exited with Windows OS error 10054 (`ConnectionReset`). The debug service defaults to UDP relay `127.0.0.1:4430`; no relay was listening. Insecure lab mode opens a local zero-key test session, then data-plane probes/traffic are sent as UDP to that relay. Windows reports an ICMP Port Unreachable for an absent UDP listener as `WSAECONNRESET` in some send/receive paths; the old event loop propagated that socket error out of `main`, terminating the process and closing IPC. The current fix handles only recognized unreachable-network errors in `--insecure-lab`, emits a warning, and leaves the local IPC loop running. It does not suppress unrelated errors or alter secure-mode fail-closed behavior. No relay is required for IPC-only acceptance; tunnel/data-plane traffic still requires the optional isolated lab relay.
+
+The user also reports machine-policy ACL output showing owner `NT AUTHORITY\SYSTEM`, a protected DACL, and only SYSTEM and local Administrators entries. Record this as **VM ACL evidence only**; the raw transcript/file path was not supplied here, so it is user-reported rather than independently reviewed. It does not establish IPC acceptance. All IPC protocol cases remain **NOT RUN / NOT ACCEPTED** until the listener stays up and case-level request/response evidence is reviewed.
+
+The old `client_secret.key` was reported as 262 bytes, the same size as a newly generated file, but failed key loading. FileKeyStore uses DPAPI with UI forbidden and the default user scope, so a 262-byte file can be a DPAPI-protected blob rather than a 32-byte plaintext key. A blob created under Administrator may be unreadable under LocalSystem because the DPAPI user context differs; alternatively, the blob may be corrupted or from another incompatible format. Matching byte length does not prove the old and new files contain the same secret or that DPAPI can unprotect the old one. The loader now reports whether DPAPI unprotect failed for the current identity or the decoded payload-length check failed, plus the observed length; it never prints key bytes. Preserve the old file before any migration/replacement, and do not infer the cause from size alone.
+
 ## Failure-log availability
 
 The user supplied a Windows 11 local full-CI summary for HEAD `e63e1439b1ac2ad763e426e7dec249b6d013ee80`: all 12 listed CI stages passed. Those checks are separate from the IPC harness; portable driver tests are not driver install/runtime acceptance.

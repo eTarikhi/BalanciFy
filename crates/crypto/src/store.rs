@@ -27,7 +27,7 @@ static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     Io(String),
-    Corrupt,
+    Corrupt(String),
     NotFound,
     Dpapi(String),
 }
@@ -36,7 +36,7 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::Io(s) => write!(f, "I/O error: {s}"),
-            StoreError::Corrupt => write!(f, "key file corrupt or wrong length"),
+            StoreError::Corrupt(reason) => write!(f, "key file validation failed: {reason}"),
             StoreError::NotFound => write!(f, "key file not found"),
             StoreError::Dpapi(s) => write!(f, "DPAPI error: {s}"),
         }
@@ -132,33 +132,40 @@ impl FileKeyStore {
             if e.kind() == std::io::ErrorKind::NotFound { StoreError::NotFound }
             else { StoreError::Io(e.to_string()) }
         })?;
-        // DPAPI: file contains protected blob; otherwise raw 32 bytes.
-        // For migration, if DPAPI unprotect fails and raw is exactly 32 bytes,
-        // treat raw as secret (old file) and next save will protect it.
+        // DPAPI: file contains a protected blob; otherwise it may be a legacy
+        // raw 32-byte secret. A DPAPI blob is user-context-bound by default, so
+        // a different account (for example LocalSystem vs Administrator) may
+        // be unable to unprotect it even when the file itself is intact.
         let mut data = match dpapi_unprotect(&raw) {
             Ok(d) => d,
-            Err(StoreError::Dpapi(_)) => {
+            Err(StoreError::Dpapi(reason)) => {
                 if raw.len() == 32 {
                     raw.clone()
                 } else {
-                    return Err(StoreError::Corrupt);
+                    let raw_len = raw.len();
+                    raw.zeroize();
+                    return Err(StoreError::Corrupt(format!(
+                        "DPAPI unprotect failed for the current identity ({reason}); the file is {raw_len} bytes, not the 32-byte legacy raw-key format",
+                    )));
                 }
             }
-            Err(e) => return Err(e),
+            Err(error) => {
+                raw.zeroize();
+                return Err(error);
+            }
         };
         if data.len() != 32 {
+            let decoded_len = data.len();
             data.zeroize();
-            if raw.len() == 32 {
-                raw.zeroize();
-            }
-            return Err(StoreError::Corrupt);
+            raw.zeroize();
+            return Err(StoreError::Corrupt(format!(
+                "decoded secret payload length check failed: expected 32 bytes, got {decoded_len} bytes",
+            )));
         }
         let mut out = [0u8; 32];
         out.copy_from_slice(&data);
         data.zeroize();
-        if raw.len() == 32 {
-            raw.zeroize();
-        }
+        raw.zeroize();
         Ok(out)
     }
 
@@ -231,16 +238,24 @@ impl FileKeyStore {
         // treat raw as pinned keys (old file).
         let data = match dpapi_unprotect(&raw) {
             Ok(d) => d,
-            Err(StoreError::Dpapi(_)) => {
+            Err(StoreError::Dpapi(reason)) => {
                 if raw.len() % 32 == 0 {
                     raw.clone()
                 } else {
-                    return Err(StoreError::Corrupt);
+                    return Err(StoreError::Corrupt(format!(
+                        "DPAPI unprotect failed for the current identity ({reason}); pinned-key file length check failed: {} bytes is not a multiple of 32",
+                        raw.len(),
+                    )));
                 }
             }
-            Err(e) => return Err(e),
+            Err(error) => return Err(error),
         };
-        if data.len() % 32 != 0 { return Err(StoreError::Corrupt); }
+        if data.len() % 32 != 0 {
+            return Err(StoreError::Corrupt(format!(
+                "decoded pinned-key payload length check failed: {} bytes is not a multiple of 32",
+                data.len(),
+            )));
+        }
         let mut pinned = PinnedKeys::new();
         for chunk in data.chunks(32) {
             let mut key = [0u8; 32];
@@ -518,7 +533,56 @@ mod tests {
         let pinned_path = dir.join("pinned.keys");
         std::fs::write(&secret_path, b"too short").unwrap();
         let mut store = FileKeyStore::new(&secret_path, &pinned_path);
-        assert_eq!(store.load_or_generate().unwrap_err(), StoreError::Corrupt);
+        let error = store.load_or_generate().unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("key file validation failed"));
+        assert!(
+            message.contains("DPAPI unprotect failed")
+                || message.contains("decoded secret payload length check failed"),
+            "error should identify the failing DPAPI or decoded-length check: {message}",
+        );
+        assert!(message.contains("9 bytes"), "error should report the observed length: {message}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_store_reports_validation_reason_for_dpapi_sized_key_file() {
+        let dir = std::env::temp_dir().join(format!("balancify-262-byte-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        std::fs::write(&secret_path, vec![0xa5; 262]).unwrap();
+
+        let mut store = FileKeyStore::new(&secret_path, &pinned_path);
+        let error = store.load_or_generate().unwrap_err().to_string();
+        assert!(error.contains("262 bytes"), "diagnostic should report the on-disk size: {error}");
+        assert!(
+            error.contains("DPAPI unprotect failed")
+                || error.contains("decoded secret payload length check failed"),
+            "diagnostic should name the failed format check: {error}",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_store_reports_validation_reason_for_corrupt_pinned_key_file() {
+        let dir = std::env::temp_dir().join(format!("balancify-corrupt-pinned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_path = dir.join("secret.key");
+        let pinned_path = dir.join("pinned.keys");
+        std::fs::write(&pinned_path, vec![0xa5; 33]).unwrap();
+
+        let store = FileKeyStore::new(&secret_path, &pinned_path);
+        let error = store.load_pinned().unwrap_err().to_string();
+        assert!(error.contains("key file validation failed"));
+        assert!(
+            error.contains("DPAPI unprotect failed")
+                || error.contains("decoded pinned-key payload length check failed"),
+            "diagnostic should name the failed pinned-key format check: {error}",
+        );
+        assert!(error.contains("33 bytes"), "diagnostic should report the observed length: {error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

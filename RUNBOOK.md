@@ -1,6 +1,18 @@
 # Windows VM and Rig B acceptance runbook
 
-This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Rig B only. It uses native PowerShell; WSL is not needed. Scripts do not install a driver, enable test-signing, toggle HVCI, or flap an adapter unless the operator invokes the explicit guarded stage/switch described below. No Windows VM, driver, or IPC acceptance test has been run from this checkout.
+This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Rig B only. It uses native PowerShell; WSL is not needed. Scripts do not install a driver, enable test-signing, toggle HVCI, or flap an adapter unless the operator invokes the explicit guarded stage/switch described below. No driver or hardware acceptance is claimed. The user's reported machine-policy ACL result is tracked separately from IPC acceptance; the latest service run did not remain available for case-level IPC evidence.
+
+## Insecure lab relay and IPC availability
+
+`balancify-service --insecure-lab` is a debug-only zero-key lab mode. It opens a local test session without an authenticated handshake, then sends tunnel probes/data as UDP to the configured relay. With no explicit address, the destination is `127.0.0.1:4430`; an optional secondary relay uses its configured loopback address (the lab relay defaults to ports 4430 and 4431). Windows may report ICMP Port Unreachable for an absent UDP listener as `WSAECONNRESET` / OS error 10054. In this mode the service now logs the unreachable loopback relay and keeps the local IPC event loop alive; tunnel traffic is unavailable until a relay is listening. Other send errors remain fatal, and secure mode remains fail-closed.
+
+For IPC-only acceptance, no relay is required. If testing data-plane traffic, an optional disposable lab relay can be started separately:
+
+```powershell
+cargo run -p balancify-relay --features lab-crypto -- 4430,4431
+```
+
+The relay's lab-crypto mode has **no confidentiality** and binds UDP on `0.0.0.0`; run it only inside the disposable VM and isolate/firewall it. Never send sensitive or production traffic through it.
 
 ## LocalSystem machine-policy ACL test
 
