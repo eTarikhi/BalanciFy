@@ -1,6 +1,0 @@
-............
-----------------------------------------------------------------------
-Ran 12 tests in 0.017s
-
-OK
-driver packet and OID contract tests passed (strict C, ASan, UBSan)
