@@ -1,6 +1,31 @@
 # Windows VM and Rig B acceptance runbook
 
-This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Rig B only. It uses native PowerShell; WSL is not needed. Scripts do not install a driver, enable test-signing, toggle HVCI, or flap an adapter unless the operator invokes the explicit guarded stage/switch described below. No test has been run from this checkout.
+This runbook is for an owner-operated disposable Windows 11 x64 VM / isolated Rig B only. It uses native PowerShell; WSL is not needed. Scripts do not install a driver, enable test-signing, toggle HVCI, or flap an adapter unless the operator invokes the explicit guarded stage/switch described below. No Windows VM, driver, or IPC acceptance test has been run from this checkout.
+
+## LocalSystem machine-policy ACL test
+
+The ignored Windows test calls the production `MachinePolicyStore::open()` against a unique temporary directory, then reads its owner and DACL using Windows security APIs. It asserts owner SID `S-1-5-18`, a protected DACL containing exactly SYSTEM and built-in Administrators with full access, and no Authenticated Users (`S-1-5-11`) or Users (`S-1-5-32-545`) ACE. It does not start the service or load a driver. It is ignored by default because assigning SYSTEM as owner requires LocalSystem / `SeRestorePrivilege`; elevated Administrator is intentionally insufficient.
+
+From an elevated PowerShell in the disposable Windows VM, launch an interactive LocalSystem PowerShell with PsExec:
+
+```powershell
+& 'C:\Tools\PsExec64.exe' -accepteula -i -s powershell.exe -NoProfile -NoExit
+```
+
+In the new SYSTEM PowerShell window, verify the token, change to the repository clone, and run the ignored test:
+
+```powershell
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if ($identity.User.Value -ne 'S-1-5-18') {
+    throw "Expected LocalSystem (S-1-5-18); got $($identity.Name) / $($identity.User.Value)."
+}
+Set-Location -LiteralPath 'C:\path\to\BalanciFy'
+cargo test -p balancify-service --lib `
+  machine_policy::tests::windows_real_open_sets_system_owner_and_restricted_dacl `
+  -- --ignored --exact --nocapture
+```
+
+A pass verifies the ACL on the fresh temporary test directory only. It does not establish IPC acceptance; those cases remain **NOT RUN / NOT ACCEPTED** until the separate service-listener and case-level evidence steps below are completed.
 
 ## 1. IPC authorization and framing tests
 

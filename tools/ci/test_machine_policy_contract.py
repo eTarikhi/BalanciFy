@@ -72,6 +72,30 @@ class MachinePolicyContractTests(unittest.TestCase):
         self.assertIn("if is_directory { 0o700 } else { 0o600 }", STORE)
         self.assertIn("store_uses_private_unix_modes_and_rejects_symlink_policy_files", STORE)
 
+    def test_ignored_windows_acl_test_checks_the_production_open_policy(self):
+        test_name = "windows_real_open_sets_system_owner_and_restricted_dacl"
+        start = STORE.index(f"fn {test_name}()")
+        attributes = STORE[STORE.rfind("#[cfg(windows)]", 0, start):start]
+        test = STORE[start:]
+        self.assertIn("#[cfg(windows)]", attributes)
+        self.assertIn("#[test]", attributes)
+        self.assertIn("#[ignore = \"requires LocalSystem", attributes)
+        self.assertIn("MachinePolicyStore::open(&directory)", test)
+        self.assertIn('assert_eq!(sid_to_string(owner), "S-1-5-18"', test)
+        self.assertIn("SE_DACL_PROTECTED", test)
+        self.assertIn('"S-1-5-32-544"', test)
+        self.assertIn('"S-1-5-11"', test)
+        self.assertIn('"S-1-5-32-545"', test)
+
+    def test_unsecured_test_constructor_is_cfg_test_only_and_has_no_runtime_callers(self):
+        helper = "open_without_platform_acl_for_test"
+        self.assertIn("#[cfg(test)]\n    pub(crate) fn " + helper, STORE)
+        store_tests = STORE.index("#[cfg(test)]\nmod tests")
+        self.assertEqual(STORE[:store_tests].count(helper), 1, "only the cfg(test) declaration may precede its test module")
+        service_tests = SERVICE.index("#[cfg(test)]\nmod tests")
+        self.assertNotIn(helper, SERVICE[:service_tests])
+        self.assertNotIn(helper, SERVICE_BIN)
+
     def test_service_loads_policy_before_ipc_and_persists_before_mutating_live_state(self):
         ctor = SERVICE.split("pub fn new_with_machine_policy_store", 1)[1].split("// ------------------------------------------------------------- topology", 1)[0]
         self.assertLess(ctor.index("store.load()?"), ctor.index("Self::new(cfg"))

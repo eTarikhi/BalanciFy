@@ -451,6 +451,34 @@ extern "system" {
         information: u32,
         descriptor: *mut std::ffi::c_void,
     ) -> i32;
+    #[cfg(test)]
+    fn GetNamedSecurityInfoW(
+        object_name: *mut u16,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut *mut std::ffi::c_void,
+        group: *mut *mut std::ffi::c_void,
+        dacl: *mut *mut std::ffi::c_void,
+        sacl: *mut *mut std::ffi::c_void,
+        security_descriptor: *mut *mut std::ffi::c_void,
+    ) -> u32;
+    #[cfg(test)]
+    fn GetSecurityDescriptorControl(
+        security_descriptor: *mut std::ffi::c_void,
+        control: *mut u16,
+        revision: *mut u32,
+    ) -> i32;
+    #[cfg(test)]
+    fn GetAclInformation(
+        acl: *mut std::ffi::c_void,
+        information: *mut std::ffi::c_void,
+        information_length: u32,
+        information_class: u32,
+    ) -> i32;
+    #[cfg(test)]
+    fn GetAce(acl: *mut std::ffi::c_void, ace_index: u32, ace: *mut *mut std::ffi::c_void) -> i32;
+    #[cfg(test)]
+    fn ConvertSidToStringSidW(sid: *mut std::ffi::c_void, string_sid: *mut *mut u16) -> i32;
 }
 
 #[cfg(windows)]
@@ -490,6 +518,65 @@ impl<'a> PolicyReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    struct LocalAllocation(*mut std::ffi::c_void);
+
+    #[cfg(windows)]
+    impl Drop for LocalAllocation {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { LocalFree(self.0); }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[repr(C)]
+    struct AclSizeInformation {
+        ace_count: u32,
+        _acl_bytes_in_use: u32,
+        _acl_bytes_free: u32,
+    }
+
+    #[cfg(windows)]
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct AceHeader {
+        ace_type: u8,
+        ace_flags: u8,
+        ace_size: u16,
+    }
+
+    #[cfg(windows)]
+    struct RemoveDirectory(PathBuf);
+
+    #[cfg(windows)]
+    impl Drop for RemoveDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(windows)]
+    fn sid_to_string(sid: *mut std::ffi::c_void) -> String {
+        let mut string_sid = std::ptr::null_mut();
+        assert_ne!(
+            unsafe { ConvertSidToStringSidW(sid, &mut string_sid) },
+            0,
+            "ConvertSidToStringSidW failed: {}",
+            last_windows_error(),
+        );
+        let _string_guard = LocalAllocation(string_sid.cast());
+        let mut length = 0usize;
+        unsafe {
+            while *string_sid.add(length) != 0 {
+                length += 1;
+            }
+        }
+        let units = unsafe { std::slice::from_raw_parts(string_sid, length) };
+        String::from_utf16(units).expect("Windows SID string must be valid UTF-16")
+    }
 
     fn test_dir() -> PathBuf {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -612,6 +699,112 @@ mod tests {
         fs::write(dir.join(BACKUP_FILE), b"bad backup").unwrap();
         assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires LocalSystem (SID S-1-5-18) to set the production owner; see RUNBOOK.md"]
+    fn windows_real_open_sets_system_owner_and_restricted_dacl() {
+        use std::os::windows::ffi::OsStrExt;
+
+        const SE_FILE_OBJECT: u32 = 1;
+        const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
+        const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+        const SE_DACL_PROTECTED: u16 = 0x1000;
+        const ACL_SIZE_INFORMATION_CLASS: u32 = 2;
+        const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+        const OBJECT_INHERIT_ACE: u8 = 0x01;
+        const CONTAINER_INHERIT_ACE: u8 = 0x02;
+        const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
+
+        let directory = test_dir();
+        let _cleanup = RemoveDirectory(directory.clone());
+        let store = MachinePolicyStore::open(&directory)
+            .expect("run this ignored ACL test as LocalSystem; see RUNBOOK.md");
+        drop(store);
+
+        let mut path: Vec<u16> = directory.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut owner = std::ptr::null_mut();
+        let mut dacl = std::ptr::null_mut();
+        let mut descriptor = std::ptr::null_mut();
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                path.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW failed: {}", io::Error::from_raw_os_error(status as i32));
+        let _descriptor_guard = LocalAllocation(descriptor);
+        assert!(!owner.is_null(), "directory owner SID is absent");
+        assert!(!dacl.is_null(), "directory DACL is absent");
+        assert_eq!(sid_to_string(owner), "S-1-5-18", "directory owner must be LocalSystem");
+
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        assert_ne!(
+            unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) },
+            0,
+            "GetSecurityDescriptorControl failed: {}",
+            last_windows_error(),
+        );
+        assert_ne!(control & SE_DACL_PROTECTED, 0, "machine-policy DACL must be protected from inheritance");
+
+        let mut acl_info = AclSizeInformation {
+            ace_count: 0,
+            _acl_bytes_in_use: 0,
+            _acl_bytes_free: 0,
+        };
+        assert_ne!(
+            unsafe {
+                GetAclInformation(
+                    dacl,
+                    (&mut acl_info as *mut AclSizeInformation).cast(),
+                    std::mem::size_of::<AclSizeInformation>() as u32,
+                    ACL_SIZE_INFORMATION_CLASS,
+                )
+            },
+            0,
+            "GetAclInformation failed: {}",
+            last_windows_error(),
+        );
+        assert_eq!(acl_info.ace_count, 2, "DACL must contain only the two intended principals");
+
+        let mut principals = Vec::with_capacity(acl_info.ace_count as usize);
+        for ace_index in 0..acl_info.ace_count {
+            let mut ace = std::ptr::null_mut();
+            assert_ne!(
+                unsafe { GetAce(dacl, ace_index, &mut ace) },
+                0,
+                "GetAce({ace_index}) failed: {}",
+                last_windows_error(),
+            );
+            let header = unsafe { ace.cast::<AceHeader>().read_unaligned() };
+            assert_eq!(header.ace_type, ACCESS_ALLOWED_ACE_TYPE, "DACL contains a non-allow ACE");
+            assert_eq!(
+                header.ace_flags,
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                "ACE inheritance flags differ from the intended SDDL",
+            );
+            assert!(header.ace_size >= 8, "ACCESS_ALLOWED_ACE is truncated");
+            let mask = unsafe { ace.cast::<u8>().add(4).cast::<u32>().read_unaligned() };
+            assert_eq!(mask, FILE_ALL_ACCESS, "each intended principal must have full access");
+            let sid = unsafe { ace.cast::<u8>().add(8).cast::<std::ffi::c_void>() };
+            principals.push(sid_to_string(sid));
+        }
+        principals.sort();
+        assert_eq!(
+            principals,
+            vec!["S-1-5-18".to_owned(), "S-1-5-32-544".to_owned()],
+            "DACL must grant full access only to SYSTEM and built-in Administrators",
+        );
+        assert!(!principals.iter().any(|sid| sid == "S-1-5-11"), "Authenticated Users must not be granted access");
+        assert!(!principals.iter().any(|sid| sid == "S-1-5-32-545"), "BUILTIN\\Users must not be granted access");
     }
 
     #[cfg(unix)]
